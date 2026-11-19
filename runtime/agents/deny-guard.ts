@@ -105,6 +105,7 @@ const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--receive-pack", "--
 const BULK_FLAGS = new Set(["--all", "--branches", "--mirror"]);
 const GH_VALUE_OPTIONS = new Set(["-R", "--repo", "--hostname"]);
 const DIRECTORY_CHANGERS = new Set(["cd", "pushd"]);
+const DRY_RUN_TIMEOUT_MS = 8000;
 const MAX_NESTING = 4;
 
 function baseName(word) {
@@ -381,47 +382,43 @@ function destinationRef(token) {
   return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
 }
 
-// The arguments after `git ... push` and the directory git runs in, or
-// undefined when this is not a push. The directory is null when `--git-dir`
-// or `--work-tree` makes it unknown.
-function pushArguments(words, directory) {
+// The git words before `push` and the words after it, or undefined when this
+// is not a push.
+function pushArguments(words) {
   let index = 1;
-  while (index < words.length && words[index].startsWith("-")) {
-    const word = words[index];
-    if (word === "-C" && index + 1 < words.length && directory) directory = path.resolve(directory, words[index + 1]);
-    else if (["--git-dir", "--work-tree"].includes(word.split("=")[0])) directory = null;
-    index += GIT_VALUE_OPTIONS.has(word) ? 2 : 1;
-  }
-  if (index < words.length && words[index] === "push") return { args: words.slice(index + 1), directory };
+  while (index < words.length && words[index].startsWith("-")) index += GIT_VALUE_OPTIONS.has(words[index]) ? 2 : 1;
+  if (index < words.length && words[index] === "push") return { prefix: words.slice(0, index), args: words.slice(index + 1) };
   return undefined;
 }
 
-function gitOutput(directory, args) {
-  const proc = spawnSync("git", ["-C", directory, ...args], { encoding: "utf8", timeout: 5000 });
-  return proc.status === 0 ? String(proc.stdout).trim() : "";
-}
-
-// The branch names a push without a refspec writes (the checked-out branch and
-// the upstream branch it tracks), or undefined when they cannot be resolved.
-function implicitDestinations(directory) {
-  if (!directory) return undefined;
-  const branch = gitOutput(directory, ["symbolic-ref", "--short", "-q", "HEAD"]);
-  if (!branch) return undefined;
-  const upstream = gitOutput(directory, ["config", "--get", `branch.${branch}.merge`]);
-  return upstream ? [branch, destinationRef(upstream)] : [branch];
+// The destination branches git itself reports for this push, or undefined.
+// A push with no refspec goes where git's configuration sends it
+// (remote.<name>.push, push.default, the upstream branch), so git is asked:
+// `git push --dry-run --porcelain` with the same options lists each
+// `source:destination` ref it would update and writes nothing. Undefined means
+// git could not say (failure, timeout, no ref listed), and the caller refuses.
+function dryRunDestinations(prefix, args, directory) {
+  const command = ["-c", "core.hooksPath=/dev/null", ...prefix.slice(1), "push", "--dry-run", "--porcelain", ...args];
+  const proc = spawnSync("git", command, { cwd: directory, encoding: "utf8", timeout: DRY_RUN_TIMEOUT_MS });
+  if (proc.error) return undefined;
+  const destinations = [];
+  for (const line of String(proc.stdout).split("\n")) {
+    const fields = line.split("\t");
+    if (fields.length > 1 && fields[1].includes(":")) destinations.push(destinationRef(fields[1].slice(fields[1].indexOf(":") + 1)));
+  }
+  return destinations.length ? destinations : undefined;
 }
 
 // Deny a force-push, a bulk push, and a push that can write a protected
 // branch. The first bare word after `push` is the repository argument when
 // another word follows it: it names a remote or a URL, never a destination
 // branch, so a task-branch push to a remote called `main` is not a push to
-// main. A lone bare word is read both as a refspec, so `git push main` stays
-// refused, and as a remote, so `git push origin` is an implicit push. An
-// implicit push (no refspec, or `HEAD`) writes the current branch and its
-// upstream: it is refused when either is protected, and refused when the
-// branch cannot be resolved (detached HEAD, unknown directory, or a `cd`
-// earlier in the command).
-function pushVerdict(args, directory, moved) {
+// main. A lone bare word is the repository, so `git push origin` and a push
+// to a remote named `main` have no refspec. A push with no refspec, or with
+// `HEAD`, is resolved by asking git (see dryRunDestinations): it is refused
+// when a destination is protected, and refused when git cannot say or a `cd`
+// earlier in the command changed the directory.
+function pushVerdict(args, prefix, directory, moved) {
   const bare = [];
   let hasRepoOption = false;
   let optionsDone = false;
@@ -443,11 +440,11 @@ function pushVerdict(args, directory, moved) {
   }
   if (forced || bare.some((token) => token.startsWith("+") && token.length > 1)) return PUSH.force_reason;
   const lone = !hasRepoOption && bare.length === 1;
-  const refspecs = hasRepoOption || lone ? bare : bare.slice(1);
+  const refspecs = lone ? [] : hasRepoOption ? bare : bare.slice(1);
   if (bulk || refspecs.some((token) => token === ":" || token.includes("*"))) return PUSH.bulk_reason;
   if (refspecs.some((token) => PROTECTED.has(destinationRef(token)))) return PUSH.protected_reason;
-  if (lone || !refspecs.length || refspecs.some((token) => token === "HEAD" || token === "@")) {
-    const destinations = moved ? undefined : implicitDestinations(directory);
+  if (!refspecs.length || refspecs.some((token) => token === "HEAD" || token === "@")) {
+    const destinations = moved ? undefined : dryRunDestinations(prefix, args, directory);
     if (!destinations) return PUSH.ambiguous_reason;
     if (destinations.some((name) => PROTECTED.has(name))) return PUSH.protected_reason;
   }
@@ -460,9 +457,9 @@ function pushDeny(commands, directory) {
     const name = baseName(words[0]);
     moved = moved || DIRECTORY_CHANGERS.has(name);
     if (name !== "git") continue;
-    const parsed = pushArguments(words, directory);
+    const parsed = pushArguments(words);
     if (!parsed) continue;
-    const why = pushVerdict(parsed.args, parsed.directory, moved);
+    const why = pushVerdict(parsed.args, parsed.prefix, directory, moved);
     if (why) return why;
   }
   return undefined;

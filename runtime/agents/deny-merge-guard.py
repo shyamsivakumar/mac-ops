@@ -109,6 +109,7 @@ BULK_REASON = (
 BULK_FLAGS = {"--all", "--branches", "--mirror"}
 GH_VALUE_OPTIONS = {"-R", "--repo", "--hostname"}
 DIRECTORY_CHANGERS = {"cd", "pushd"}
+DRY_RUN_TIMEOUT = 8
 MAX_NESTING = 4
 
 
@@ -404,60 +405,64 @@ def destination_ref(token):
     return ref
 
 
-def push_arguments(words, directory):
-    """The words after `git ... push` and the directory git runs in.
-
-    The directory is None when `--git-dir` or `--work-tree` makes it unknown.
-    """
+def push_arguments(words):
+    """The git words before `push` and the words after it, or None."""
     index = 1
     while index < len(words) and words[index].startswith("-"):
-        word = words[index]
-        if word == "-C" and index + 1 < len(words) and directory:
-            directory = os.path.join(directory, words[index + 1])
-        elif word.split("=", 1)[0] in {"--git-dir", "--work-tree"}:
-            directory = None
-        index += 2 if word in GIT_VALUE_OPTIONS else 1
+        index += 2 if words[index] in GIT_VALUE_OPTIONS else 1
     if index < len(words) and words[index] == "push":
-        return words[index + 1 :], directory
+        return words[:index], words[index + 1 :]
     return None
 
 
-def git_output(directory, *arguments):
-    proc = subprocess.run(
-        ["git", "-C", directory, *arguments],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-    return proc.stdout.strip() if proc.returncode == 0 else ""
+def dry_run_destinations(prefix, arguments, directory):
+    """The destination branches git itself reports for this push, or None.
 
-
-def implicit_destinations(directory):
-    """The branch names a push without a refspec writes, or None when unknown.
-
-    That is the checked-out branch and the upstream branch it tracks.
+    A push with no refspec goes where git's configuration sends it
+    (remote.<name>.push, push.default, the upstream branch), so git is asked:
+    `git push --dry-run --porcelain` with the same options lists each
+    `source:destination` ref it would update and writes nothing. None means
+    git could not say (failure, timeout, no ref listed), and the caller refuses.
     """
-    if not directory:
+    command = [
+        "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        *prefix[1:],
+        "push",
+        "--dry-run",
+        "--porcelain",
+        *arguments,
+    ]
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            timeout=DRY_RUN_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, OSError):
         return None
-    branch = git_output(directory, "symbolic-ref", "--short", "-q", "HEAD")
-    if not branch:
-        return None
-    upstream = git_output(directory, "config", "--get", f"branch.{branch}.merge")
-    return {branch, destination_ref(upstream)} if upstream else {branch}
+    destinations = set()
+    for line in proc.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) > 1 and ":" in fields[1]:
+            destinations.add(destination_ref(fields[1].split(":", 1)[1]))
+    return destinations or None
 
 
-def push_verdict(arguments, directory, moved=False):
+def push_verdict(arguments, prefix, directory, moved=False):
     """Deny a force-push, a bulk push, and a push that can write a protected branch.
 
     The first bare word after `push` is the repository argument when another
     word follows it: it names a remote or a URL, never a destination branch,
     so a task-branch push to a remote called `main` is not a push to main.
-    A lone bare word is read both as a refspec, so `git push main` stays
-    refused, and as a remote, so `git push origin` is an implicit push.
-    An implicit push (no refspec, or `HEAD`) writes the current branch and
-    its upstream: it is refused when either is protected, and refused when
-    the branch cannot be resolved (detached HEAD, unknown directory, or a
-    `cd` earlier in the command).
+    A lone bare word is the repository, so `git push origin` and a push to a
+    remote named `main` have no refspec. A push with no refspec, or with
+    `HEAD`, is resolved by asking git (see dry_run_destinations): it is
+    refused when a destination is protected, and refused when git cannot say
+    or a `cd` earlier in the command changed the directory.
     """
     bare = []
     has_repo_option = False
@@ -488,13 +493,15 @@ def push_verdict(arguments, directory, moved=False):
     if forced or any(token.startswith("+") and len(token) > 1 for token in bare):
         return deny(FORCE_REASON)
     lone = not has_repo_option and len(bare) == 1
-    refspecs = bare if has_repo_option or lone else bare[1:]
+    refspecs = [] if lone else bare if has_repo_option else bare[1:]
     if bulk or any(token == ":" or "*" in token for token in refspecs):
         return deny(BULK_REASON)
     if any(destination_ref(token) in PROTECTED for token in refspecs):
         return deny(PROTECTED_REASON)
-    if lone or not refspecs or any(token in {"HEAD", "@"} for token in refspecs):
-        destinations = None if moved else implicit_destinations(directory)
+    if not refspecs or any(token in {"HEAD", "@"} for token in refspecs):
+        destinations = (
+            None if moved else dry_run_destinations(prefix, arguments, directory)
+        )
         if destinations is None:
             return deny(AMBIGUOUS_REASON)
         if destinations & PROTECTED:
@@ -509,10 +516,10 @@ def push_decision(commands, directory):
         moved = moved or name in DIRECTORY_CHANGERS
         if name != "git":
             continue
-        parsed = push_arguments(words, directory)
+        parsed = push_arguments(words)
         if parsed is None:
             continue
-        verdict = push_verdict(parsed[0], parsed[1], moved)
+        verdict = push_verdict(parsed[1], parsed[0], directory, moved)
         if verdict:
             return verdict
     return None
