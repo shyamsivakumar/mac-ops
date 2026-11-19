@@ -1,0 +1,20 @@
+{
+  "minimax": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "api_format": "anthropic_messages",
+    "api_key_name": "MINIMAX_API_KEY",
+    "source": "evals/harbor/run-example.sh defaults, used in the step-1 pi run"
+  },
+  "zai": {
+    "base_url": "https://api.z.ai/api/anthropic",
+    "api_format": "anthropic_messages",
+    "api_key_name": "ZAI_API_KEY",
+    "source": "Z.ai Anthropic-compatible endpoint; UNVERIFIED, never run through Harbor here"
+  },
+  "deepseek": {
+    "base_url": "https://api.deepseek.com/anthropic",
+    "api_format": "anthropic_messages",
+    "api_key_name": "DEEPSEEK_API_KEY",
+    "source": "DeepSeek Anthropic-compatible endpoint; UNVERIFIED, never run through Harbor here"
+  }
+}
