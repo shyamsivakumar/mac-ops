@@ -634,6 +634,8 @@ SHORT_BOOLEAN = {
     ("issue", "comment"): {"-e", "-w"},
     # `gh pr checkout`: `-f` is `--force`.
     ("pr", "checkout"): {"-f"},
+    # `gh pr view`: `-c` shows comments and `-w` opens the browser.
+    ("pr", "view"): {"-c", "-w"},
 }
 LONG_BOOLEAN = {
     # `gh pr review --comment` is `-c`: a flag, with the text in `--body`.
@@ -1183,6 +1185,11 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
             return subprocess.CompletedProcess(argv, 0, hit, "")
     started = time.monotonic()
     host = argv_host(argv)
+    if limit is not None and host is None:
+        # The reserve that applies cannot be read, so an optional read is
+        # skipped rather than run against an unknown balance.
+        raise ApiBudgetExhausted(
+            "optional read skipped: the host could not be established")
     if limit is not None and host is not None:
         # The probe and the read share one deadline: the probe gets half of
         # it, and the read gets whatever is left. A host that cannot be
