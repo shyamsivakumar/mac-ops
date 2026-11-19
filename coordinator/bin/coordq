@@ -233,8 +233,13 @@ def with_rules(args, rules):
     return {**args, "message": f"## Agent rules\n\n{rules}\n\n## Brief\n\n{args['message']}"}
 
 
+def is_gate_request(args):
+    """Whether a launch is a gate launch, named by its request ID."""
+    return str((args or {}).get("clientRequestId") or "").startswith("gate:")
+
+
 def call(tool, args, rules=None):
-    if tool == "t3_thread_launch":
+    if tool == "t3_thread_launch" and is_gate_request(args):
         with model_list.blocked_lock(wait=False):
             return call_resolved(tool, args, rules)
     return run_t3(tool, args)
@@ -589,7 +594,7 @@ def gate_reviewer_blocked(item):
     args = item.get("args") or {}
     if item.get("tool") != "t3_thread_launch":
         return False
-    if not str(args.get("clientRequestId") or "").startswith("gate:"):
+    if not is_gate_request(args):
         return False
     selection = args.get("modelSelection")
     if not selection:
