@@ -99,14 +99,14 @@ def board_snapshot(ledger, force=False):
     current_pass = ledger.get("_pass", 0) + 1
     ledger["_pass"] = current_pass
     if isinstance(cached, dict) and any(
-        "headRefName" not in pr or "baseRefName" not in pr
+        "headRefName" not in pr or "baseRefName" not in pr or "isCrossRepository" not in pr
         for data in cached.get("repos", {}).values() for pr in data.get("prs", [])
     ):
         force = True
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup"
+    fields = "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,body,mergeable,isDraft,statusCheckRollup"
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
@@ -414,7 +414,7 @@ def start(args, prio, ledger, lkey):
 
 def pr_action_skip(repo, number):
     pr = read_json(["gh", "pr", "view", str(number), "-R", repo,
-                    "--json", "number,state,headRefName,baseRefName"])
+                    "--json", "number,state,headRefName,baseRefName,isCrossRepository,headRefOid"])
     branches = [pr.get(field) for field in ("headRefName", "baseRefName")]
     if any(not isinstance(branch, str) or not branch for branch in branches):
         return pr, f"skip #{number}: missing PR branch names"
@@ -488,40 +488,53 @@ def barred_workspace(thread):
 def pull_base(repo, pr):
     """Return the ref a worktree of pull request work starts at, and the note that goes with it.
 
-    The branch of the pull request when it is on origin. A pull request
-    from a fork has its branch only on the fork, and the base repository
-    serves that head as `refs/pull/<number>/head`: the work starts at
-    the default branch and the note says how to get the code.
+    The branch of the pull request when the pull request is not from a
+    fork and the branch on origin is at the head commit of the pull
+    request. A branch name alone proves nothing: a fork can use the name
+    of a branch that origin has too. Every other pull request has its
+    head only as `refs/pull/<number>/head` on the base repository: the
+    work starts at the default branch and the note says how to get the
+    code and how to check that it is the head commit.
     """
     if not pr:
         return "origin/main", ""
     branch = pr.get("headRefName") or ""
     number = pr.get("number")
-    if branch and branch_on_origin(repo, branch):
+    head = pr.get("headRefOid")
+    if branch and head and pr.get("isCrossRepository") is False and branch_on_origin(repo, branch) == head:
         return "origin/" + branch, ""
     if branch and number:
-        return "origin/main", (f"\n\nThe branch {branch} of pull request #{number} is on a fork and is not on "
-                               f"origin. Fetch its code with `git fetch origin refs/pull/{number}/head` (the head "
-                               "commit is that fetch) and check it out with `git checkout FETCH_HEAD` before you "
-                               "change anything.")
+        head = pr["headRefOid"]
+        where = ("is on a fork and is not on origin" if pr.get("isCrossRepository") is not False
+                 else "is not at its head commit on origin")
+        return "origin/main", (f"\n\nThe branch {branch} of pull request #{number} {where}. Fetch its code "
+                               f"with `git fetch origin refs/pull/{number}/head`, then check that "
+                               f"`git rev-parse FETCH_HEAD` prints {head}. If it prints another commit, stop "
+                               "and report that, and change nothing. Only when it matches, check it out with "
+                               "`git checkout FETCH_HEAD` before you change anything.")
     return "origin/main", ""
 
 
 def branch_on_origin(repo, branch):
-    """Say whether a branch is on origin, so a worktree can start there.
+    """Return the commit a branch is at on origin, or none when it cannot be read.
 
     A worktree that cannot start at its base ref would fall back to the
     shared root of the repository, so a branch that is not on origin is
-    not a safe base for pull request work.
+    not a safe base for pull request work. The commit lets the caller
+    check that the branch holds the code of the pull request.
     """
     root = repo_root(repo)
     if not root or not os.path.isdir(root):
-        return False
+        return None
     try:
         listing = run(["git", "-C", root, "ls-remote", "--heads", "origin", branch], timeout=60)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return False
-    return bool(listing.strip())
+        return None
+    for line in listing.splitlines():
+        commit, _, ref = line.partition("\t")
+        if ref == "refs/heads/" + branch:
+            return commit
+    return None
 
 
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
@@ -942,13 +955,6 @@ def drift_ff(ledger):
             d = "/Users/shyamsivakumar/Code/" + name
             if not os.path.isdir(d):
                 print(f"{CFG[repo]['key']:5} checkout absent: {d}; skipping")
-                continue
-            branch = workspace_branch(d)
-            if branch != "main":
-                # The chore fast-forwards the checkout's own main, so it
-                # only runs when the checkout is on main. A checkout on
-                # another branch is left alone.
-                print(f"{CFG[repo]['key']:5} left alone, the checkout is on {branch or 'an unknown branch'}")
                 continue
             out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
             ids = out.split()
@@ -1610,12 +1616,11 @@ def recover_dead_runs(ledger):
                 moved = issue.get("state") == "CLOSED"
             unknown_open_pr = False
             protected_pr = False
-            pr_branch = ""
-            pr_number = 0
+            open_pr = None
             for pr in thread.get("pullRequests") or []:
                 if pr.get("repository") != repo or not pr.get("number"):
                     continue
-                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid,headRefName,baseRefName"])
+                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid,headRefName,baseRefName,isCrossRepository"])
                 _, skip = pr_action_skip(repo, pr["number"])
                 if skip:
                     print(skip)
@@ -1632,8 +1637,7 @@ def recover_dead_runs(ledger):
                 if current_pr.get("state") == "OPEN" and not recorded_head:
                     unknown_open_pr = True
                 if current_pr.get("state") == "OPEN" and current_pr.get("headRefName"):
-                    pr_branch = current_pr["headRefName"]
-                    pr_number = pr["number"]
+                    open_pr = {**current_pr, "number": pr["number"]}
             if protected_pr:
                 continue
             attempt = re.search(r":a(\d+)$", receipt_key)
@@ -1692,7 +1696,7 @@ def recover_dead_runs(ledger):
             if reason or not known:
                 # The worktree may not take work, or it is gone: the work
                 # starts again in a worktree of the pull request's branch.
-                base, note = pull_base(repo, {"headRefName": pr_branch, "number": pr_number})
+                base, note = pull_base(repo, open_pr)
                 workspace = {"type": "worktree", "baseRef": base, "startFromOrigin": True}
                 where = "a fresh worktree of the pull request branch"
             else:
