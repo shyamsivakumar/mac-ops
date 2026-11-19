@@ -170,6 +170,79 @@ class FirstRetryTest(RetryLimitBase):
         self.assertNotIn("regating", out)
 
 
+def completed_gate(text):
+    return {"thread": {"status": "completed", **ASTRA_GATE},
+            "items": [{"type": "assistant_message", "text": text}]}
+
+
+class VerdictLineTest(RetryLimitBase):
+    """A verdict is a line that is exactly VERDICT: PASS or VERDICT: FAIL."""
+
+    def gate_ending(self, text):
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(completed_gate(text)))
+        self.write_queue(heads={self.key: 4})
+        return self.run_gatekeep()[0]
+
+    def test_a_report_that_refuses_a_verdict_is_retried(self):
+        out = self.gate_ending("The diff was too large.\nUnable to issue VERDICT: PASS")
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(len(self.gate_items()), 1)
+
+    def test_a_verdict_followed_by_a_diagnostic_is_not_retried(self):
+        out = self.gate_ending("Findings below.\nVERDICT: FAIL\nwarning: tool call timed out")
+        self.assertNotIn("regating", out)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_the_fix_and_the_gate_read_the_same_verdict(self):
+        for report, verdict in (("x\nVERDICT: FAIL\nwarning: timed out", "FAIL"),
+                                ("x\nUnable to issue VERDICT: FAIL", None),
+                                ("x\nVERDICT: PASS\n\n", "PASS"),
+                                ("", None)):
+            self.assertEqual(coordq.verdict_of(report), verdict, report)
+
+    def test_a_pass_followed_by_trailing_blank_lines_is_not_retried(self):
+        out = self.gate_ending("All good.\nVERDICT: PASS\n\n")
+        self.assertNotIn("regating", out)
+        self.assertEqual(self.gate_items(), [])
+
+
+class RetryWriteTest(RetryLimitBase):
+    """A retry replaces the head's record and queues its item in one save, and
+    a run that stops after that save does not count the retry again."""
+
+    def test_no_save_holds_the_retry_count_without_its_item(self):
+        saves = []
+        real_save = coordq.save
+        self.addCleanup(setattr, coordq, "save", real_save)
+
+        def recording_save(queue):
+            saves.append(json.loads(json.dumps(queue)))
+            real_save(queue)
+
+        coordq.save = recording_save
+        self.write_queue(heads={self.key: 4})
+        self.run_gatekeep()
+        for snapshot in saves:
+            record = snapshot.get("gatedHeads", {}).get(self.key)
+            self.assertIsNotNone(record, "a save dropped the head's record")
+            if record == 4:
+                continue
+            queued = [item["id"] for item in snapshot["items"] if item["tool"] == "t3_thread_launch"]
+            self.assertIn(record["id"], queued)
+
+    def test_a_retry_whose_launch_is_pending_is_not_counted_again(self):
+        self.write_queue(heads={self.key: {"id": 5, "retries": 1,
+                                          "at": time.time() - coordq.GATE_RETRY_BACKOFF - 1,
+                                          "givenUp": False, "retryOf": "gate-1"}},
+                         items=[{"id": 5, "tool": "t3_thread_launch", "args": {}, "title": "t"}])
+        out, _ = self.run_gatekeep()
+        self.assertNotIn("gave up", out)
+        self.assertNotIn("regating", out)
+        record = self.read_queue()["gatedHeads"][self.key]
+        self.assertEqual((record["id"], record["retries"], record["givenUp"]), (5, 1, False))
+        self.assertEqual(len(self.gate_items()), 1)
+
+
 class ReviewerFallbackTest(RetryLimitBase):
     """A verdictless gate moves one step down the review list, past a blocked
     reviewer, and the choice and the queue item happen under the block lock."""
