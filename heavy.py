@@ -2164,10 +2164,18 @@ def _stop_watchdog(watchdog: Any) -> None:
 
 
 def _is_simulator_job(command_basename: str, argv: Sequence[str]) -> bool:
-    """Return True when the job may boot simulators."""
+    """Return True when the job may boot simulators.
+
+    The command heavy runs can wrap the real tool, as in ``xcrun xcodebuild``
+    or ``xcrun simctl``. The wrapper's name says nothing, so the arguments
+    decide as well: a job that runs ``xcodebuild`` or ``simctl`` in any
+    argument is a simulator job.
+    """
     if command_basename in SIMULATOR_JOB_COMMANDS:
         return True
-    return any(os.path.basename(str(arg)) == "simctl" for arg in argv)
+    return any(
+        os.path.basename(str(arg)) in SIMULATOR_JOB_COMMANDS for arg in argv
+    )
 
 
 SIMULATOR_BOOTED_STATES = ("Booted", "Booting")
