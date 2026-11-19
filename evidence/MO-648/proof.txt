@@ -3,7 +3,7 @@ real exit 0
 shim exit 0
 stdout and stderr identical: 5000
 log lines:        1
-{"ts": 1795113154.112, "caller": "bash", "resource": "core", "verb": "api", "via": "shim"}
+{"ts": 1795115897.77, "caller": "bash", "resource": "core", "verb": "api", "call": "9e8eacddad79", "via": "shim"}
 ## 2 failing command
 real exit 1
 shim exit 1
@@ -15,19 +15,19 @@ exit 7
 ## 4 gateway call logs once
 rc 0 5000
 new lines: 1
-{"ts": 1795113158.651, "caller": "proof", "resource": "core", "verb": "api"}
+{"ts": 1795115902.458, "caller": "proof", "resource": "core", "verb": "api", "call": "8d9e753d700b"}
 ## 4b direct call from same kind of process logs via shim
 5000
-{"ts": 1795113159.868, "caller": "proof", "resource": "core", "verb": "api", "via": "shim"}
+{"ts": 1795115903.624, "caller": "proof", "resource": "core", "verb": "api", "call": "f762c9080772", "via": "shim"}
 ## 5 read-only log dir
 5000
 exit 0
 ## 6 report
-hour              caller                     core  graphql  other  via shim (bypassed the gateway)
-2026-11-19 10:00  bash                          3        0      0                                3
-2026-11-19 10:00  proof                         2        0      0                                1
+hour              caller                     core  graphql  other  pages  via shim (bypassed the gateway)
+2026-11-19 11:00  bash                          3        0      0      3                                3
+2026-11-19 11:00  proof                         2        0      0      2                                1
 ## 7 timing, 50 calls (fake gh: exit 0, no network)
 bare fake gh:
-5.1 ms per call
+8.3 ms per call
 via shim:
-16.0 ms per call
+26.7 ms per call
