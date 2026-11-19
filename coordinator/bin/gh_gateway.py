@@ -635,6 +635,10 @@ SHORT_BOOLEAN = {
     ("pr", "checkout"): {"-f"},
     # `gh pr view`: `-c` shows comments and `-w` opens the browser.
     ("pr", "view"): {"-c", "-w"},
+    # `gh issue list`: `-a` is `--assignee`, so only `-d` and `-w` are flags.
+    ("issue", "list"): {"-d", "-w"},
+    # `gh run view`: `-a` takes the attempt number and `-v` is verbose.
+    ("run", "view"): {"-v"},
 }
 LONG_BOOLEAN = {
     # `gh pr review --comment` is `-c`: a flag, with the text in `--body`.
@@ -644,6 +648,10 @@ SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
     ("run", "list"): {"-w", "-b"},
     ("pr", "list"): {"-a", "-A", "-H", "-S"},
+    # `gh issue list`: `-a` is `--assignee`, `-A` author, `-l` label.
+    ("issue", "list"): {"-a", "-A", "-l", "-L", "-s", "-S"},
+    # `gh run view`: `-a` takes the attempt number.
+    ("run", "view"): {"-a"},
 }
 
 

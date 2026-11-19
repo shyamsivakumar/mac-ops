@@ -973,6 +973,11 @@ print("ISSUEVIEW", gh_gateway.argv_host(
     ["gh", "issue", "view", "42", "-c", "-R", "ent.example/team/repo"]))
 print("ISSUELISTWEB", gh_gateway.argv_host(
     ["gh", "issue", "list", "-w", "-R", "ent.example/team/repo"]))
+print("ISSUELISTASSIGNEE", gh_gateway.argv_host(
+    ["gh", "issue", "list", "-R", "actual.example/o/r", "-a",
+     "-Rother.example/o/r"]))
+print("RUNVIEWVERBOSE", gh_gateway.argv_host(
+    ["gh", "run", "view", "42", "-v", "-R", "ent.example/o/r"]))
 print("REVIEWBODY", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-R", "actual.example/o/r", "--body",
      "-Rother.example/o/r"]))
@@ -999,7 +1004,8 @@ check("a host in -R is the effective host",
                   "CREATEFILL", "ent.example", "CREATEDRAFT", "ent.example",
                   "CREATEWEB", "ent.example", "CREATEEDITOR", "ent.example",
                   "ISSUEEDITOR", "ent.example", "CHECKOUTFORCE", "ent.example",
-                  "COMMENTEDITOR", "ent.example", "ISSUECOMMENT", "ent.example", "LIMITATTACHED", "ent.example", "LABELVALUE", "ent.example", "VIEWCOMMENTS", "ent.example", "ISSUEVIEW", "ent.example", "ISSUELISTWEB", "ent.example",
+                  "COMMENTEDITOR", "ent.example", "ISSUECOMMENT", "ent.example", "LIMITATTACHED", "ent.example", "LABELVALUE", "ent.example", "VIEWCOMMENTS", "ent.example", "ISSUEVIEW", "ent.example", "ISSUELISTWEB", "ent.example", "ISSUELISTASSIGNEE", "actual.example",
+                  "RUNVIEWVERBOSE", "ent.example",
                   "REVIEWBODY", "actual.example"],
       str(selector))
 
