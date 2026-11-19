@@ -38,20 +38,20 @@ Additional Ascend entries can set `ascend: true`.
 
 Queued heads are saved in queue.json's gatedHeads map in the same atomic write
 as their queue item. Keep that map across restarts. A recorded gate whose thread is failed, interrupted, or completed without a
-final `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the next run.
-The old receipt is cleared under the queue lock. Each head is retried at most
+last non-blank line that is exactly `VERDICT: PASS` or `VERDICT: FAIL` (leading whitespace kept) is queued again on the next run
+on the next allowed reviewer. The retry, its head record and the dead thread
+it replaces (`retryOf`) are one queue write. The dead thread is read before any lock is taken; the choice
+of reviewer and the write run under the block store lock and then the queue lock. Each head is retried at most
 once per run. Live gates, gates with verdicts, and missing receipts stay deduplicated.
 Dry-run reports `regating` without writing state. A new head can receive a gate.
 
 A gate that dies without a verdict looks the same whether it lost its thread
 or its reviewer could not run at all, so the retry is bounded by count, not by
-the failure text. A head is retried at most `COORDQ_GATE_RETRY_LIMIT` times
-(two by default), the second and later retries wait `COORDQ_GATE_RETRY_BACKOFF`
-seconds (300 by default) after the retry before them, and then the head is
-given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
+the failure text. A head is retried exactly once, whatever the environment says,
+and then the head is given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
 a verdict` in `queue/gatekeep.log`, and nothing is queued for that head again.
 The retry count lives with the head's queue item in `gatedHeads`, as
-`{id, retries, at, givenUp}`, and a bare queue item id is read as a head with
+`{id, retries, at, givenUp, retryOf}`, and a bare queue item id is read as a head with
 no retry behind it. The record names the head, so a pull request that pushes a
 new head starts again at no retries. An explicit `coordq gate <repo>#<pr>`
 still queues a given-up head, because an operator asked for it: it keeps the

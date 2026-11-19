@@ -12,6 +12,7 @@ epoch time; the reader drops an entry once that time has passed. An entry
 without a numeric `expires_at` is a manual block and stays until removed.
 """
 
+import contextlib
 import fcntl
 import json
 import math
@@ -149,6 +150,16 @@ def blocked_identities(now=None):
     return {key for key, entry in blocked.items() if expiry(entry) > now}
 
 
+@contextlib.contextmanager
+def blocked_lock():
+    """Hold the lock `block_provider` takes, so a caller that reads the block
+    list sees no block recorded until it releases. `block_provider` cannot run
+    under it in the same process."""
+    with open(blocked_path() + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def block_provider(selection, expires_at, now=None):
     """Block a provider until `expires_at` (epoch seconds), keeping every other entry.
 
@@ -160,8 +171,7 @@ def block_provider(selection, expires_at, now=None):
         raise ModelsError(f"block_provider needs a selection and a finite expires_at: {selection!r}, {expires_at!r}")
     now = time.time() if now is None else now
     file_path = blocked_path()
-    with open(file_path + ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with blocked_lock():
         try:
             data = read_blocked_file(file_path)
         except ModelsError as e:
