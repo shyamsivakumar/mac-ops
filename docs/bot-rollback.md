@@ -41,7 +41,9 @@ it is healthy are facts about the bots, so they live in one file,
         ["node", "scripts/srw_promote_paper_live.cjs", "--break-glass-rollback", "{sha}"]
       ],
       "healthUrlEnv": "BOT1_HEALTH_URL",
-      "healthPath": "/health"
+      "healthPath": "/health",
+      "healthMustShowSha": true,
+      "healthTimeoutSeconds": 300
     }
   ]
 }
@@ -59,6 +61,20 @@ it is healthy are facts about the bots, so they live in one file,
   bot's health endpoint, and `healthPath` the path under it. The health check
   is `curl -fsS <url><path>`. A bot that is checked by a script instead
   names it in `healthCommand`.
+- `healthMustShowSha` says the health output has to carry the rollback SHA.
+  The command keeps asking until the bot reports that SHA, up to
+  `healthTimeoutSeconds`. A health answer that arrives before the rollback has
+  landed says nothing about the rollback, so the check waits for the bot to
+  report the commit it is running.
+
+## Two records, and what happens when they disagree
+
+The command reads the recorded rollback SHA from the ref's history and checks
+it against the live commit's parent. A promotion that moves the bot by one
+commit leaves that commit as the parent of the live commit, so the two
+records agree. When this checkout's history skipped a promotion, the two
+records say different things; the command reports that and asks for the SHA
+to be pinned in the config rather than choosing one.
 
 ## What the dry run prints
 
@@ -92,7 +108,10 @@ and its dry run.
 
 ## What this does not do
 
-- It does not write the config, the repository or any live service.
+- The dry run writes nothing: it reads the config and the git history and
+  prints the steps. `--execute` runs the promotion path's own rollback command,
+  which fetches and pushes, and then the health check.
+- It does not write the config.
 - It does not change the promotion path's gates, the bot order paths or any
   guard, permission or sandbox.
 - It does not read secrets.

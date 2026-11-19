@@ -30,6 +30,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,7 +47,8 @@ class Bot:
     """One bot, as the config records it."""
 
     def __init__(self, bot_id, label, repository, live_ref, rollback_sha,
-                 rollback_commands, health_url_env, health_path, health_command):
+                 rollback_commands, health_url_env, health_path, health_command,
+                 health_must_show_sha, health_timeout_seconds):
         self.id = bot_id
         self.label = label
         self.repository = repository
@@ -56,6 +58,8 @@ class Bot:
         self.health_url_env = health_url_env
         self.health_path = health_path
         self.health_command = health_command
+        self.health_must_show_sha = health_must_show_sha
+        self.health_timeout_seconds = health_timeout_seconds
 
 
 def _text(entry, key, bot_id, required=True):
@@ -133,6 +137,14 @@ def parse_config(raw):
             not isinstance(rollback_sha, str) or not SHA_PATTERN.match(rollback_sha)
         ):
             raise ConfigError(f"bot {bot_id}: rollbackSha must be a 40 character commit SHA")
+        health_must_show_sha = entry.get("healthMustShowSha", False)
+        if not isinstance(health_must_show_sha, bool):
+            raise ConfigError(f"bot {bot_id}: healthMustShowSha must be true or false")
+        health_timeout_seconds = entry.get("healthTimeoutSeconds", 0)
+        if not isinstance(health_timeout_seconds, int) or isinstance(health_timeout_seconds, bool):
+            raise ConfigError(f"bot {bot_id}: healthTimeoutSeconds must be a whole number of seconds")
+        if health_timeout_seconds < 0:
+            raise ConfigError(f"bot {bot_id}: healthTimeoutSeconds cannot be negative")
         parsed.append(
             Bot(
                 bot_id,
@@ -144,6 +156,8 @@ def parse_config(raw):
                 _text(entry, "healthUrlEnv", bot_id, required=False),
                 _text(entry, "healthPath", bot_id, required=False) or "/health",
                 _command_list(entry, "healthCommand", bot_id, required=False),
+                health_must_show_sha,
+                health_timeout_seconds,
             )
         )
     return parsed
@@ -214,6 +228,23 @@ def recorded_rollback_sha(bot, repo):
     return sha if SHA_PATTERN.match(sha) else None
 
 
+def live_parent_sha(bot, repo):
+    """The commit the live commit was built on, or None when it cannot be read.
+
+    A promotion that moves the bot by one commit leaves that commit as the
+    parent of the live commit. When the checkout's history disagrees with the
+    ref's history, the two records say different things and the command says
+    so instead of choosing one.
+    """
+    if not bot.live_ref:
+        return None
+    code, output = git(repo, "rev-parse", "--verify", f"{bot.live_ref}^^{{commit}}")
+    if code != 0:
+        return None
+    sha = output.strip().splitlines()[-1].strip() if output.strip() else ""
+    return sha if SHA_PATTERN.match(sha) else None
+
+
 def health_url(bot):
     """The URL that says the bot is healthy, or None when it is not set."""
     if not bot.health_url_env:
@@ -266,6 +297,12 @@ class Plan:
         if self.rollback_sha and self.live_sha and not self.ancestor():
             self.problems.append(
                 f"the recorded rollback SHA {self.rollback_sha} is not an ancestor of the live commit"
+            )
+        parent = live_parent_sha(bot, repo)
+        if parent and self.rollback_sha and not bot.rollback_sha and parent != self.rollback_sha:
+            self.problems.append(
+                f"the ref history says {self.rollback_sha} and the live commit's parent says {parent}; "
+                "the records disagree, so pin the rollback SHA in the config"
             )
 
     def known(self, sha):
@@ -350,6 +387,30 @@ def dry_run(plans, config_path):
     return 1 if problems else 0
 
 
+def run_health(plan):
+    """Run the health check and wait for the bot to report the rollback SHA.
+
+    A health check that answers before the rollback has landed says nothing
+    about the rollback. When the config asks for the SHA to show up in the
+    health output, the command keeps asking until the bot reports it or the
+    timeout runs out.
+    """
+    command = health_command(plan.bot)
+    deadline = time.time() + plan.bot.health_timeout_seconds
+    code, output = run(command, cwd=plan.repo)
+    while (
+        plan.bot.health_must_show_sha
+        and plan.rollback_sha
+        and plan.rollback_sha not in output
+        and time.time() < deadline
+    ):
+        time.sleep(5)
+        code, output = run(command, cwd=plan.repo)
+    if plan.bot.health_must_show_sha and plan.rollback_sha and plan.rollback_sha not in output:
+        return 1, output or f"the health check did not report {plan.rollback_sha}"
+    return code, output
+
+
 def execute(plans):
     """Roll each bot back and then check that it is healthy."""
     for plan in plans:
@@ -361,7 +422,10 @@ def execute(plans):
     for plan in plans:
         for name, command in plan.steps():
             print(f"bot-rollback: {plan.bot.id}: {name}: {shlex.join(command)}")
-            code, output = run(command, cwd=plan.repo)
+            if name == "health check":
+                code, output = run_health(plan)
+            else:
+                code, output = run(command, cwd=plan.repo)
             if output:
                 print(output)
             if code != 0:
