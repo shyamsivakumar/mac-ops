@@ -348,6 +348,19 @@ class ProviderBlockTests(unittest.TestCase):
         got = provider_reset.reset_at("429; resets at 14:00 America/Los_Angeles", base)
         self.assertEqual(got, moment("2026-11-01T22:00:00"))
 
+    def test_a_dated_reset_on_the_repeated_autumn_hour_is_read_on_its_second_pass(self):
+        """The GLM format names a date and a zone: at 01:15 PST on the day
+        the clock goes back, 'will reset at 2026-11-01 01:30:00
+        America/Los_Angeles' means the 01:30 that is still 15 minutes away,
+        not the one that has already passed."""
+        base = moment("2026-11-01T09:15:00")
+        message = "quota exhausted, will reset at 2026-11-01 01:30:00 America/Los_Angeles"
+        self.assertEqual(provider_reset.reset_at(message, base), moment("2026-11-01T09:30:00"))
+        record = provider_block.record_block(SELECTION, message, base, now=base)
+        self.assertEqual(record["until"], "2026-11-01T09:30:00+00:00")
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-01T09:29:59")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-01T09:30:01")))
+
     def test_a_time_of_day_reset_on_the_repeated_autumn_hour_is_read_on_its_second_pass(self):
         """01:15 PST is the second pass of 01:xx on November 1, so 'resets at
         01:30' is 15 minutes away, not a day and a quarter."""
