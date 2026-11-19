@@ -80,7 +80,9 @@ STUCK_FILE = "gatekeep-stuck.txt"
 # on every run. A head is retried at most GATE_RETRY_LIMIT times, with
 # GATE_RETRY_BACKOFF seconds between retries after the first, and then given
 # up until its head changes.
-GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
+GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "1"))
+# A head moves to another reviewer once, whatever the retry limit says.
+GATE_MOVE_LIMIT = 1
 GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
@@ -1626,7 +1628,10 @@ def cmd_gatekeep(a):
                 continue
             counts.pop(event["pr"], None)
             key, args = event["key"], event["args"]
-            with Lock(True):
+            # Lock order: the block store lock, then the queue lock. A writer
+            # of the block store cannot record a block between the choice of
+            # the reviewer and the queue item that carries it.
+            with model_list.blocked_lock(), Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
                 if key in attempted:
@@ -1656,7 +1661,7 @@ def cmd_gatekeep(a):
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
                     retries = state["retries"] + 1
-                    if retries > GATE_RETRY_LIMIT:
+                    if retries > min(GATE_RETRY_LIMIT, GATE_MOVE_LIMIT):
                         print(f"gave up {key} after {state['retries']} retries without a verdict",
                               flush=True)
                         if not a.dry_run:
@@ -1684,6 +1689,14 @@ def cmd_gatekeep(a):
                         with open(receipt_path + ".tmp", "w") as f:
                             json.dump(receipts, f)
                         os.replace(receipt_path + ".tmp", receipt_path)
+                elif model_list.is_blocked(args["modelSelection"]):
+                    chosen = reviewer_model(event.get("builderModels", []))
+                    if chosen is None:
+                        print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
+                        continue
+                    print(f"rechoosing {event['pr']}: {model_list.identity(args['modelSelection'])} is blocked",
+                          flush=True)
+                    args["modelSelection"] = chosen
                 attempted.add(key)
                 print(("would queue " if a.dry_run else "queued ") + key
                       + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
