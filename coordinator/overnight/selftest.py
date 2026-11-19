@@ -1731,9 +1731,9 @@ def send_integrity():
             # The dispatch failed, so nothing is recorded as a
             # continuation and the ticket stays eligible.
             exact("started" in result, False)
-            exact(f"cont:old" in ledger, False)
+            exact("cont:old" in ledger, False)
         else:
-            exact(f"cont:old" in ledger, True)
+            exact("cont:old" in ledger, True)
             exact(result, "continue #385: fresh (old model may not take a send): receipt")
 
 
