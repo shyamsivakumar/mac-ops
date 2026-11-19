@@ -6,9 +6,8 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, 
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
-import { flushFlowLog, logAct, logLaneChange, markPass } from "./flowlog.js";
+import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, optionsText, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { actRates, awayCounts, flushFlowLog, logAct, logLaneChange, markPass, readFlow } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -18,11 +17,15 @@ const POP_PAD = 12;
 const BOARD_EVERY = 10000;
 const IDLE_AFTER = 90000;
 const TICK = 60000;
+const AWAY_AFTER = 1800000;
+const SEEN_EVERY = 10000;
+const ACTS_EVERY = 300000;
+const NEEDS_EVERY = 50000;
 const POP_FOLLOW = 600000;
 const SAVED = "board";
 const PROJECT_KEY = "project";
 const SEEN_KEY = "seen";
-const SAVED_VERSION = 4;
+const SAVED_VERSION = 5;
 const ACT_GRACE = 20000;
 const ARM_FOR = 4000;
 const LOAD_STALE = 300000;
@@ -38,18 +41,21 @@ const CONFIRM_GAP = 400;
 const DEC_FRESH = 60000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
 const PLAN_STALE = 60000;
-const BULK_KEYS = new Set(["S", "A", "M", "F", "U"]);
+const BULK_KEYS = new Set(["S", "A", "M", "F", "U", "C"]);
 const SETTLEABLE = ["done", "fail", "stop"];
 const NOTE_KINDS = { settle: "not finished", approve: "not ready", retry: "not failed", rebase: "not conflicting", note: "no thread to reply to" };
 const ACT_OF = { Rebase: "rebase", Retry: "retry", Note: "reply" };
+const SENT_WORD = { "Send back": "sent back" };
 const srcOf = (g) => (g.kind === "ask" ? "coordinator" : g.threads.some((t) => t.review) ? "review" : "task");
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
+const SENT = new Map();
 const WT_EVERY = 30000;
 
 const DAY = 86400000;
 const SNOOZED_KEY = "snoozed";
 const RETRY_NOTE = "run it again after the last failure";
+const SEND_BACK_NOTE = "the open PR has failing CI or review feedback and nothing is working on it; read what failed, fix it, run the repo's local checks, push, and reply with what you changed";
 const REBASE_NOTE = "rebase the branch on origin/main, resolve the conflicts keeping both sides' intent, run the repo's local checks, push, and reply with what conflicted";
 const SNOOZE_CHOICES = [["tomorrow", "Until tomorrow 9am"], ["3d", "For 3 days"], ["monday", "Until next Monday 9am"], ["change", "Until it changes"]];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -74,7 +80,41 @@ const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.
 
 const REBASE_COLUMNS = ["needs", "stuck", "review"];
 
-const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
+const failedIn = (cols) => cols.stuck.groups.filter((g) => g.kind === "fail" && !g.asleep);
+
+const CLEAR_VERB = { rebase: "Rebase", retry: "Retry", sendback: "Send back" };
+const CLEAR_SKIP = { asleep: "snoozed", asked: "asked need a reply", stalled: "stalled", sent: "already sent", other: "no standard fix" };
+const CLEAR_SEND_BACK = ["ci", "changes", "unrouted"];
+
+const clearAction = (g, rebasable) => {
+  if (g.asleep) return "asleep";
+  if (g.needs.includes("asked")) return "asked";
+  if (g.needs.includes("stalled")) return "stalled";
+  if (rebasable.has(g)) return "rebase";
+  if (g.kind === "fail") return "retry";
+  return CLEAR_SEND_BACK.some((reason) => g.needs.includes(reason)) ? "sendback" : "other";
+};
+
+const planClear = (groups, rebasable, sentAs) => {
+  const actions = [];
+  const skipped = new Map();
+  const skip = (why) => skipped.set(why, (skipped.get(why) ?? 0) + 1);
+  for (const g of groups) {
+    const action = clearAction(g, rebasable);
+    if (!CLEAR_VERB[action]) skip(action);
+    else if (sentAs(g, CLEAR_VERB[action])) skip("sent");
+    else actions.push([g, action]);
+  }
+  return { actions, skipped };
+};
+
+const clearCounts = (actions) => Object.keys(CLEAR_VERB).map((action) => [action, actions.filter(([, a]) => a === action).length]).filter(([, n]) => n).map(([action, n]) => `${n} ${CLEAR_VERB[action].toLowerCase()}`).join(" · ");
+
+const clearTip = ({ actions, skipped }) => {
+  const total = [...skipped.values()].reduce((a, n) => a + n, 0);
+  const why = [...skipped].map(([reason, n]) => (skipped.size > 1 ? `${n} ${CLEAR_SKIP[reason]}` : CLEAR_SKIP[reason])).join(", ");
+  return `Send each stuck card its standard fix: ${[clearCounts(actions), total && `${total} skipped (${why})`].filter(Boolean).join(" · ")} (C)`;
+};
 
 const finishedOf = (g) => g.threads.filter((c) => SETTLEABLE.includes(c.kind));
 
@@ -84,6 +124,9 @@ const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/
 const PLAN_BUCKET = "failed the merge check";
 
 const NOTICE_FOR = 8000;
+const ANSWER_WAIT = 30000;
+const ANSWER_POLL = 2000;
+const SENDING_WAIT = 60000;
 let noticeSeq = 0;
 
 const tally = (groups) => {
@@ -113,7 +156,11 @@ export default class Board extends View {
     this.notice = props()?.notice ?? null;
     this.chooser = props()?.projects ?? props()?.snooze ?? null;
     this.rows = props()?.rows ?? null;
-    this.sheet = Boolean(props()?.keys || this.notice || this.chooser || this.rows);
+    this.acts = props()?.acts ?? null;
+    this.actsAt = 0;
+    this.touched = 0;
+    this.needKeys = new Set();
+    this.sheet = Boolean(props()?.keys || this.notice || this.chooser || this.rows || this.acts);
     this.chosen = this.chooser ? Math.max(0, this.chooser.list.findIndex((p) => p.name === this.chooser.current)) : 0;
     this.projects = [];
     this.project = this.pop || this.dec || this.reviewMode || this.sheet ? null : localStorage.getItem(PROJECT_KEY);
@@ -183,7 +230,6 @@ export default class Board extends View {
     this.seen = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}");
     this.snoozed = JSON.parse(localStorage.getItem(SNOOZED_KEY) ?? "{}");
     this.asleepCount = 0;
-    this.sent = new Map();
     this.marks = new Set();
     this.replyMarked = false;
     this.actSeen = shared("cockpit.act")?.rev ?? 0;
@@ -245,6 +291,7 @@ export default class Board extends View {
     }
     if (shared("cockpit.pop")) setShared("cockpit.pop", null);
     if (shared("cockpit.notice")) dismiss();
+    if (shared("cockpit.away")) setShared("cockpit.away", null);
     this.fanView = localStorage.getItem("fan") === "1";
     this.fanFolded = new Set(JSON.parse(localStorage.getItem("fan-folded") ?? "[]"));
     this.search = InputState.new({ placeholder: "Ticket ID or title" });
@@ -252,18 +299,22 @@ export default class Board extends View {
     this.search.on("submit", () => this.handle.focus());
     this.search.on("focus", () => (this.searching = true));
     this.search.on("blur", () => (this.searching = false));
-    this.copyId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    hydrateAlerts();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
-    cx.timer.every(CHECK_EVERY, (cx) => this.alertTick(cx));
+    cx.timer.every(ANSWER_POLL, (cx) => {
+      this.noteAnswers();
+      cx.notify();
+    });
     cx.timer.every(TICK, (cx) => {
-      if (!this.pop) this.logAnswers();
+      this.logAnswers();
       cx.spawn(() => flushFlowLog(Date.now()));
+      this.refreshActs(cx);
+      this.publishNeeds();
     });
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
     this.restore();
     this.refresh(cx);
+    this.refreshActs(cx);
     cx.spawn(async (cx) => {
       for (;;) {
         this.command(await nextCommand(), cx);
@@ -274,36 +325,6 @@ export default class Board extends View {
 
   watching() {
     return Date.now() - this.drawn < IDLE_AFTER;
-  }
-
-  alertTick(cx) {
-    if (!this.watching() && alertState().on && leaseOpen(this.copyId, Date.now())) this.refresh(cx);
-  }
-
-  alertCheck() {
-    if (this.pop || this.dec || this.unsure() || !this.board) return;
-    const now = Date.now();
-    const rows = this.place(this.groups(), now).map(([g, lane]) => ({
-      key: g.key,
-      held: holds(lane, g.needs),
-      asleep: g.asleep,
-      unsettled: g.info.status === "open" && (g.info.gh?.ci ?? "loading") === "loading" || this.holdsAlerts(g),
-      label: this.cleanTitle(g).slice(0, 40),
-      pr: g.info.pr?.number,
-    }));
-    checkAlerts(rows, this.copyId, now);
-  }
-
-  holdsAlerts(g) {
-    const verdict = this.verdictFor(g);
-    return verdict === LOADING_VERDICT || verdict?.state === "unverified";
-  }
-
-  toggleAlerts(cx) {
-    const on = !alertState().on;
-    setAlertsOn(on);
-    say("info", on ? "Phone alerts on" : "Phone alerts off");
-    cx.notify();
   }
 
   refresh(cx, force) {
@@ -382,6 +403,7 @@ export default class Board extends View {
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     if (id === "project") return this.openProjects(cx);
     if (id === "snoozed") return this.openSnoozed(cx);
+    if (id === "acts") return openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: actsHeight(this.acts.rows.length), props: { acts: this.acts } });
     if (id === "wt" || id === "wtfail") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
     openOverlay({ mod: "ops-panels", kind: "dialog", width: 520, height: 340, props: { panel: "queue", seed: { running: this.board?.running ?? 0, cap: this.cap } } });
   }
@@ -542,7 +564,7 @@ export default class Board extends View {
       this.cap = await queueCap().catch(() => 6);
       const late = !this.unchanged("prs", this.prStamp());
       if (late) this.persist();
-      this.alertCheck();
+      this.publishNeeds();
       const planned = await this.planNext();
       return planned || late;
     }, cx, force);
@@ -595,7 +617,7 @@ export default class Board extends View {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
       g.trusted = !this.unsure();
-      g.sentAt = this.sent.get(g.key)?.at ?? 0;
+      g.sentAt = SENT.get(g.key)?.at ?? 0;
       g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", now);
       g.stalledAt = stallOf(g, now);
       const lane = laneOf(g, g.needs, () => !this.reviewBlock(g));
@@ -622,6 +644,7 @@ export default class Board extends View {
     this.pruneSent(live);
     this.pruneMarks([...live, ...queued]);
     for (const [, lane] of placed) cols[COLUMN_OF[lane]].total += 1;
+    this.needKeys = new Set(placed.filter(([g, lane]) => COLUMN_OF[lane] === "needs" && !g.asleep).map(([g]) => g.key));
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
     for (const [g, lane] of placed) if (keep(g)) cols[COLUMN_OF[lane]].groups.push(g);
     cols.run.groups.push(...queued.filter(keep).map((g) => Object.assign(g, { lane: "backlog" })));
@@ -645,10 +668,13 @@ export default class Board extends View {
         if (p?.key === key && !p.moved) this.activate(this.entryOf(key), cx);
       },
       keys: (cx) => this.openKeys(cx),
-      notice: (cx) => this.openNotice(shared("cockpit.notice"), cx),
-      dismiss,
+      notice: (notice, cx) => this.openNotice(notice, cx),
+      dismiss: () => (shared("cockpit.notice") ? dismiss() : setShared("cockpit.away", null)),
+      glance: (cx) => {
+        this.glanceNext();
+        cx.notify();
+      },
       panel: (id, cx) => this.openPanel(id, cx),
-      alerts: (cx) => this.toggleAlerts(cx),
       command: (name) => run(name),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
@@ -661,10 +687,15 @@ export default class Board extends View {
       settleAll: (cx) => this.settleAll(cx),
       review: (cx) => this.openReview(cx),
       approve: (cx) => this.approve(this.current(), cx),
+      answer: (key, index, cx) => {
+        const entry = this.entryOf(key);
+        this.answerAsk(entry.group.primary, index, key, cx);
+      },
       approveAll: (cx) => this.approveAll(cx),
       retry: (cx) => this.openRetry(cx),
       rebase: (cx) => this.rebase(this.current(), cx),
       rebaseAll: (cx, column) => this.rebaseAll(cx, column),
+      clearStuck: (cx) => this.clearStuck(cx),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
       fold: (key, cx) => {
@@ -732,7 +763,7 @@ export default class Board extends View {
     const lanes = new Map([...cols.run.groups.filter((g) => g.lane === "backlog").map((g) => [g.key, "backlog"]), ...placed.map(([g, lane]) => [g.key, lane])]);
     const marked = this.keys().filter((k) => !this.isFolded(k)).flatMap((k) => cols[k].groups).filter((g) => this.marks.has(g.key));
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing, marked, lanes };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_COLUMNS.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, clear: this.clearPlan(cols), conflicts: Object.fromEntries(REBASE_COLUMNS.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   fan(t, placed, cb, now) {
@@ -831,7 +862,7 @@ export default class Board extends View {
       const prev = this.seen[g.key];
       next[g.key] = prev?.col === col ? prev : { col, at: prev ? now : 0 };
       dirty ||= next[g.key] !== prev;
-      if (prev?.col !== col) logLaneChange({ t: now, key: g.key, from: prev?.col ?? null, to: col, project: g.project, pr: g.info?.pr?.number ?? null });
+      if (prev?.col !== col) logLaneChange({ t: now, key: g.key, from: prev?.col ?? null, to: col, project: g.project, pr: g.info?.pr?.number ?? null, src: srcOf(g) });
     }
     for (const key of Object.keys(this.seen)) if (!next[key]) logLaneChange({ t: now, key, from: this.seen[key].col, to: null, project: null, pr: null });
     if (!dirty) return;
@@ -845,7 +876,7 @@ export default class Board extends View {
 
   logAnswers() {
     const fresh = Object.entries(shared("co.decided") ?? {}).filter(([key, d]) => d.at > (this.answerSeen.get(key) ?? 0));
-    for (const [key, d] of fresh) logAct({ t: d.at, key, act: "answer", src: "coordinator", project: null });
+    for (const [key, d] of fresh) logAct({ t: d.at, key: `ask:${key}`, act: "answer", src: "coordinator", project: null });
     for (const [key, d] of fresh) this.answerSeen.set(key, d.at);
   }
 
@@ -1075,6 +1106,71 @@ export default class Board extends View {
     openOverlay({ mod: "cockpit", kind: "dialog", width: POP_WIDTH, height, props: { pop: key, cursor: this.cursor, snap } });
   }
 
+  refreshActs(cx) {
+    if (Date.now() - this.actsAt < ACTS_EVERY) return;
+    this.actsAt = Date.now();
+    cx.spawn(async (cx) => {
+      this.acts = actRates(await readFlow(), Date.now());
+      cx.notify();
+    });
+  }
+
+  isBoard() {
+    return !(this.pop || this.dec || this.reviewMode || this.sheet);
+  }
+
+  needGroups(now) {
+    return this.place(this.groups(), now).filter(([g, lane]) => COLUMN_OF[lane] === "needs" && !g.asleep).map(([g]) => g).sort((a, b) => this.enteredAt("needs", a) - this.enteredAt("needs", b));
+  }
+
+  publishNeeds() {
+    if (!this.isBoard() || this.unsure() || !this.board) return;
+    const now = Date.now();
+    const n = this.needGroups(now).length;
+    const prev = shared("cockpit.needs");
+    if (prev?.n !== n || now - prev.at >= NEEDS_EVERY) setShared("cockpit.needs", { n, at: now });
+  }
+
+  touch(cx) {
+    if (!this.isBoard() || !this.board || this.unsure()) return;
+    const now = Date.now();
+    if (now - this.touched < SEEN_EVERY) return;
+    this.touched = now;
+    const last = shared("cockpit.seen") ?? 0;
+    if (now - last < SEEN_EVERY) return;
+    setShared("cockpit.seen", now);
+    if (last && now - last >= AWAY_AFTER) this.glance(last, now, cx);
+  }
+
+  glance(from, now, cx) {
+    cx.spawn(async (cx) => {
+      const events = await readFlow();
+      const merged = new Set(this.groups().filter((g) => this.prInfo(g).status === "merged").map((g) => g.key));
+      setShared("cockpit.away", { need: this.needGroups(Date.now()).map((g) => g.key), opened: [], for: ago(from, now), ...awayCounts(events, from, now, (key) => merged.has(key)) });
+      cx.notify();
+    });
+  }
+
+  glancePending(away) {
+    return away.need.filter((key) => this.needKeys.has(key) && !away.opened.includes(key));
+  }
+
+  glanceOpened(key) {
+    const away = shared("cockpit.away");
+    if (away?.need.includes(key) && !away.opened.includes(key)) setShared("cockpit.away", { ...away, opened: [...away.opened, key] });
+  }
+
+  glanceNext() {
+    const away = shared("cockpit.away");
+    const pending = away ? this.glancePending(away) : [];
+    if (!pending.length) return false;
+    const at = pending.findIndex((key) => this.cursor === this.rowKey("needs", { key }));
+    const next = pending[(at + 1) % pending.length];
+    if (!this.fanView && this.isFolded("needs")) this.peeked.add("needs");
+    this.moveTo(this.rowKey("needs", { key: next }));
+    return true;
+  }
+
   expireNotice(notice, cx) {
     if (this.noticeSeen === notice.id) return;
     this.noticeSeen = notice.id;
@@ -1190,19 +1286,19 @@ export default class Board extends View {
   pruneSent(live) {
     if (this.pop || !this.board || this.unsure()) return;
     const byKey = new Map(live.map((g) => [g.key, g]));
-    for (const [key, sent] of this.sent) if (!byKey.has(key) || sent.stamp !== this.activity(byKey.get(key))) this.sent.delete(key);
+    for (const [key, sent] of SENT) if (!byKey.has(key) || sent.stamp !== this.activity(byKey.get(key))) SENT.delete(key);
   }
 
   sentAs(g, verb) {
-    const sent = this.sent.get(g.key);
+    const sent = SENT.get(g.key);
     return sent?.action === verb && sent.stamp === this.activity(g) ? sent : null;
   }
 
   sentText(g, now) {
-    const sent = this.sent.get(g.key);
+    const sent = SENT.get(g.key);
     if (!sent) return "";
     const age = ago(sent.at, now);
-    return `${sent.action.toLowerCase()} sent${age === "now" ? "" : ` ${age} ago`}`;
+    return `${SENT_WORD[sent.action] ?? `${sent.action.toLowerCase()} sent`}${age === "now" ? "" : ` ${age} ago`}`;
   }
 
   pruneSnoozed(live, now) {
@@ -1253,6 +1349,26 @@ export default class Board extends View {
     }, cx, armed);
   }
 
+  clearPlan(cols = this.layout.cols) {
+    const plan = planClear(cols.stuck.groups, new Set(this.rebaseTargets("stuck", cols)), (g, verb) => this.sentAs(g, verb));
+    return { actions: plan.actions, tip: clearTip(plan) };
+  }
+
+  clearStuck(cx) {
+    if (!this.owns("stuck") || this.guard(false)) return;
+    const armed = new Set(this.clearPlan().actions.map(([g]) => g.key));
+    if (!armed.size) return say("info", "No stuck card has a standard fix");
+    this.confirm("clear-stuck", "stuck", (seen) => {
+      const targets = this.clearPlan().actions.filter(([g]) => seen.has(g.key));
+      if (!targets.length) return say("info", "No stuck card has a standard fix");
+      const info = this.coordinator();
+      if (!info && targets.some(([, action]) => action !== "sendback")) return say("error", "The Coordinator isn't running");
+      const deliver = (text, g, action) => (action === "sendback" ? sendReply(this.taskThread(g).key, text) : hc(["send", info.address, text]));
+      const text = (g, action) => (action === "rebase" ? this.ask("Rebase", g, REBASE_NOTE) : action === "retry" ? this.ask("Retry", g, RETRY_NOTE) : SEND_BACK_NOTE);
+      this.tellEach(targets.map(([g, action]) => [g, text(g, action), CLEAR_VERB[action], action]), "Clear", cx, deliver, clearCounts(targets));
+    }, cx, armed);
+  }
+
   retryFailed(act, cx) {
     if (this.guard(false)) return;
     const targets = failedIn(this.layout.cols).filter((g) => act.keys.includes(g.key));
@@ -1291,7 +1407,8 @@ export default class Board extends View {
   }
 
   activate(e, cx) {
-    if (e?.group.kind === "ask") return run("coordinator.asks");
+    if (e) this.glanceOpened(e.group.key);
+    if (e?.group.kind === "ask" && !e.group.primary.options?.length) return run("coordinator.asks");
     if (e && !e.thread) this.openDecision(e, cx);
     else this.openEntry(e, cx);
   }
@@ -1333,7 +1450,9 @@ export default class Board extends View {
     cx.spawn(async (cx) => {
       try {
         const group = this.groups()[0];
-        if (group.issue) {
+        if (group.primary.options?.length) {
+          this.ticket = { status: "ok", text: optionsText(group.primary.options) };
+        } else if (group.issue) {
           const [config, issue] = await Promise.all([loadConfig(), showIssue(issueRef(group.issue))]);
           this.ticket = { status: "ok", text: issue.body, issue, config };
         } else {
@@ -1430,7 +1549,7 @@ export default class Board extends View {
     if (this.outdated) return d.primary.id === "merge" || d.primary.id === "wait" ? this.recheck(cx) : closeOverlay(this.overlay);
     if (d.primary.id === "wait") return;
     if (d.primary.id === "answer") return this.openReply(entry, cx);
-    if (d.primary.id.startsWith("choice:")) return this.choose(entry, d.primary.id, cx);
+    if (d.primary.id.startsWith("choice:")) return this.choose(entry, viaEnter && this.armed?.key === entry.key && this.armed.kind.startsWith("choice:") ? this.armed.kind : d.primary.id, cx);
     if (viaEnter && this.armed) return;
     if (d.primary.id === "merge") return this.approve(entry, cx);
     if (this.guard(true)) return;
@@ -1510,6 +1629,7 @@ export default class Board extends View {
 
   openEntry(e, cx) {
     if (!e || this.opening === e.key) return;
+    this.glanceOpened(e.group.key);
     if (e.group.kind === "ask") return run("coordinator.asks");
     if (e.group.issue) return exec("open", [e.group.issue.url]);
     const thread = this.threadOf(e);
@@ -1531,6 +1651,7 @@ export default class Board extends View {
   openReply(e, cx, label = null) {
     this.replyMarked = false;
     if (!e || (e.group.issue && label !== ABANDON_LABEL)) return;
+    this.glanceOpened(e.group.key);
     if (e.group.kind === "ask") return run("coordinator.asks");
     this.replyLabel = label;
     this.followed = false;
@@ -1571,8 +1692,10 @@ export default class Board extends View {
   }
 
   choose(entry, id, cx) {
+    const index = Number(id.slice("choice:".length));
+    if (entry.group.primary.options?.length) return this.answerAsk(entry.group.primary, index, entry.key, cx);
     const thread = this.threadOf(entry);
-    const text = thread.choices?.options[Number(id.slice("choice:".length))];
+    const text = thread.choices?.options[index];
     if (!text || this.choosing || this.outdated || this.guard(true)) return;
     const eligible = this.seen[entry.group.key]?.col === "needs";
     this.choosing = true;
@@ -1585,6 +1708,40 @@ export default class Board extends View {
         this.choosing = false;
       }
     }, cx);
+  }
+
+  answerAsk(card, index, key, cx) {
+    const option = card.options[index];
+    if (!option || this.guard(true)) return;
+    this.confirm(`choice:${index}`, key, () => this.requestAnswer(card, option), cx);
+  }
+
+  requestAnswer(card, option) {
+    if (shared("co.decided")?.[card.askId]) return say("info", "Already answered", card.askId);
+    if (shared("co.answer")?.[card.askId]) return say("info", "Answer already sending", card.askId);
+    setShared("co.answer", { ...shared("co.answer"), [card.askId]: { label: option.label, title: card.title, cause: card.cause, at: Date.now() } });
+    if (this.dec) closeOverlay(this.overlay);
+  }
+
+  noteAnswers() {
+    const done = shared("co.answered") ?? {};
+    const ids = Object.keys(done);
+    if (ids.length) {
+      setShared("co.answered", {});
+      for (const id of ids) {
+        if (done[id].ok) say("success", `Answered ${id}`, done[id].label);
+        else say("error", `Answer not sent for ${id}`, done[id].reason);
+      }
+    }
+    const waiting = shared("co.answer") ?? {};
+    const now = Date.now();
+    const unpicked = Object.keys(waiting).filter((id) => !waiting[id].sending && now - waiting[id].at > ANSWER_WAIT);
+    const unconfirmed = Object.keys(waiting).filter((id) => waiting[id].sending && now - waiting[id].took > SENDING_WAIT);
+    if (unpicked.length || unconfirmed.length) {
+      setShared("co.answer", Object.fromEntries(Object.entries(waiting).filter(([id]) => !unpicked.includes(id) && !unconfirmed.includes(id))));
+      for (const id of unpicked) say("error", `Answer not sent for ${id}`, "The Coordinator panel did not pick it up. Open the Coordinator chat and try again.");
+      for (const id of unconfirmed) say("error", `Answer not confirmed for ${id}`, "Not confirmed. Check the Coordinator chat before answering again.");
+    }
   }
 
   abandon(thread, cx) {
@@ -1923,18 +2080,21 @@ export default class Board extends View {
     const info = deliver ? null : this.coordinator();
     if (!deliver && !info) return say("error", "The Coordinator isn't running");
     const send = deliver ?? ((text) => hc(["send", info.address, text]));
-    const fresh = pairs.filter(([g]) => !this.sentAs(g, verb));
+    const verbOf = ([, , own]) => own ?? verb;
+    const actionOf = ([, , , action]) => action;
+    const fresh = pairs.filter((pair) => !this.sentAs(pair[0], verbOf(pair)));
     const eligibleByKey = new Map(fresh.map(([g]) => [g.key, this.seen[g.key]?.col === "needs"]));
     const skipped = pairs.length - fresh.length ? `${pairs.length - fresh.length} skipped, already sent` : "";
     if (!fresh.length) return say("info", `${verb} skipped`, skipped);
     this.attempt(`${verb} sent`, async () => {
       const failed = [];
-      for (const [g, text] of fresh) {
+      for (const pair of fresh) {
+        const [g, text] = pair;
         const eligible = eligibleByKey.get(g.key);
         try {
-          await send(text, g);
-          this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
-          this.noteAct(g, ACT_OF[verb], Date.now(), eligible);
+          await send(text, g, actionOf(pair));
+          SENT.set(g.key, { action: verbOf(pair), stamp: this.activity(g), at: Date.now() });
+          if (ACT_OF[verbOf(pair)]) this.noteAct(g, ACT_OF[verbOf(pair)], Date.now(), eligible);
         } catch {
           failed.push(g.task || this.cleanTitle(g));
         }
@@ -1983,7 +2143,9 @@ export default class Board extends View {
 
   openTab(e) {
     const pane = e && this.tabOf(e.group);
-    if (pane) run("pane.focus", { terminal: pane.terminal });
+    if (!pane) return;
+    this.glanceOpened(e.group.key);
+    run("pane.focus", { terminal: pane.terminal });
   }
 
   openFiles(e) {
@@ -2018,6 +2180,7 @@ export default class Board extends View {
   }
 
   key(e, cx) {
+    this.touch(cx);
     if (e.is_held && (this.dec || this.reviewMode || this.sheet || !NAV_KEYS.has(e.key))) return;
     if (this.typing || this.searching) {
       if (e.key !== "escape") return;
@@ -2058,6 +2221,7 @@ export default class Board extends View {
       this.moveTo(`g:${c.column}:${c.group.key}`);
     } else if (k === "enter" && c) this.activate(c, cx);
     else if (k === "o" && c) this.openEntry(c, cx);
+    else if (/^[1-4]$/.test(k) && c?.group.primary.options?.length) this.answerAsk(c.group.primary, Number(k) - 1, c.key, cx);
     else if (k === "r" && c) this.openReply(c, cx);
     else if (k === "d" && c && DECIDES.has(c.col)) this.openReply(c, cx, prCard(c.col, c.group.needs) ? NOTE_LABEL : "Reply");
     else if (k === "S") this.settleReviewed(cx);
@@ -2070,10 +2234,12 @@ export default class Board extends View {
     else if (k === "z" && c) this.openSnoozeChooser(c, cx);
     else if (k === "Z") this.openSnoozed(cx);
     else if (k === "F") this.openRetry(cx);
+    else if (k === "C") this.clearStuck(cx);
     else if (k === "q") this.queue(c, cx);
     else if (k === "p") this.openPr(c);
     else if (k === "c") this.openFiles(c);
     else if (k === "w") this.openTab(c);
+    else if (k === "b" && this.isBoard()) this.glanceNext();
     else if (k === "n") this.jump();
     else if (k === "P" && !this.pop) this.openProjects(cx);
     else if (k === "f" && c && !this.pop) this.toggleFold(c.column);
@@ -2143,6 +2309,7 @@ export default class Board extends View {
         cx.notify();
       })
       .on_scroll_wheel((e, cx) => {
+        this.touch(cx);
         this.scrollY[key] -= e.delta.y;
         cx.notify();
       })
@@ -2169,7 +2336,7 @@ export default class Board extends View {
     return v_flex().id("ck-keys").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (item) => this.choose(item) }) : this.rows ? rowSheet(t, this.rows, this.chosen, this.armed, { close: () => closeOverlay(this.overlay), act: (row, cx) => this.rowAction(row, cx) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
+      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (item) => this.choose(item) }) : this.rows ? rowSheet(t, this.rows, this.chosen, this.armed, { close: () => closeOverlay(this.overlay), act: (row, cx) => this.rowAction(row, cx) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : this.acts ? actsSheet(t, this.acts, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
   }
 
   renderDecision(t) {
@@ -2360,6 +2527,7 @@ export default class Board extends View {
     this.compact = !this.pop && this.area.width < COMPACT_BELOW;
     const notice = shared("cockpit.notice");
     if (notice && !this.pop) this.expireNotice(notice, cx);
+    const away = !this.pop && shared("cockpit.away");
     const folded = COLUMN_KEYS.filter((k) => this.isFolded(k)).length;
     this.colW = this.pop ? POP_WIDTH : this.compact || this.fanView ? this.area.width : Math.max(MIN_COL, Math.floor((this.area.width - folded * H.folded) / Math.max(1, COLUMN_KEYS.length - folded)));
     const before = this.current();
@@ -2397,8 +2565,9 @@ export default class Board extends View {
     }
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
+      .on_mouse_move((_e, cx) => this.touch(cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, marks: this.marks.size, markedShown: this.layout.marked.length, armedMark: this.armed?.kind.startsWith("mark-") ? this.armed : null, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice: notice ?? (away && awayNotice(away, this.glancePending(away))), acts: this.acts, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, marks: this.marks.size, markedShown: this.layout.marked.length, armedMark: this.armed?.kind.startsWith("mark-") ? this.armed : null, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
       .when(this.searchOpen, (el) => el.child(searchRow(t, { quick: this.quick, searching: this.searching, compact: this.compact, ...this.scope }, this.search, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()

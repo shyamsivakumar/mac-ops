@@ -54,7 +54,7 @@ export function startToMerge(merged) {
 export function laneTimes(lines, now) {
   const byKey = new Map();
   const gaps = lines.filter((e) => e.gap).map((e) => e.t);
-  for (const e of lines.filter((x) => !x.gap)) byKey.set(e.key, [...(byKey.get(e.key) ?? []), e]);
+  for (const e of lines.filter((x) => !x.gap && !x.act)) byKey.set(e.key, [...(byKey.get(e.key) ?? []), e]);
   const spent = new Map(LANES.map(([id]) => [id, []])), sitting = new Map(LANES.map(([id]) => [id, []]));
   for (const entries of byKey.values()) {
     entries.sort((a, b) => a.t - b.t);

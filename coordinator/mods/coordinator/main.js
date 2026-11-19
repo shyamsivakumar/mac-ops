@@ -1,9 +1,10 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
-import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
-import { answerCause, isStale, restored } from "./answers.js";
+import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
+import { answerCause, boardAnswer, decisionsMessage, isStale, restored } from "./answers.js";
+import { boardGlance, FLOW_FILE, parseFlow } from "./board.js";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript, SESSION_NAME } from "./transcript.js";
-import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
+import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE, turnKey } from "./ui.js";
 
 async function swapChat() {
   const tree = JSON.parse(JSON.stringify(layout()));
@@ -73,17 +74,27 @@ async function acknowledgeAlarm(id, cause) {
   }
 }
 
+const ANSWER_EXPIRY = 30000;
+const sending = new Set();
+
 const askOf = ({ id, group, title, why, cause, kind, options }) => ({
-  id,
+  id: String(id),
   group,
-  text: title,
+  text: String(title),
   why,
-  cause: cause ?? "",
+  cause: cause ? String(cause) : "",
   action: kind === "action",
   choices: kind === "action"
     ? [{ kind: "done", text: "Done", label: "Done", detail: "", rec: false }]
     : options.map((o) => ({ kind: "option", text: o.label, label: o.label, detail: o.detail, rec: Boolean(o.recommended) })),
 });
+
+const NEEDS_FRESH = 300000;
+
+function boardNeeds(now) {
+  const published = shared("cockpit.needs");
+  return published && now - published.at <= NEEDS_FRESH ? published.n : null;
+}
 
 const clock = (at) => {
   const d = new Date(at);
@@ -146,6 +157,10 @@ export default class Coordinator extends View {
     this.preview = false;
     this.chipping = false;
     this.boxHandle = cx.focus_handle();
+    this.rootHandle = cx.focus_handle();
+    this.glance = new Map();
+    this.flowStat = "";
+    this.glanceRev = -1;
     if (!keysBound) {
       cx.bind_keys(KEYS);
       keysBound = true;
@@ -160,7 +175,10 @@ export default class Coordinator extends View {
     this.refreshing = false;
     this.shown = PAGE;
     this.drawn = Date.now();
-    cx.timer.every(EVERY, (cx) => this.watching() && this.refresh(cx));
+    cx.timer.every(EVERY, (cx) => {
+      this.takeAnswers(cx);
+      if (this.watching()) this.refresh(cx);
+    });
     cx.timer.every(TICK, (cx) => cx.notify());
     this.refresh(cx);
     cx.spawn(async (cx) => {
@@ -238,6 +256,7 @@ export default class Coordinator extends View {
         await this.readDecisions();
         this.prune();
         this.view = await readTranscript(cx);
+        await this.readGlance();
         if (this.known !== undefined && this.fromBottom > 0) this.shown += Math.max(0, this.view.turns.length - this.known);
         this.known = this.view.turns.length;
         this.error = "";
@@ -246,7 +265,7 @@ export default class Coordinator extends View {
       }
       this.refreshing = false;
       const v = this.view;
-      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, v?.model, v?.errored, this.error, this.decisionsStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
+      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, v?.model, v?.errored, this.error, this.decisionsStat, this.flowStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
       if (stamp === this.stamp) return;
       this.stamp = stamp;
       const published = JSON.stringify(this.decisions);
@@ -256,6 +275,23 @@ export default class Coordinator extends View {
       }
       cx.notify();
     });
+  }
+
+  async readGlance() {
+    const stat = await exec("stat", ["-f", "%Fm %z", FLOW_FILE]);
+    const seen = stat.code === 0 ? stat.stdout.trim() : "";
+    if (seen === this.flowStat && this.view.rev === this.glanceRev) return;
+    this.flowStat = seen;
+    this.glanceRev = this.view.rev;
+    const text = seen ? await readTextFile(FLOW_FILE) : null;
+    const cards = this.view.turns.filter((m) => m.status);
+    const windows = cards.map((m, i) => ({
+      id: turnKey(m),
+      from: cards[i - 1]?.at ?? m.at,
+      to: m.at,
+      known: i > 0,
+    }));
+    this.glance = text === null ? new Map() : boardGlance(parseFlow(text), windows);
   }
 
   async readDecisions() {
@@ -637,8 +673,86 @@ export default class Coordinator extends View {
   }
 
   message() {
-    const lines = this.answers(this.drafts()).map(({ id, q, text }) => `- ${id} (${q}): ${text.replace(/\s+/g, " ").trim()}`);
-    return [lines.length ? `Decisions:\n${lines.join("\n")}` : "", this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
+    const answered = this.answers(this.drafts());
+    return [answered.length ? decisionsMessage(answered) : "", this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
+  }
+
+  logSent(text) {
+    const kept = shared("co.sent") ?? { since: Date.now(), items: [] };
+    const items = [...kept.items, { at: Date.now(), text }];
+    const trimmed = items.length > SENT_KEEP;
+    const keep = items.slice(-SENT_KEEP);
+    setShared("co.sent", { since: trimmed ? keep[0].at : kept.since, items: keep });
+  }
+
+  async recordAnswers(answered) {
+    const decided = this.decided();
+    const drafts = this.drafts();
+    const typing = this.typing();
+    for (const a of answered) {
+      decided[a.id] = { text: a.text, at: Date.now() };
+      drafts.delete(a.id);
+      typing.delete(a.id);
+      this.editing.delete(a.id);
+      this.editors.get(a.id)?.set_value("");
+    }
+    setShared("co.decided", decided);
+    this.setDrafts(drafts);
+    this.setTyping(typing);
+    // The answer is the acknowledgement: the alarm stays quiet for
+    // four hours. The shift reads the record, so the alarm comes
+    // back on its own when the four hours are over.
+    for (const a of answered) await acknowledgeAlarm(a.id, a.cause);
+  }
+
+  takeAnswers(cx) {
+    for (const [id, request] of Object.entries(shared("co.answer") ?? {})) {
+      if (request.sending) continue;
+      const claimed = { ...request, sending: true, took: Date.now() };
+      setShared("co.answer", { ...shared("co.answer"), [id]: claimed });
+      cx.spawn(async (cx) => {
+        let result = { label: request.label, ok: false, reason: "Not confirmed. Check the Coordinator chat before answering again." };
+        try {
+          result = { label: request.label, ...(await this.sendBoardAnswer(id, request)) };
+        } finally {
+          if (shared("co.answer")?.[id]?.took === claimed.took) {
+            const pending = { ...shared("co.answer") };
+            delete pending[id];
+            setShared("co.answer", pending);
+          }
+          setShared("co.answered", { ...shared("co.answered"), [id]: result });
+          cx.notify();
+        }
+      });
+    }
+  }
+
+  async sendBoardAnswer(id, request) {
+    if (Date.now() - request.at > ANSWER_EXPIRY) return { ok: false, reason: "Expired before it was sent." };
+    if (sending.has(id)) return { ok: false, reason: "Already sending." };
+    sending.add(id);
+    try {
+      const file = await exec("cat", [DECISIONS_FILE]);
+      if (file.code !== 0) return { ok: false, reason: `decisions.json: ${file.stderr.trim()}` };
+      let items;
+      try {
+        items = JSON.parse(file.stdout).items.map(askOf);
+      } catch (error) {
+        return { ok: false, reason: `decisions.json: ${error.message}` };
+      }
+      const resolved = boardAnswer(id, request, items, this.decided());
+      if (resolved.dropped) return { ok: false, reason: resolved.dropped };
+      const info = this.info();
+      if (!info) return { ok: false, reason: "The Coordinator is not running." };
+      const text = decisionsMessage([resolved.answer]);
+      this.logSent(text);
+      const r = await hc(["send", info.address, text]);
+      if (r.code !== 0) return { ok: false, reason: r.stderr.trim() || `hc send exited ${r.code}` };
+      await this.recordAnswers([resolved.answer]);
+      return { ok: true };
+    } finally {
+      sending.delete(id);
+    }
   }
 
   send(cx) {
@@ -648,13 +762,11 @@ export default class Coordinator extends View {
     const typed = this.pop ? "" : draftText(this.input.content()).trim();
     const info = this.info();
     if (!text || !info || this.sent === "sending") return;
+    if (answered.some((a) => sending.has(a.id))) return notify({ title: "Already sending", body: "An answer for one of these decisions is on its way.", level: "warning" });
+    for (const a of answered) sending.add(a.id);
     this.sent = "sending";
     this.fromBottom = 0;
-    const kept = shared("co.sent") ?? { since: Date.now(), items: [] };
-    const items = [...kept.items, { at: Date.now(), text }];
-    const trimmed = items.length > SENT_KEEP;
-    const keep = items.slice(-SENT_KEEP);
-    setShared("co.sent", { since: trimmed ? keep[0].at : kept.since, items: keep });
+    this.logSent(text);
     const overlay = props()?.overlay;
     cx.notify();
     cx.spawn(async (cx) => {
@@ -662,28 +774,14 @@ export default class Coordinator extends View {
         const r = await hc(["send", info.address, text]);
         if (r.code !== 0) throw new Error(r.stderr.trim() || `hc send exited ${r.code}`);
         if (!this.pop && draftText(this.input.content()).trim() === typed) this.input.set_value("");
-        const decided = this.decided();
-        const drafts = this.drafts();
-        const typing = this.typing();
-        for (const a of answered) {
-          decided[a.id] = { text: a.text, at: Date.now() };
-          drafts.delete(a.id);
-          typing.delete(a.id);
-          this.editing.delete(a.id);
-          this.editors.get(a.id)?.set_value("");
-          // The answer is the acknowledgement: the alarm stays quiet for
-          // four hours. The shift reads the record, so the alarm comes
-          // back on its own when the four hours are over.
-          await acknowledgeAlarm(a.id, a.cause);
-        }
-        setShared("co.decided", decided);
-        this.setDrafts(drafts);
-        this.setTyping(typing);
+        await this.recordAnswers(answered);
         this.sent = "sent";
         if (this.pop) closeOverlay(overlay);
       } catch (error) {
         this.sent = "";
         notify({ title: "Send failed", body: error.message, level: "error" });
+      } finally {
+        for (const a of answered) sending.delete(a.id);
       }
       cx.notify();
       cx.timer.after(2500, (cx) => {
@@ -692,6 +790,32 @@ export default class Coordinator extends View {
       });
       if (!this.pop) this.refresh(cx);
     });
+  }
+
+  latestCard() {
+    return this.view?.turns.filter((m) => m.status).at(-1) ?? null;
+  }
+
+  replyTo(need, cx) {
+    const typed = draftText(this.input.content()).trim();
+    const line = `Re ${need.id} (${need.text}): `;
+    this.input.set_value(typed ? `${typed}\n${line}` : line);
+    cx.timer.after(60, () => this.input.focus());
+    cx.notify();
+  }
+
+  glanceKey(e, cx) {
+    const m = e.modifiers;
+    if (e.is_held || this.focused || !this.rootHandle.is_focused() || this.preview || m.platform || m.control || m.alt || m.shift) return;
+    const card = this.latestCard();
+    if (!card) return;
+    const n = /^[1-3]$/.test(e.key) ? Number(e.key) - 1 : -1;
+    if (e.key === "f") {
+      if (!card.status.foldable) return;
+      this.toggle(`fold-${turnKey(card)}`, cx);
+    } else if (n >= 0 && card.status.needs[n]) this.replyTo(card.status.needs[n], cx);
+    else return;
+    cx.stop_propagation();
   }
 
   toggle(key, cx) {
@@ -706,9 +830,12 @@ export default class Coordinator extends View {
     cx.spawn(async (cx) => {
       try {
         this.view = await loadOlder(cx, PAGE);
+        await this.readGlance();
         this.known = this.view.turns.length;
         this.shown += PAGE;
         this.prepended = true;
+      } catch (error) {
+        this.error = String(error.message);
       } finally {
         this.loading = false;
         cx.notify();
@@ -727,6 +854,7 @@ export default class Coordinator extends View {
     this.grewAbove = 0;
     const drafts = this.drafts();
     const answers = this.answers(drafts);
+    const newest = this.latestCard();
     const cb = {
       tasks: shared("hub")?.tasks ?? {},
       width: this.box.width,
@@ -757,6 +885,16 @@ export default class Coordinator extends View {
       sender: (from) => agents().find((a) => a.address === from)?.tab_name ?? from,
       link: (url) => (/^https?:\/\//i.test(url) ? exec("open", [url]) : notify({ title: "Link not opened", body: "Only web links open from the chat.", level: "info", timeout: 2500 })),
       heights: this.heights,
+      glance: this.glance,
+      clock,
+      newestKey: newest ? turnKey(newest) : "",
+      boardNeeds: boardNeeds(now),
+      quiet: (m) => {
+        const g = this.glance.get(turnKey(m));
+        return m.status?.lone && !m.status.question && g?.known && g.done === 0 && g.unreviewed === 0;
+      },
+      replyTo: (need, cx) => this.replyTo(need, cx),
+      focusLog: () => this.rootHandle.focus(),
       image: (ref) => this.wantImage(ref, cx),
       draft: () => draftText(this.input.content()),
       preview: this.preview,
@@ -810,7 +948,7 @@ export default class Coordinator extends View {
     const strip = taskStrip(t, this.view, cb, this.box.width);
     const open = list.filter((a) => !decided[a.id]);
     const error = this.decisionsError();
-    return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome)
+    return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome).track_focus(this.rootHandle).on_key_down((e, cx) => this.glanceKey(e, cx))
       .child(status(t, info, this.view, now, this.box.width, this.error))
       .when(strip, (el) => el.child(strip))
       .when(open.length || error, (el) => el.child(askRow(t, open, open.filter((a) => drafts.has(a.id)).length, error, cb, this.decisionsAt(), now)))

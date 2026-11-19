@@ -89,8 +89,21 @@ compares the worktree with the merge base of `origin/main`, checks syntax for
 changed Python and shell files, runs existing Python tests that statically import
 the changed Python modules, and starts `heavy.py --help`. Use `--plan` to see
 the selected files and tests without running them. Dynamic imports and code
-without an associated test need separate review. This repository does not
-currently configure a Python linter or type checker.
+without an associated test need separate review.
+
+The check also runs Ruff through `uvx ruff@0.14.0` with the pyflakes and bugbear
+rule sets (`F,B`). Ruff is pinned, so the check never installs an unpinned tool.
+The findings Ruff reports today are listed in `scripts/ruff-baseline.txt` with
+their counts; the check fails only on a finding the baseline does not have. Run
+`python3 scripts/mac_ops_fast_check.py --write-ruff-baseline` to write the
+baseline again after the known findings are fixed. When Ruff or `uvx` is not on
+the machine, the proof file records `not run` and the run is incomplete, so it
+is not a pass.
+
+The check runs mypy the same way, through `uvx mypy@1.18.2 --strict`, over the
+modules listed in `MYPY_TARGETS` (today `board_resources.py`). Both versions live in
+`TOOL_VERSIONS` in `scripts/mac_ops_fast_check.py`; change a version there and
+nowhere else. A missing `uvx` or mypy is `not run`, never `passed`.
 
 The check writes a proof file, `evidence/check-proof.md` by default and
 `evidence/<KEY>-<issue>/check-proof.md` with `--proof`. The file lists every
