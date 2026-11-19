@@ -1,0 +1,96 @@
+{
+  "owner": "mac-ops/deny-rules.v1",
+  "issue": 530,
+  "tighten_only": "This list only denies. It never allows anything, and no entry widens a permission.",
+  "pi_instances": [
+    "~/.pi/agent",
+    "~/.pi/agent-minimax",
+    "~/.pi/agent-glm",
+    "~/.pi/agent-deepseek",
+    "~/.pi/agent-openai-api",
+    "~/.pi/agent-anthropic-api"
+  ],
+  "ascend_roots": [
+    "~/Code/slash-eureka"
+  ],
+  "secret_file_re": "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)",
+  "secret_globs": [
+    "**/.env",
+    "**/.env.*",
+    "**/auth.json",
+    "**/*.pem",
+    "**/*.key",
+    "**/id_rsa*",
+    "**/id_dsa*",
+    "**/id_ed25519*",
+    "**/id_ecdsa*",
+    "**/credentials",
+    "**/credentials.json",
+    "**/.netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/*token*.json",
+    "**/*token*.txt",
+    "**/*token*.yaml",
+    "**/*token*.yml"
+  ],
+  "secret_dirs": [
+    "~/.ssh"
+  ],
+  "ascend_read_commands": [
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "rg",
+    "grep",
+    "find",
+    "ls",
+    "stat",
+    "bat",
+    "awk",
+    "sed -n",
+    "cd"
+  ],
+  "push_protected": [
+    "main",
+    "master"
+  ],
+  "push_force_flags": [
+    "--force",
+    "-f",
+    "--force-with-lease",
+    "--force-if-includes"
+  ],
+  "ascend_bash_reason": "reads and edits under ~/Code/slash-eureka (Ascend) are denied",
+  "secret_bash_reason": "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) are denied",
+  "claude_code": {
+    "settings": "~/.claude/settings.json",
+    "hook": {
+      "source": "runtime/agents/deny-merge-guard.py",
+      "target": "~/.claude/hooks/deny-merge-guard.py",
+      "matcher": "Bash"
+    }
+  },
+  "scope_files": {
+    "repo": "runtime/pi/AGENTS.md",
+    "copies": [
+      "~/.pi/agent-openai-api/AGENTS.md",
+      "~/.pi/agent-anthropic-api/AGENTS.md"
+    ],
+    "claude": "~/.claude/CLAUDE.md"
+  },
+  "scope_section": [
+    "## Machine-enforced deny rules (mac-ops #530)",
+    "",
+    "A machine guard enforces this list before tools run; prose cannot override it.",
+    "The list lives in `mac-ops runtime/agents/deny-rules.json` and `scripts/install_deny_rules.py` installs it.",
+    "",
+    "- No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).",
+    "- No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.",
+    "- No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.",
+    "- No `gh pr merge` by an agent. Merges belong to the lane and the merge pass.",
+    ""
+  ]
+}
