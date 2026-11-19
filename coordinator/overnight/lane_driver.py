@@ -48,7 +48,7 @@ SNAPSHOT = {}
 # Where each lane repository is checked out. The path is the shared root
 # of the repository: work there moves the branch everyone installs from.
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalogue": "catalogue"}
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 # The branches herdr owns. Work never goes to one of them: herdr merges
 # them, and a builder that pushes there moves the branch Shyam works on.
 PROTECTED_BRANCH = "herdr/"
