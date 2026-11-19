@@ -189,6 +189,43 @@ class ReviewSlotTests(unittest.TestCase):
         self.assertIsNone(second)
         self.assertEqual(self.active[0]['termination']['claimant_pid'], 20)
 
+    def test_watchdog_stale_recovery_defers_to_a_live_limit_claim(self):
+        workload = {'pid': 5, 'task_key': 'k', 'uid': os.getuid(), 'boot_id': 'b'}
+        now = 10_000_000_000_000
+        claim = {'reason': heavy.WALL_CLOCK_REASON, 'claimant_pid': os.getppid(),
+                 'requested_ns': now - 1_000_000_000}
+        self.active.append({
+            'job_id': 'job', 'state': 'terminating', 'task_key': 'k',
+            'uid': os.getuid(), 'created_ns': 1, 'supervisor': {'boot_id': 'b'},
+            'workload': workload, 'termination': dict(claim)})
+        self.registry.lock.side_effect = lambda **_: contextlib.nullcontext()
+        self.registry.read_heartbeat.return_value = None
+        terminate = Mock(return_value=True)
+
+        class Stop(Exception):
+            pass
+
+        def stop(_seconds):
+            raise Stop
+
+        with self.assertRaises(Stop):
+            heavy.watchdog_loop(
+                'job', self.registry, clock_ns=lambda: now, sleep=stop,
+                table_reader=lambda: {}, boot_reader=lambda: 'b',
+                terminate=terminate)
+        terminate.assert_not_called()
+        self.assertEqual(self.active[0]['termination'], claim)
+
+    def test_watchdog_takeover_requires_the_observed_claim(self):
+        workload = {'pid': 5}
+        observed = {'claimant_pid': 1, 'requested_ns': 1}
+        record = {'workload': workload,
+                  'termination': {'claimant_pid': 2, 'requested_ns': 1}}
+        self.assertIsNone(heavy._watchdog_takeover_record(record, workload, 3, observed))
+        record['termination'] = dict(observed)
+        self.assertEqual(heavy._watchdog_takeover_record(
+            record, workload, 3, observed)['termination']['claimant_pid'], 3)
+
 
 if __name__ == '__main__':
     unittest.main()
