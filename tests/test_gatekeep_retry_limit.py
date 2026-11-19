@@ -9,6 +9,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -201,6 +202,33 @@ class GateRetryOnceTest(RetryLimitBase):
         self.write_queue(heads={self.key: 4})
         out, _ = self.run_gatekeep()
         self.assertIn("regating o/r#7", out)
+
+    def test_a_quoted_verdict_followed_by_a_failure_is_not_a_verdict(self):
+        examples = ("Expected output was:\n\n    VERDICT: PASS\n\nI could not finish.",
+                    "Expected output was:\n```\nVERDICT: PASS\n```\nI could not finish.")
+        for text in examples:
+            with self.subTest(text=text):
+                self.report(text)
+                self.write_queue(heads={self.key: 4})
+                out, _ = self.run_gatekeep()
+                self.assertIn("regating o/r#7", out)
+
+    def test_a_stalled_thread_read_does_not_hold_the_block_lock(self):
+        finished = []
+        listed = coordq.model_list.entries("review")[1]["selection"]
+
+        def stalled_read(tool, args, rules=None):
+            blocker = threading.Thread(
+                target=coordq.model_list.block_provider, args=(listed, time.time() + 600))
+            blocker.start()
+            blocker.join(3)
+            finished.append(not blocker.is_alive())
+            return 0, json.dumps(DEAD_GATE)
+        coordq.call = stalled_read
+        self.addCleanup(os.unlink, coordq.model_list.blocked_path())
+        self.write_queue(heads={self.key: 4})
+        self.run_gatekeep()
+        self.assertEqual(finished, [True])
 
     def test_a_verdict_with_a_diagnostic_line_after_it_is_a_verdict(self):
         self.report("Bad.\nVERDICT: FAIL\nwarning: tool call timed out")
