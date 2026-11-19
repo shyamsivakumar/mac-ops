@@ -770,6 +770,10 @@ def ambiguous_selector(argv):
             continue
         if previous in booleans or previous in SHORT_VALUE.get(key, set()):
             continue
+        # An attached value such as `-L1` is a complete option, not a flag
+        # waiting for the next word, so it cannot have consumed the selector.
+        if len(previous) > 2 and previous[:2] in VALUE_FLAGS:
+            continue
         return True
     return False
 
