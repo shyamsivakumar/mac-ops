@@ -1664,6 +1664,10 @@ def send_integrity():
                 return {"thread": {**fixer_identity(), **thread}}
             def command(cmd, timeout=150):
                 exact(reads, ["read"])
+                if cmd[:2] != [lane.COORDQ, "start"]:
+                    # The lane asks git whether the branch is on origin
+                    # before it starts a worktree there.
+                    return "ref\trefs/heads/builder/fixture\n"
                 exact(cmd[:2], [lane.COORDQ, "start"])
                 payload = json.loads(cmd[2])
                 if live:

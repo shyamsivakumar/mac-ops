@@ -45,13 +45,15 @@ class SendModelTests(unittest.TestCase):
         self.lists = self.lane.model_list.read_json(self.lane.model_list.SEED_PATH)
         self.commands = []
 
-    def send(self, thread, blocked=frozenset(), root=False, list_name=None, with_pr=True):
+    def send(self, thread, blocked=frozenset(), root=False, list_name=None, with_pr=True, on_origin=True):
         """Send to one thread and return the queue command the lane made."""
         lane = self.lane
 
         def run(cmd, timeout=150):
-            self.commands.append(cmd)
-            return "receipt"
+            if cmd[0] == lane.COORDQ:
+                self.commands.append(cmd)
+                return "receipt"
+            return "ref\trefs/heads/builder/fixture\n" if on_origin else ""
 
         def t3(tool, args):
             return {"thread": thread}
@@ -125,6 +127,30 @@ class SendModelTests(unittest.TestCase):
         self.assertNotIn("--tool", command)
         self.assertEqual(self.payload(command)["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_branch_that_is_not_on_origin_keeps_the_message(self):
+        """A replacement with no safe base queues nothing and is retried."""
+        lane = self.lane
+        thread = {**SOL, "status": "running", "sendable": True, "worktreePath": WORKTREE}
+        commands = []
+
+        def run(cmd, timeout=150):
+            commands.append(cmd)
+            return "ref\trefs/heads/builder/fixture\n" if cmd[0] == lane.COORDQ else ""
+
+        with patch.object(lane, "CFG", {REPO: {"key": "MO", "projectId": "fixture"}}), \
+             patch.object(lane, "DRY", False), \
+             patch.object(lane.model_list, "entries", side_effect=lambda name: self.lists[name]), \
+             patch.object(lane.model_list, "blocked_identities", return_value=set()), \
+             patch.object(lane, "read_json", return_value={"number": 385, "state": "OPEN",
+                                                           "headRefName": "builder/fixture",
+                                                           "baseRefName": "main"}), \
+             patch.object(lane, "root_workspace", return_value=False), \
+             patch.object(lane, "run", run), \
+             patch.object(lane, "t3", return_value={"thread": thread}):
+            result = lane.send("thread-1", "brief", "fix", {}, KEY, repo=REPO, pr_number=385)
+        self.assertTrue(result.startswith("skip"))
+        self.assertEqual([c for c in commands if c[0] == lane.COORDQ], [])
 
     def test_a_ticket_without_a_pull_request_still_gets_a_replacement(self):
         """A thread in the shared checkout gets a replacement, not a skip."""
