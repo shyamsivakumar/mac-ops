@@ -233,37 +233,17 @@ def with_rules(args, rules):
     return {**args, "message": f"## Agent rules\n\n{rules}\n\n## Brief\n\n{args['message']}"}
 
 
-def is_gate_request(args):
-    """Whether a launch is a gate launch, named by its request ID."""
-    return str((args or {}).get("clientRequestId") or "").startswith("gate:")
-
-
 def call(tool, args, rules=None):
     if tool == "t3_thread_launch":
-        # Every launch is resolved the same way: the model is chosen, the
-        # agent rules are added when the task needs them, and the task type
-        # does not go to the launcher. Only a gate launch holds the block
-        # store lock, so a builder launch never waits for it.
-        if is_gate_request(args):
-            with model_list.blocked_lock(wait=False):
-                return call_resolved(tool, args, rules)
-        return call_resolved(tool, args, rules)
-    return run_t3(tool, args)
-
-
-def call_resolved(tool, args, rules):
-    task_type = args.get("taskType")
-    args, refusal = with_model(args)
-    if refusal:
-        return 1, refusal
-    if wants_rules(args, task_type):
-        if rules is None:
-            return 1, "agent rules were not loaded"
-        args = with_rules(args, rules)
-    return run_t3(tool, {key: value for key, value in args.items() if key != "taskType"})
-
-
-def run_t3(tool, args):
+        task_type = args.get("taskType")
+        args, refusal = with_model(args)
+        if refusal:
+            return 1, refusal
+        if wants_rules(args, task_type):
+            if rules is None:
+                return 1, "agent rules were not loaded"
+            args = with_rules(args, rules)
+        args = {key: value for key, value in args.items() if key != "taskType"}
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
@@ -590,27 +570,6 @@ def undispatchable_tool(item):
     return None
 
 
-def gate_reviewer_blocked(item):
-    """Whether a queued gate names a reviewer the block store has blocked.
-
-    A gate is a launch whose request ID names a gate; a builder and an
-    ordinary review are never held back here. A store that cannot be read
-    defers the gate rather than the queue.
-    """
-    args = item.get("args") or {}
-    if item.get("tool") != "t3_thread_launch":
-        return False
-    if not is_gate_request(args):
-        return False
-    selection = args.get("modelSelection")
-    if not selection:
-        return False
-    try:
-        return model_list.is_blocked(selection)
-    except model_list.ModelsError:
-        return True
-
-
 def drain():
     statuses = {}
     while True:
@@ -653,9 +612,7 @@ def drain():
         if n + len(queue["reserved"]) >= cap():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
-        item = next((i for i in ready if not gate_reviewer_blocked(i)), None)
-        if item is None:
-            return
+        item = ready[0]
         try:
             steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
                      for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
@@ -686,7 +643,7 @@ def drain():
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
                 code, out = call(step["tool"], step["args"], rules)
-            except (model_list.ModelsError, model_list.BlockStoreBusy) as e:
+            except model_list.ModelsError as e:
                 for unused in keys[index:]:
                     queue["reserved"].pop(unused, None)
                     queue["reservedThreads"].pop(unused, None)
@@ -1285,10 +1242,7 @@ def cmd_create(a):
         die(refusal)
     if "projectId" not in args and not args.get("workspaceStrategy"):
         args["scratch"] = True
-    try:
-        code, out = call("t3_thread_launch", args)
-    except model_list.BlockStoreBusy as e:
-        die(f"refused: {e}, try again")
+    code, out = call("t3_thread_launch", args)
     print(out)
     sys.exit(code)
 

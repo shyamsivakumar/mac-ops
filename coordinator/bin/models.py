@@ -29,10 +29,6 @@ class ModelsError(ValueError):
     pass
 
 
-class BlockStoreBusy(Exception):
-    """The provider block store is being written, so a caller waits."""
-
-
 def path():
     override = os.environ.get("COORDINATOR_MODELS")
     if override:
@@ -115,18 +111,14 @@ def queue_dir():
 
 
 @contextlib.contextmanager
-def blocked_lock(wait=True):
+def blocked_lock():
     """The lock on the provider block store, held while a caller reads the
-    blocked set and acts on the answer. A caller that already holds the queue
-    lock passes `wait=False` and gets `BlockStoreBusy` when a writer holds it,
-    so the lock order (block store, then queue) is never inverted."""
+    blocked set and acts on the answer, so a block recorded in between cannot
+    slip past the decision."""
     directory = queue_dir()
     os.makedirs(directory, exist_ok=True)
     with open(os.path.join(directory, BLOCKED_LOCK_FILE), "w") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-        except BlockingIOError:
-            raise BlockStoreBusy("the provider block store is being written") from None
+        fcntl.flock(handle, fcntl.LOCK_EX)
         yield
 
 
