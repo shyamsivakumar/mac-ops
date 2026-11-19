@@ -941,6 +941,10 @@ print("REVIEWAPPROVE", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-a", "-R", "ent.example/team/repo"]))
 print("REVIEWCOMMENT", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-c", "-b", "ok", "-R", "ent.example/team/repo"]))
+print("REVIEWCOMMENTLONG", gh_gateway.argv_host(
+    ["gh", "pr", "review", "42", "--comment", "-R", "ent.example/team/repo", "-b", "ok"]))
+print("CLOSECOMMENT", repr(gh_gateway.argv_host(
+    ["gh", "pr", "close", "42", "--comment", "-Rother.example/o/r"])))
 print("REVIEWCHANGES", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-r", "-R", "ent.example/team/repo"]))
 print("CREATEFILL", gh_gateway.argv_host(
@@ -976,6 +980,7 @@ check("a host in -R is the effective host",
                   "MERGESQUASH", "ent.example", "MERGEMETHOD", "ent.example",
                   "MERGEREBASE", "ent.example", "MERGEBODY", "ent.example",
                   "REVIEWAPPROVE", "ent.example", "REVIEWCOMMENT", "ent.example",
+                  "REVIEWCOMMENTLONG", "ent.example", "CLOSECOMMENT", "''",
                   "REVIEWCHANGES", "ent.example",
                   "CREATEFILL", "ent.example", "CREATEDRAFT", "ent.example",
                   "CREATEWEB", "ent.example", "CREATEEDITOR", "ent.example",
