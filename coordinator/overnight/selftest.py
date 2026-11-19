@@ -1708,8 +1708,14 @@ def send_integrity():
             data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
             return mock_open(read_data=data)()
         def command(cmd, timeout=150):
-            exact(json.loads(cmd[2])["projectId"], "fixture")
+            payload = json.loads(cmd[2])
+            exact(payload["projectId"], "fixture")
             exact("t3_thread_send" in cmd, False)
+            # The thread takes no send, so a replacement carries the
+            # message. It works in a worktree of its own, never in the
+            # shared checkout of the repository.
+            exact(payload["workspaceStrategy"],
+                  {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             actions.append("fresh")
             if failure:
                 raise subprocess.CalledProcessError(1, cmd)
@@ -1720,12 +1726,15 @@ def send_integrity():
              patch.object(lane, "t3", return_value={"thread": {"status": "deleted"}}), \
              patch.object(lane, "run", command):
             result = lane.unstick(repo, ledger)
-        exact(actions, [])
-        exact(f"cont:old" in ledger, True)
+        exact(actions, ["fresh"])
         if failure:
+            # The dispatch failed, so nothing is recorded as a
+            # continuation and the ticket stays eligible.
             exact("started" in result, False)
+            exact(f"cont:old" in ledger, False)
         else:
-            exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
+            exact(f"cont:old" in ledger, True)
+            exact(result, "continue #385: fresh (old model may not take a send): receipt")
 
 
 def root_workspace():
