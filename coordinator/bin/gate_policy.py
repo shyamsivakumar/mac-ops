@@ -19,6 +19,15 @@ PROMPT_NO_MERGE = (
     "This pull request changes prompt, skill or playbook files, and a change like that never "
     "auto-merges (Shyam): do not merge. Stop at the verdict and report it; Shyam merges a passing one himself."
 )
+
+
+def complete_pass(reply, head, provides=True):
+    """True when a gate reply carries every line `ticket close` requires on this head."""
+    lines = reply.splitlines()
+    return (reply.endswith("VERDICT: PASS") and f"CHECK: PASS {head}" in lines
+            and (not provides or f"PROVIDES: PASS {head}" in lines))
+
+
 PROMPT_CLOSE_NOTHING = " Do not close the issue either: the merge that would close it is Shyam's."
 
 
