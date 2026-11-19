@@ -91,7 +91,7 @@ class GatekeepBase(unittest.TestCase):
         coordq.router_chain = lambda route: ROUTE
         coordq.gh_json = self.fake_gh
 
-    def fake_gh(self, endpoint):
+    def fake_gh(self, endpoint, **_kw):
         if endpoint.startswith(f"repos/{REPO}/pulls"):
             return [self.pr]
         if "/issues/" in endpoint and endpoint.endswith("/comments?per_page=100"):

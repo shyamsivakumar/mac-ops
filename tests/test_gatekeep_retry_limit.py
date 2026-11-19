@@ -104,7 +104,7 @@ class RetryLimitBase(unittest.TestCase):
         with open(self.config, "w") as f:
             json.dump(CONFIG, f)
 
-    def fake_gh(self, endpoint):
+    def fake_gh(self, endpoint, **_kw):
         if endpoint.startswith(f"repos/{REPO}/pulls"):
             return [self.pr]
         if "/issues/" in endpoint and "/comments" in endpoint:
