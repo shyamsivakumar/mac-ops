@@ -415,7 +415,7 @@ module goes through `write_record` or `append_record`, which call it, so
 no writer has to remember the rule.
 
 The console is a writer too. Launchd writes everything the module prints
-to the job's own log (`~/Library/Logs/coordinator/overnight.log`), and a
+to the job's own log (`~/Library/Logs/coordinator/lanes.log`), and a
 printed line can carry a secret: a gate thread's report, a command's own
 output tail, a pull request title, a receipt body. So every line the
 module prints goes through `emit`, which calls the same `redact`
@@ -490,8 +490,9 @@ branch or its body carries.
 
 ## The launchd job
 
-`coordinator/launchd/dev.coordinator.overnight.plist` in the mac-ops
-checkout is the job `dev.coordinator.overnight`. The mac-ops installer
+`coordinator/launchd/dev.coordinator.lanes.plist` in the mac-ops
+checkout is the job `dev.coordinator.lanes`, the only job that runs the
+shift. The installer retires the old `dev.coordinator.overnight` job. The mac-ops installer
 copies it into `~/Library/LaunchAgents` with the rest of the coordinator
 jobs, so the job and the command always come from the same checkout.
 
@@ -600,11 +601,11 @@ the runtime folder, so it never mixes with the live receipts.
 Load it after the install:
 
 ```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.coordinator.overnight.plist
-launchctl print gui/$(id -u)/dev.coordinator.overnight
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.coordinator.lanes.plist
+launchctl print gui/$(id -u)/dev.coordinator.lanes
 ```
 
-Its log is `~/Library/Logs/coordinator/overnight.log`.
+Its log is `~/Library/Logs/coordinator/lanes.log`.
 
 ## How a pull request joins a ticket
 
@@ -845,8 +846,7 @@ negative control with the path list switched off must fail.
 `overnight shift` runs the imported lane driver under its existing lock,
 after checking STOP and loading policy. The installer copies `lane_driver.py`
 beside `overnight` and replaces `dev.coordinator.lanes` with a job invoking
-`overnight shift` every 180 seconds. The existing overnight job shares the
-same lock. The lane module has no standalone entry point.
+`overnight shift` every 180 seconds. It is the only job that runs the shift. The lane module has no standalone entry point.
 
 The prototype's repository list, action order, ledger, retry routing and
 watchdog remain unchanged. State stays in `~/Code/coordinator/loop` and the

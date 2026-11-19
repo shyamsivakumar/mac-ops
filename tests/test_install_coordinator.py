@@ -303,19 +303,25 @@ class TestTickJob(unittest.TestCase):
             "deepseek/deepseek-flash",
         )
 
-    def test_the_overnight_job_fires_on_a_fixed_interval_every_day(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
-        self.assertEqual(parsed["Label"], "dev.coordinator.overnight")
-        self.assertEqual(parsed["StartInterval"], 300)
-        self.assertNotIn("StartCalendarInterval", parsed)
-        self.assertNotIn("RunAtLoad", parsed)
-
-    def test_the_overnight_job_runs_real_shift_cycles(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
+    def test_the_lanes_job_is_the_only_job_that_runs_the_shift(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.lanes.plist"])
+        self.assertEqual(parsed["StartInterval"], 180)
         self.assertEqual(
             parsed["ProgramArguments"],
             ["/Users/example/.local/bin/overnight", "shift"],
         )
+        self.assertNotIn("dev.coordinator.overnight.plist", self.rendered)
+        self.assertIn("dev.coordinator.overnight", install_coordinator.RETIRED_JOBS)
+
+    def test_the_installer_removes_an_installed_overnight_plist(self):
+        with temp_home() as td:
+            home = Path(td)
+            agents = home / "Library" / "LaunchAgents"
+            agents.mkdir(parents=True)
+            old = agents / "dev.coordinator.overnight.plist"
+            old.write_text("<plist></plist>")
+            install_coordinator.retire_jobs(home)
+            self.assertFalse(old.exists())
 
 
 class TestTickLauncher(unittest.TestCase):
