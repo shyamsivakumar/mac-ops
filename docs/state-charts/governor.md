@@ -4,6 +4,8 @@ The controller publishes heavy capacity and updates the board admission limit on
 
 Each tick first calls the heavy registry reap. A job whose supervisor is gone is logged as `job-dead` and its slot is freed before the census runs.
 
+The tick then checks for orphaned `CI-iPhone` simulators: booted, with no live heavy `xcodebuild` job and no `xcodebuild` or `xctest` process naming them. An orphan seen on two consecutive ticks is shut down and reported as `orphan_simulators_shutdown`. Other simulators are never touched.
+
 ## Heavy capacity
 
 ```mermaid

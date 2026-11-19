@@ -1244,6 +1244,19 @@ def _board_restart_tick():
     return board_restart.tick()
 
 
+_orphan_simulators_seen = set()
+
+
+def _reap_orphan_simulators(helper):
+    global _orphan_simulators_seen
+    orphans = {device["udid"]: device for device in helper.orphaned_ci_simulators()}
+    survivors = [udid for udid in orphans if udid in _orphan_simulators_seen]
+    _orphan_simulators_seen = set(orphans)
+    for udid in survivors:
+        helper.shutdown_simulator(udid)
+    return survivors
+
+
 def controller_tick(*, board_control=True, cfg=None):
     _ensure_state_dir(create=True)
     helper = _heavy_module()
@@ -1255,6 +1268,12 @@ def controller_tick(*, board_control=True, cfg=None):
             entry["dead_jobs_reaped"] = reaped
     except Exception as exc:
         entry["reap_error"] = type(exc).__name__ + ": " + (str(exc).splitlines() or [""])[0][:180]
+    try:
+        shut_down = _reap_orphan_simulators(helper)
+        if shut_down:
+            entry["orphan_simulators_shutdown"] = shut_down
+    except Exception as exc:
+        entry["simulator_error"] = type(exc).__name__ + ": " + (str(exc).splitlines() or [""])[0][:180]
     boot_id = None
     sample = None
     census = None
