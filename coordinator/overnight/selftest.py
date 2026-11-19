@@ -499,7 +499,8 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args, thread_replies=thread_replies, live=live_by_case.get(name, ())):
+        def threads(tool, args, thread_replies=thread_replies, name=name):
+            live = live_by_case.get(name, ())
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
