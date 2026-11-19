@@ -30,12 +30,14 @@ A change is any diff to text or config that steers an agent.
 | --- | --- |
 | Builder rules and prompts | `coordinator/config/AGENT-RULES.md` and the `template` key of `coordinator/config/tickets.json` |
 | Skills | `runtime/codex/skills/<name>/SKILL.md` in llmwiki |
-| Loop policy | `coordinator/bin/gate_policy.py`, `coordinator/bin/gate_reviewers.py`, `coordinator/config/agents/code-reviewer.md`, `coordinator/config/hooks.json`, `coordinator/models.json`, the turn caps in `coordinator/overnight/turn_cap.py` |
 
-The first two kinds are builder inputs. A single builder agent can read them
-inside a container against one ticket. The third kind changes how the
-Coordinator routes and gates work across many tickets, and a single-ticket
-trial cannot see that, so it gets the live metrics in the last section.
+Both kinds are builder inputs. A single builder agent can read them inside a
+container against one ticket, so a trial can compare them.
+
+Loop-policy changes (gate policy, reviewer selection, model routing, turn caps)
+are out of scope for this note. They change how the Coordinator routes and
+gates work across many tickets, and a single-ticket trial cannot see that. Their
+decision rule is left for a follow-up.
 
 ## Design fit
 
@@ -200,45 +202,6 @@ buys something in return for the risk.
 
 A change that fails its claim is reverted or not merged.
 
-### Keep or revert rule for loop-policy changes
-
-A loop-policy change has no builder-visible effect a container trial can see,
-so it is marked `untrialed` in the PR and decided on live data. The PR names one
-target metric before merge. The metrics split into quality and effort.
-
-- Quality metric: rework rate, the share of merged PRs followed by a revert or
-  a fix that references them within 7 days.
-- Effort metrics: gate rounds per PR, and the share of builder turns over 10
-  minutes (from the turn cap log named under the last section).
-
-The decision uses two windows of merged PRs, the 14 days after the change
-merges and the 14 days before it. Each window needs at least 30 merged PRs.
-
-Apply the rules in this order and stop at the first that decides.
-
-1. **Too little data.** If either window has fewer than 30 merged PRs, extend
-   both to 28 days. If it is still short, revert, because the default is the
-   state before the change.
-2. **Quality limit.** If rework rate rises by 5 percentage points or more
-   (after minus before), revert. That 5-point rise is the only quality limit,
-   and no effort gain offsets it. A smaller rise, such as 10% to 12%, is inside
-   the noise of a window this size and does not trigger a revert, but the
-   decision records it.
-3. **Keep or revert on the target.** With the quality limit not tripped, keep
-   when the target metric improved by at least 15% relative to the window
-   before. Otherwise revert, because the change has not shown that it helps.
-
-Worked example. Each window has 100 merged PRs, rework rate rises from 10% to
-12%, and gate rounds per PR fall from 5 to 4. The data rule passes, the rise is
-2 points so the quality limit is not tripped, and the target improved by 20%,
-so the change is kept. If rework had risen from 10% to 15%, the change would be
-reverted at rule 2 whatever the gate rounds did.
-
-These windows are not controlled, since other changes land in the same weeks.
-Where another loop-policy change merged inside either window, say so in the
-decision and do not stack both on one window. The thresholds are proposals,
-like every other number in this note.
-
 The [eval scorecard](evals.md) says scorecards never block a merge, and that
 holds for the governor and controller. Loop, prompt and skill changes are a
 different decision, and the ticket asks for a keep-only-if-it-helps rule, so
@@ -250,7 +213,7 @@ confirm that split when he reviews this note.
 ```mermaid
 flowchart TD
     A[Change PR declares claim A or B] --> B{Builder-visible?}
-    B -- no --> U[Mark untrialed, apply the loop-policy keep or revert rule]
+    B -- no --> U[Out of scope: loop-policy follow-up]
     B -- yes --> C[Build baseline and change arms]
     C --> D[Run A/A baseline if none exists for this main]
     D --> E[Run both arms, stage 1: 20 tasks x 3 repeats, through heavy]
@@ -286,19 +249,18 @@ same `main`.
 ## What the trial cannot measure
 
 - Anything that needs macOS. The harness runs Linux containers.
-- Coordinator behavior across tickets: ordering, gate rounds, model routing.
-  These changes are watched live instead, on rework rate (a PR followed by a
-  revert or a fix that references it within 7 days), gate rounds per PR, and
-  the share of builder turns over 10 minutes, which comes from the turn cap
-  log written by `coordinator/overnight/turn_cap.py` (`caps.log` in that
-  folder). Merge count stays on the dashboard but is not a decision input.
+- Coordinator behavior across tickets, such as ordering, gate rounds and model
+  routing. These are loop-policy changes, covered by the follow-up. Merge count
+  is not a decision input for them or for anything else in this note.
 - Whether 20 or 40 old tickets represent the next ticket. Refresh the task
   set from newly merged PRs each quarter, and keep the A/A control so drift in
   the task set shows up as noise, not as a false win.
 
 ## Not in this ticket
 
-Everything above is a proposal. This ticket writes the note only. The build
+Everything above is a proposal. This ticket writes the note only. The
+keep-or-revert rule for loop-policy changes is a follow-up, listed under `Left
+for later` in the PR. The build
 ticket should cover, in order, the two open facts under Design fit, the arm
 overlay, the compare script, the proof file format, and the first A/A run,
 after Shyam's review and after ticket 507 has its 20 tasks.
