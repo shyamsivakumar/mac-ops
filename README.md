@@ -98,12 +98,7 @@ their counts; the check fails only on a finding the baseline does not have. Run
 `python3 scripts/mac_ops_fast_check.py --write-ruff-baseline` to write the
 baseline again after the known findings are fixed. When Ruff or `uvx` is not on
 the machine, the proof file records `not run` and the run is incomplete, so it
-is not a pass.
-
-The check runs mypy the same way, through `uvx mypy@1.18.2 --strict`, over the
-modules listed in `MYPY_TARGETS` (today `board_resources.py`). Both versions live in
-`TOOL_VERSIONS` in `scripts/mac_ops_fast_check.py`; change a version there and
-nowhere else. A missing `uvx` or mypy is `not run`, never `passed`.
+is not a pass. This repository does not currently configure a type checker.
 
 The check writes a proof file, `evidence/check-proof.md` by default and
 `evidence/<KEY>-<issue>/check-proof.md` with `--proof`. The file lists every
