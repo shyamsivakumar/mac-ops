@@ -1,0 +1,370 @@
+diff --git a/coordinator/bin/ticket b/coordinator/bin/ticket
+index 3a2a0bd8..dfbc923f 100755
+--- a/coordinator/bin/ticket
++++ b/coordinator/bin/ticket
+@@ -29,10 +29,9 @@ VERDICT_PASS = "VERDICT: PASS"
+ REPO_REF = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
+ BARE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
+ COMMENT_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/\d+#(issuecomment-\d+)")
+-SECTION_NAME = "Blocked by"
+-LABELLED_SECTION = re.compile(r"(?im)^[ \t]*\**\s*blocked by\s*\**\s*:[ \t]*(.*)$")
+ DETAILS_BLOCK = re.compile(r"(?is)<details\b.*?</details>")
+ FENCED_BLOCK = re.compile(r"(?s)```.*?```")
++SECTION_NAME = "Blocked by"
+ REF_STATE = {}
+ KEY_ISSUE = {}
+ COMMENT_TEXT = {}
+@@ -597,20 +596,40 @@ def own_body(body):
+     return FENCED_BLOCK.sub(" ", DETAILS_BLOCK.sub(" ", body))
+ 
+ 
+-def blocked_by_section(body):
++def blocked_by_section(cfg, body):
+     """The body text of the ticket's own `Blocked by` section, or None.
+ 
+-    The coordinator writes the section as a `## Blocked by` heading or as a
+-    `Blocked by:` line, and the template check accepts both, so the blocker
+-    check reads both. A `<details>` block holds a preserved contract, not this
+-    ticket's own section, so it is skipped.
++    The section is read with the same markers the template check uses, so the
++    blocker check looks at the section the template check accepted: a
++    `## Blocked by` heading or a `Blocked by:` line, with any list under the
++    line. The one difference is `<details>`: the template check reads a
++    preserved contract inside one, the blocker check skips it, so a body
++    whose only `Blocked by` sits inside `<details>` passes the blocker check.
+     """
+-    text = own_body(body)
+-    section = body_section(text, SECTION_NAME)
+-    if section is not None:
+-        return section
+-    match = LABELLED_SECTION.search(text)
+-    return match.group(1).strip() if match else None
++    lines = own_body(body).splitlines()
++    markers = template_markers(cfg, lines)
++    for start, section, level, rest in markers:
++        if section != SECTION_NAME:
++            continue
++        if level:
++            stops = [m[0] for m in markers if m[0] > start]
++            stops += [j for j in range(start + 1, len(lines)) if (h := HEADING.match(lines[j])) and len(h.group(1)) <= level]
++            end = min(stops, default=len(lines))
++            return re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
++        content = [rest]
++        pending = []
++        for follow in lines[start + 1:]:
++            text = follow.strip()
++            if not text:
++                pending.append(follow)
++                continue
++            if not (follow[:1].isspace() or text[0] in "-*+"):
++                break
++            content.extend(pending)
++            pending = []
++            content.append(follow)
++        return "\n".join(content).strip()
++    return None
+ 
+ 
+ def resolve_key_issue(repo, key, number):
+@@ -621,12 +640,14 @@ def resolve_key_issue(repo, key, number):
+     prefix = f"{key}-{number}"
+     found = None
+     for page in range(1, 11):
+-        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} in:title \"{key}-{number}\"",
++        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:issue in:title \"{key}-{number}\"",
+                          "-f", "per_page=100", "-f", f"page={page}"])
+         items = query.get("items", [])
+         for item in items:
+             title = item["title"]
+             rest = title[len(prefix):]
++            if item.get("pull_request"):
++                continue
+             if title.startswith(prefix) and not rest[:1].isdigit():
+                 found = item["number"]
+                 break
+@@ -666,7 +687,7 @@ def verdict_recorded(repo, issue):
+ 
+ def section_blocker_reasons(cfg, repo, issue):
+     """Every reference in the `Blocked by` section that is not met yet."""
+-    section = blocked_by_section(issue.get("body") or "")
++    section = blocked_by_section(cfg, issue.get("body") or "")
+     if not section:
+         return []
+     text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
+diff --git a/evidence/MO-200/decisions.md b/evidence/MO-200/decisions.md
+index 1403d5d7..04c935ef 100644
+--- a/evidence/MO-200/decisions.md
++++ b/evidence/MO-200/decisions.md
+@@ -31,7 +31,12 @@ unmet prerequisite start anyway.
+     title starts with 'SRW-1119 ·'`. The prefix now matches `<KEY>-<n>`
+     followed by any character that is not a digit, which keeps `SRW-789` from
+     matching `SRW-7890`.
+-- `tests/test_ticket_text_blockers.py`: 12 new unit tests (32 in the file) and
++  - **A key resolves to an issue, never to a pull request.** The search has
++    no `is:issue` filter, and the looser prefix let a pull request titled
++    `SRW-1018 part 1: ...` answer for the key. A merged pull request then
++    satisfied an open blocker. The query asks for issues and every item with
++    a `pull_request` field is skipped.
++- `tests/test_ticket_text_blockers.py`: 16 new unit tests (36 in the file) and
+   a test isolation fix so the section tests restore the functions they patch.
+ 
+ Not touched: the native blocker refusal, labels, intent comments, receipt
+@@ -96,7 +101,6 @@ existing behaviour. No existing test or check was weakened.
+   check does not parse.
+ 
+ ### 11. A key resolves by prefix `<KEY>-<n>`, not by the ` ·` separator
+-
+ - **When**: revision 2.
+ - **The decision**: A title matches the key when it starts with `<KEY>-<n>`
+   and the next character is not a digit.
+@@ -110,6 +114,66 @@ existing behaviour. No existing test or check was weakened.
+ - **Verdict**: sound.
+ - **Confidence**: high.
+ 
++### 12. A key never resolves to a pull request
++
++- **When**: revision 2, after the in-session review round.
++- **The decision**: The key search asks GitHub for issues (`is:issue`) and
++  every result with a `pull_request` field is skipped.
++- **The gap**: The search returns pull requests too. With the old exact
++  prefix `<KEY>-<n> ·` a pull request titled `SRW-1018 part 1: ...` could not
++  match. With the looser prefix it can, and GitHub sorts search results by
++  best match, so the key could resolve to a merged pull request while the
++  issue it names stayed open. The in-session reviewer (Opus) raised this as
++  major.
++- **The reach**: A key names an issue, never a pull request. A pull request
++  that shares a title prefix can no longer satisfy a blocker.
++- **Verdict**: sound.
++- **Confidence**: high.
++
++### 13. The section read uses the markers the template check uses
++
++- **When**: revision 2, after the in-session review round.
++- **The decision**: The section reader uses the same markers as
++  `template_status`. A `Blocked by:` line is read as its own value plus any
++  list under it, and stops at the next line that is not part of the list.
++- **The gap**: The reviewer found that a list under a `Blocked by:` line read
++  as empty, because only the rest of that line was taken. That was a false
++  pass.
++- **The reach**: A body that writes the section as a labelled line with a
++  list under it now names its blockers. The text after the list is not
++  swallowed, so the acceptance prose of the next line cannot add a blocker.
++- **Verdict**: sound.
++- **Confidence**: high.
++
++### 14. A blank line between the label and its list does not end the section
++
++- **When**: revision 2, after the gate round on #207.
++- **The decision**: A blank line under a `Blocked by:` label is skipped when
++  a list follows it.
++- **The gap**: The gate found that `Blocked by:\n\n- SRW-1018` still read as
++  empty and passed the check when it should have refused.
++- **The reach**: A blank line ends the section only when the next non-blank
++  line is not a list item, so the acceptance prose of the following section
++  is still not swallowed.
++- **Verdict**: sound.
++- **Confidence**: high.
++
++### 15. The blocker check and the template check differ on `<details>`
++
++- **When**: revision 2, after the gate round on #207.
++- **The decision**: The template check reads a `<details>` block; the blocker
++  check skips it. A body whose only `Blocked by` sits inside `<details>`
++  passes the template check and names no blocker.
++- **The gap**: The gate found that the branch claimed both checks read the
++  same section, which is not true for `<details>`.
++- **The reach**: A preserved contract is not this ticket's own section, so it
++  must not refuse a ticket the coordinator has since approved. The
++  difference is deliberate, and it is now stated in the docstring, in the
++  pull request body and in a test that pins both sides of it.
++- **Verdict**: sound.
++- **Confidence**: medium. A body that keeps its only prerequisite inside a
++  `<details>` block gets no text blocker.
++
+ ## Decisions (revision 1)
+ 
+ ### 1. The text check sits after the native blocker check and its reasons join the native refusal
+@@ -239,13 +303,36 @@ body.
+ 3. **catalouge #53 (a preserved contract inside `<details>`).** The section
+    read is the ticket's own `## Blocked by` section, the preserved
+    `Blocked by: #49, #51, #52` line is not read, and the reasons are empty.
+-4. **SRW #890, SRW #899, SRW #490 and `--force-text-blockers`** behave exactly
+-   as in revision 1; the outputs are in `evidence/MO-200/proof.txt`.
+-5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 32
++4. **SRW #890, SRW #899, SRW #492 and `--force-text-blockers`.** The board
++   moved during the run: `main` gained the check that refuses a start when a
++   pull request already carries the issue (#223), SRW #806 was closed, and
++   stage labels were taken. The live outputs are in
++   `evidence/MO-200/proof.txt`. SRW #492 (`## Blocked by` `None.`) prints
++   `checks passed`.
++5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 64
+    tests in the file). The full suite through heavy,
+-   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 148
++   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 180
+    tests, OK.
+ 
++### In-session review round and the gate round on #207
++
++One reviewer round ran in this session (Opus, Claude Opus 5.5) on
++`git diff origin/main...HEAD`. It returned `VERDICT: FAIL` with one major and
++three minor findings: a pull request could satisfy a key blocker (fixed by
++decision 12), a list under a `Blocked by:` line read as empty (fixed by
++decision 13), a list-item label was not matched (the template check does not
++match it either, so both read the same section), and a bold `**Blocked by:**`
++value kept its leading `**` (the template check strips it, so the value is
++now read through the template markers).
++
++The gate on #207 then returned `VERDICT: FAIL` on the branch itself, for two
++reasons and two minors. The branch was based on `a780e95` while `main` already
++carried #206 as a squash, so the pull request conflicted and could not land;
++the branch is now rebuilt on `origin/main` and the fix is cherry-picked onto
++it, so the head is a new commit and the builder check line changed with it.
++The minors are fixed by decision 14 (a blank line under the label) and
++decision 15 (the `<details>` difference is stated, not hidden).
++
+ ### Revision 1
+ 
+ 1. **SRW #890 (the ticket from the brief).**
+diff --git a/evidence/MO-200/proof.txt b/evidence/MO-200/proof.txt
+index 18e03f73..0e84665c 100644
+--- a/evidence/MO-200/proof.txt
++++ b/evidence/MO-200/proof.txt
+@@ -1,17 +1,19 @@
+ Revision 2 (run ticket:shyamsivakumar/mac-ops#163:a3). The text blocker check
+-itself landed in attempt 2 (b43b4e4, PR #204). This attempt closes two gaps
++landed in attempt 2 (#206, squash b16b3d5). This attempt closes three gaps
+ between the landed check and the brief: the `Blocked by` section was read only
+-as a `## Blocked by` heading, and a key resolved only by the `<KEY>-<n> ·`
+-title prefix.
++as a `## Blocked by` heading, a key resolved only by the `<KEY>-<n> ·` title
++prefix, and a key could resolve to a pull request.
++
++The board moved while this ran. `main` gained the check that refuses a start
++when a pull request already carries the issue (#223), SRW #806 was closed, and
++the stage labels of several tickets were taken. The dry runs below are the
++live output at the time of the run.
+ 
+ $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#890 --dry-run
+-refused: issue is closed; text blockers: SRW-789 (#490) is still open; the body requires an approval before building: "Build only after the separate Opus design review the design document requires; if no such verdict is recorded, stop with `WAITING:` and name the missing approval."
++refused: already merged via #989; close the issue
+ 
+ $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#899 --dry-run
+-refused: blocked by open shyamsivakumar/strategy-replay-workbench#806; text blockers: SRW-1018 (#806) is still open
+-
+-$ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#490 --dry-run
+-checks passed
++refused: needs exactly one stage label, found 0
+ 
+ $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#1018 --dry-run
+ refused: missing type label
+@@ -20,40 +22,63 @@ $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#
+ text blocker checks skipped (--force-text-blockers)
+ refused: missing type label
+ 
+-$ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#890 --dry-run --force-text-blockers
+-text blocker checks skipped (--force-text-blockers)
+-refused: issue is closed
++$ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#492 --dry-run
++checks passed
++intent comment:
++
++The text blocker reasons for the same real bodies. The probe calls the
++functions the `ticket start` path calls, because on these tickets the CLI
++stops earlier, at the merged pull request check, the label check or the
++template check, and those checks run before the text check.
++
++$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 890 shyamsivakumar/strategy-replay-workbench
++body section: 'Coordinator Opus PASS on revised SRW-789 design; B1 #898 is complete. No build starts before approval.'
++section reasons: []
++text blockers: ['the body requires an approval before building: "Build only after the separate Opus design review the design document requires; if no such verdict is recorded, stop with `WAITING:` and name the missing approval."']
++
++$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 899 shyamsivakumar/strategy-replay-workbench
++body section: "SRW-1018 (https://github.com/shyamsivakumar/strategy-replay-workbench/issues/806, still open), whose part 1 is merged as `0d681c75` (SRW-1018 part 1: P01a boot-order proof and mutation, PR #905). Start only after the remaining SRW-1018 work has merged, because that work adds cases to the same runner's `--case` branches and would otherwise conflict."
++section reasons: []
++text blockers: []
++
++SRW #806 was closed at 21:15 on 2026-11-13, after the earlier run of this
++proof, so the SRW-1018 blocker of #899 is met and the section names no
++reason. The pull request named in that body is not a key: the key SRW-1018
++resolves to issue #806.
+ 
+-The `Blocked by` section of the same real bodies, read with the landed code
+-and with this change. The probe calls the function the CLI calls, because the
+-CLI stops on SRW #1018 earlier, at the label check ("missing type label"), and
+-the label check runs before the text check.
++The `Blocked by` section of a body written as a `Blocked by:` line, read with
++the code before #206 and with the code of this branch.
+ 
+-$ git show HEAD:coordinator/bin/ticket > /tmp/old_ticket.py
+-$ python3 evidence/MO-200/section_probe.py /tmp/old_ticket.py 1018 shyamsivakumar/strategy-replay-workbench
++$ git show a780e95:coordinator/bin/ticket > /tmp/pre206_ticket.py   # before #206
++$ python3 evidence/MO-200/section_probe.py /tmp/pre206_ticket.py 1018 shyamsivakumar/strategy-replay-workbench
+ body section: None
+-reasons: []
++section reasons: []
++text blockers: []
+ 
+ $ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 1018 shyamsivakumar/strategy-replay-workbench
+ body section: 'SRW-1119, SRW-1120.'
+-reasons: ['SRW-1119 (#1016) is still open', 'SRW-1120 (#1017) is still open']
++section reasons: ['SRW-1120 (#1017) is still open']
++text blockers: ['SRW-1120 (#1017) is still open']
+ 
+ $ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 1015 shyamsivakumar/strategy-replay-workbench
+ body section: 'none.'
+-reasons: []
++section reasons: []
++text blockers: []
+ 
+ $ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 53 shyamsivakumar/catalouge
+ body section: 'Use existing native GitHub blocked-by relationships as authoritative; preserve them. Parent/spec links are context, not additional blocking edges. stage:todo is queued, not permission to bypass prerequisites.'
+-reasons: []
++section reasons: []
++text blockers: []
+ 
+-$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 490 shyamsivakumar/strategy-replay-workbench
++$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 492 shyamsivakumar/strategy-replay-workbench
+ body section: 'None.'
+-reasons: []
++section reasons: []
++text blockers: []
+ 
+ $ python3 -m unittest tests.test_ticket_text_blockers
+-................................
++....................................................................
+ ----------------------------------------------------------------------
+-Ran 32 tests in 0.003s
++Ran 64 tests in 0.005s
+ 
+ OK
+ 
+@@ -61,6 +86,6 @@ $ python3 scripts/mac_ops_fast_check.py
+ fast-check: passed; selected checks are not the full suite
+ 
+ $ ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
+-Ran 148 tests in 2.801s
++Ran 180 tests in 2.643s
+ 
+ OK
+diff --git a/evidence/MO-200/section_probe.py b/evidence/MO-200/section_probe.py
+index ab9e68d3..b7933a10 100644
+--- a/evidence/MO-200/section_probe.py
++++ b/evidence/MO-200/section_probe.py
+@@ -26,11 +26,15 @@ def main():
+         ["gh", "issue", "view", number, "-R", repo,
+          "--json", "number,title,body,state,labels,comments,url,blockedBy"]))
+     if hasattr(mod, "blocked_by_section"):
+-        section = mod.blocked_by_section(issue["body"])
++        try:
++            section = mod.blocked_by_section(cfg, issue["body"])
++        except TypeError:
++            section = mod.blocked_by_section(issue["body"])
+     else:
+         section = mod.body_section(issue["body"], "Blocked by")
+     print("body section:", repr(section))
+-    print("reasons:", mod.section_blocker_reasons(cfg, repo, issue))
++    print("section reasons:", mod.section_blocker_reasons(cfg, repo, issue))
++    print("text blockers:", mod.text_blocker_reasons(cfg, repo, issue))
+ 
+ 
+ if __name__ == "__main__":

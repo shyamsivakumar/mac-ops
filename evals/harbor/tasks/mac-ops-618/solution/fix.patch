@@ -1,0 +1,458 @@
+diff --git a/coordinator/overnight/README.md b/coordinator/overnight/README.md
+index df155817..14462190 100644
+--- a/coordinator/overnight/README.md
++++ b/coordinator/overnight/README.md
+@@ -363,9 +363,9 @@ A board that stopped moving gets one alert, not one per tick: the alert
+ is written again after the board moves and stalls a second time. The flag
+ that says "the board was alerted" is set only after the alert was written,
+ so a board whose alert could not be written asks again on the next tick
+-instead of going quiet for good. The alert goes to the coordinator's board
+-(`factory-overnight-stall`), the same board the merge alert and the
+-watchdog use. The board is swept again in the same tick, so the shift
++instead of going quiet for good. The alert goes to the mac-ops owner board
++(`factory-overnight-stall`), the same board the merge alert uses. The
++watchdog stays on the decisions board. The board is swept again in the same tick, so the shift
+ keeps working on a fresh board.
+ 
+ The tracking is bounded: an item's idle count stops at the cap, and an
+@@ -804,9 +804,12 @@ now checked instead of remembered. One list lives in
+   merge order. The brief says do not merge and close nothing, and names the
+   change as prompt text.
+ - The lane driver checks the same list before it merges a passing pull
+-  request. On a prompt change it merges nothing and writes one item to
+-  `~/Code/coordinator/decisions.json` (`kind: action`, id
+-  `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
++  request. On a prompt change it merges nothing and writes one item
++  (`kind: action`, id `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The
++  item goes to `~/Code/coordinator/decisions.json`, except for mac-ops (key
++  `MO`), which goes to the mac-ops owner board
++  `~/Code/coordinator/mac-ops-owner.json` (`COORDINATOR_OWNER_BOARD` moves
++  it). The item is keyed by
+   id, so a second pass replaces it instead of adding a second one. A pass
+   also takes the item down, but only once the pull request itself reports
+   `MERGED` or `CLOSED`: the open list a pass holds stops at 200 requests, so
+@@ -1041,7 +1044,11 @@ Device, handset and live-service testing remain waived, not failed.
+ `python3 coordinator/overnight/overnight selftest` now registers `zero-merge`.
+ The lane driver's normal command checks the monitored board after its pass.
+ With open PRs and no merge in the preceding 60 minutes, it writes one
+-`factory-zero-merge` action to decisions.json. A merge anywhere in the monitored
++`factory-zero-merge` action to the mac-ops owner board
++`~/Code/coordinator/mac-ops-owner.json`, not decisions.json. The same board
++takes `factory-overnight-stall` and the mac-ops `lane-gate-rounds-*` items.
++`alarms.route_update` picks the board by id and removes any copy of that id
++still on decisions.json. A merge anywhere in the monitored
+ repos at or after the cutoff clears the action. No open PRs also clears it.
+ The check uses the existing board snapshot and budgeted GitHub read adapter;
+ failed reads abort before changing the action. Dry runs skip the check.
+diff --git a/coordinator/overnight/alarms.py b/coordinator/overnight/alarms.py
+index b2287f13..03c0b77f 100755
+--- a/coordinator/overnight/alarms.py
++++ b/coordinator/overnight/alarms.py
+@@ -219,7 +219,7 @@ def drop_lock(handle):
+         pass
+ 
+ 
+-def board_update(target, alarm_id, action, item=None, attempts=5):
++def board_update(target, alarm_id, action, item=None, attempts=5, create=False):
+     """Write one alarm onto the board, serialized or by compare-and-swap.
+ 
+     The board lock is taken first, and the board is read, changed and
+@@ -230,12 +230,13 @@ def board_update(target, alarm_id, action, item=None, attempts=5):
+     A publication that cannot be made safe after a few tries says so.
+ 
+     `action` is "raise" to put the item on the board and "remove" to take
+-    it off. Return "wrote" or "failed"."""
++    it off. `create` makes a missing board under the lock, so two first
++    publishers cannot overwrite one another. Return "wrote" or "failed"."""
+     path = Path(target)
+     handle = take_lock(str(path) + ".lock")
+     try:
+         if handle is not None:
+-            return "wrote" if write_alarm(path, alarm_id, action, item) else "failed"
++            return "wrote" if write_alarm(path, alarm_id, action, item, create) else "failed"
+     finally:
+         if handle is not None:
+             drop_lock(handle)
+@@ -249,6 +250,75 @@ def board_update(target, alarm_id, action, item=None, attempts=5):
+     return "failed"
+ 
+ 
++OWNER_IDS = re.compile(
++    r"factory-zero-merge|factory-overnight-stall"
++    r"|prompt-merge-MO-\d+|lane-gate-rounds-shyamsivakumar-mac-ops-\d+")
++
++
++def board_for(decisions, alarm_id):
++    """The board file an item id belongs to.
++
++    The mac-ops tooling alarms go to the mac-ops owner's board, which sits
++    beside the decisions board unless COORDINATOR_OWNER_BOARD moves it.
++    Every other id stays on the decisions board."""
++    if not OWNER_IDS.fullmatch(str(alarm_id)):
++        return Path(decisions)
++    return Path(os.environ.get("COORDINATOR_OWNER_BOARD")
++                or Path(decisions).with_name("mac-ops-owner.json"))
++
++
++def route_update(decisions, alarm_id, action, item=None):
++    """board_update on the board the id belongs to, clearing any stale copy.
++
++    An owner item is raised or removed on the owner board, and the same id
++    is taken off the decisions board when it is still there. Return
++    "wrote" or "failed"."""
++    target = board_for(decisions, alarm_id)
++    if target == Path(decisions):
++        return board_update(decisions, alarm_id, action, item)
++    if board_update(target, alarm_id, action, item, create=True) != "wrote":
++        return "failed"
++    return clear_stale(decisions, alarm_id)
++
++
++def clear_stale(decisions, alarm_id, attempts=5):
++    """Take an id off the decisions board when it is still there.
++
++    The board is replaced only when its bytes still match the read, under
++    the board lock, because the watchdog writes the same file without the
++    lock. A lock that cannot be taken, or a board that keeps changing,
++    returns "failed" for the next tick."""
++    path = Path(decisions)
++    handle = take_lock(str(path) + ".lock")
++    if handle is None:
++        return "failed"
++    try:
++        for _ in range(attempts):
++            _, board = read_board(path)
++            if board is None or not any(
++                    isinstance(e, dict) and e.get("id") == alarm_id for e in board["items"]):
++                return "wrote"
++            result = swap_alarm(path, alarm_id, "remove", None)
++            if result != "retry":
++                return result
++        return "failed"
++    finally:
++        drop_lock(handle)
++
++
++def migrate_stale(decisions, alarm_id):
++    """Move an owner item still on the decisions board to the owner board.
++
++    The card is moved as it is, so a card Shyam answered is not raised
++    again. Return "wrote" or "failed"."""
++    _, board = read_board(Path(decisions))
++    held = [e for e in (board or {"items": []})["items"]
++            if isinstance(e, dict) and e.get("id") == alarm_id]
++    if not held or board_for(decisions, alarm_id) == Path(decisions):
++        return "wrote"
++    return route_update(decisions, alarm_id, "raise", held[0])
++
++
+ def read_board(path):
+     """Return (the board's bytes, the board) or (bytes, None)."""
+     try:
+@@ -279,9 +349,13 @@ def change_board(board, alarm_id, action, item):
+     return board, changed
+ 
+ 
+-def write_alarm(path, alarm_id, action, item):
++def write_alarm(path, alarm_id, action, item, create=False):
+     """Read, change and replace the board under the caller's lock."""
+     _, board = read_board(path)
++    if board is None and create and not path.exists():
++        if action != "raise":
++            return True
++        board = {"items": []}
+     if board is None:
+         return False
+     board, _ = change_board(board, alarm_id, action, item)
+diff --git a/coordinator/overnight/lane_driver.py b/coordinator/overnight/lane_driver.py
+index 9937e22e..d17248aa 100644
+--- a/coordinator/overnight/lane_driver.py
++++ b/coordinator/overnight/lane_driver.py
+@@ -683,11 +683,13 @@ def gate_round_decision(repo, number, head, ledger):
+     """
+     lkey = f"rounds-decision:{repo}#{number}"
+     if lkey in ledger:
++        if not DRY:
++            alarms.migrate_stale(DECISIONS_PATH, gate_round_item(repo, number, "")["id"])
+         return f"#{number}: no fix round, the decisions item is on the board"
+     item = gate_round_item(repo, number, head)
+     if DRY:
+         return f"DRY #{number}: no fix round, one decisions item"
+-    if alarms.board_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
++    if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+         return f"#{number}: the decisions item could not be published"
+     ledger[lkey] = item["id"]
+     return (f"#{number}: no fix round after {GATE_ROUND_CAP} failed reviews, "
+@@ -717,7 +719,7 @@ def clear_gate_round_decision(repo, number, ledger):
+     if lkey not in ledger:
+         return True
+     item = gate_round_item(repo, number, "")
+-    if not DRY and alarms.board_update(DECISIONS_PATH, item["id"], "remove") != "wrote":
++    if not DRY and alarms.route_update(DECISIONS_PATH, item["id"], "remove") != "wrote":
+         return False
+     ledger.pop(lkey, None)
+     return True
+@@ -813,7 +815,7 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
+ 
+ def publish_decision(item):
+     """Put one item on Shyam's decisions board, under the board's lock."""
+-    return alarms.board_update(DECISIONS_PATH, item["id"], "raise", item)
++    return alarms.route_update(DECISIONS_PATH, item["id"], "raise", item)
+ 
+ 
+ def prompt_merge_item(repo, number, head):
+@@ -829,7 +831,7 @@ def prompt_merge_item(repo, number, head):
+ 
+ def withdraw_decision(item_id):
+     """Take one item off Shyam's board, once the pull request is settled."""
+-    return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
++    return alarms.route_update(DECISIONS_PATH, item_id, "remove", None)
+ 
+ 
+ def pull_settled(repo, number):
+@@ -862,19 +864,19 @@ def reconcile_prompt_items(snapshot):
+     settled is still open, so each candidate's own state is read before its
+     card goes. Return how many were removed.
+     """
+-    try:
+-        _bytes, board = alarms.read_board(Path(DECISIONS_PATH))
+-    except OSError:
+-        return 0
+-    if not isinstance(board, dict):
+-        return 0
++    boards = []
++    for path in (Path(DECISIONS_PATH), alarms.board_for(DECISIONS_PATH, "prompt-merge-MO-0")):
++        try:
++            boards.append(alarms.read_board(path)[1])
++        except OSError:
++            continue
++    items = {str(i.get("id")): i for b in boards if isinstance(b, dict)
++             for i in b.get("items") or [] if isinstance(i, dict)}.values()
+     repos_by_key = {CFG[repo]["key"]: repo for repo in CFG if repo in LANE_REPOS}
+     open_prs = {(repo, pull["number"]) for repo, data in snapshot["repos"].items()
+                 for pull in data["prs"]}
+     removed = 0
+-    for item in board.get("items") or []:
+-        if not isinstance(item, dict):
+-            continue
++    for item in items:
+         match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", str(item.get("id") or ""))
+         if not match or match.group(1) not in repos_by_key:
+             continue
+@@ -1589,7 +1591,7 @@ def zero_merge(snapshot):
+     # board is written under its lock.
+     action = alarms.decide_and_publish(
+         "factory-zero-merge", cause or "",
+-        lambda decided: None if alarms.board_update(
++        lambda decided: None if alarms.route_update(
+             path, "factory-zero-merge",
+             "raise" if decided in ("raise", "unchecked") and item else "remove",
+             item) == "wrote" else "failed")
+diff --git a/coordinator/overnight/selftest.py b/coordinator/overnight/selftest.py
+index f722d979..30760ca6 100644
+--- a/coordinator/overnight/selftest.py
++++ b/coordinator/overnight/selftest.py
+@@ -1218,6 +1218,9 @@ def zero_merge_fixture(scratch):
+     import lane_driver as lane
+     other = {"id": "unrelated"}
+     state = {"items": [other]}
++    owner = {"items": []}
++    def held():
++        return state["items"] + owner["items"]
+     now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
+     class Clock(dt.datetime):
+         @classmethod
+@@ -1249,13 +1252,18 @@ def zero_merge_fixture(scratch):
+     mute = str(scratch / "mute-state.json")
+ 
+     def read_board(path):
+-        return b"", json.loads(json.dumps(state))
++        return b"", json.loads(json.dumps(owner if Path(path).name == "mac-ops-owner.json" else state))
+ 
+     def write_board(path, board):
+-        state.clear()
+-        state.update(json.loads(json.dumps(board)))
++        target = owner if Path(path).name == "mac-ops-owner.json" else state
++        target.clear()
++        target.update(json.loads(json.dumps(board)))
+         return True
+ 
++    def swap_alarm(path, alarm_id, action, item):
++        state["items"] = [i for i in state["items"] if i.get("id") != alarm_id]
++        return "wrote"
++
+     import alarms
+     with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
+          patch("builtins.open", side_effect=opened), patch.object(lane.json, "dump", side_effect=saved), \
+@@ -1263,6 +1271,7 @@ def zero_merge_fixture(scratch):
+          patch.object(lane, "DECISIONS_PATH", str(Path(mute).parent / "decisions.json")), \
+          patch.object(alarms, "read_board", side_effect=read_board), \
+          patch.object(alarms, "write_board", side_effect=write_board), \
++         patch.object(alarms, "swap_alarm", side_effect=swap_alarm), \
+          patch.object(lane.os, "replace") as replace:
+         for stamps, expected in [([], [other, alert]),
+                 (["2026-11-15T10:59:59Z"], [other, alert]),
+@@ -1271,7 +1280,7 @@ def zero_merge_fixture(scratch):
+                 ([], [other, alert])]:
+             rows = [{"mergedAt": stamp} for stamp in stamps]
+             lane.zero_merge(snapshot)
+-            exact(state["items"], expected)
++            exact(held(), expected)
+         exact(calls, ["fixture/one", "fixture/two"] * 5)
+         with patch.object(lane, "read_json", side_effect=RuntimeError("fixture read failure")):
+             try:
+@@ -1280,7 +1289,7 @@ def zero_merge_fixture(scratch):
+                 exact(str(exc), "fixture read failure")
+             else:
+                 raise AssertionError("read failure was swallowed")
+-        exact(state["items"], [other, alert])
++        exact(held(), [other, alert])
+ 
+         snapshot["repos"]["fixture/one"]["prs"] = []
+         # A healthy tick raises nothing, so it says nothing about an alarm:
+@@ -1288,7 +1297,7 @@ def zero_merge_fixture(scratch):
+         healthy = io.StringIO()
+         with contextlib.redirect_stdout(healthy):
+             lane.zero_merge(snapshot)
+-        exact(state["items"], [other])
++        exact(held(), [other])
+         exact(len(calls), 10)
+         # A board that cannot be written is reported, not swallowed: the
+         # alarm is nowhere, and the tick has to say so.
+@@ -1317,7 +1326,7 @@ def zero_merge_fixture(scratch):
+         snapshot["repos"]["fixture/two"]["prs"] = []
+         rows = []
+         lane.zero_merge(snapshot)
+-        first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
++        first = [i for i in held() if i["id"] == "factory-zero-merge"]
+         exact(len(first), 1)
+         exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
+         # The answer goes to the mute state the shift keeps. The replace
+@@ -1330,14 +1339,19 @@ def zero_merge_fixture(scratch):
+         exact(mute_rules.muted(mute_rules.load_state(), answered, now), True)
+         # The answered cause is quiet: the same wait raises no board item.
+         lane.zero_merge(snapshot)
+-        exact([i for i in state["items"] if i["id"] == "factory-zero-merge"], [])
++        exact([i for i in held() if i["id"] == "factory-zero-merge"], [])
+         # A repository that starts waiting is a different cause, so it
+         # alarms at once under its own key.
+         snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
+         lane.zero_merge(snapshot)
+-        raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
++        raised = [i for i in held() if i["id"] == "factory-zero-merge"]
+         exact(len(raised), 1)
+         exact(raised[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one, fixture/two")
++        exact(state["items"], [other])
++        state["items"].append(dict(alert))
++        lane.zero_merge(snapshot)
++        exact([i["id"] for i in state["items"]], ["unrelated"])
++        exact([i["id"] for i in owner["items"]], ["factory-zero-merge"])
+ 
+ 
+ def board_integrity():
+@@ -1582,7 +1596,8 @@ def gate_round_cap():
+     repo = "shyamsivakumar/mac-ops"
+     heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
+     sent = []
+-    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
++    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions:
++        board = decisions.with_name("mac-ops-owner.json")
+ 
+         def command(cmd, timeout=150):
+             if cmd[:3] == ["gh", "pr", "view"]:
+@@ -2369,7 +2384,7 @@ def stall():
+         exact(lane.unstick(repo, {}), "DRY unstick [9]")
+ 
+ 
+-def alarm_mute():
++def alarm_mute_on_one_board():
+     import datetime as dt
+     import alarms
+     import lane_driver as lane
+@@ -3010,6 +3025,39 @@ def alarm_mute():
+ 
+ 
+ 
++def alarm_mute():
++    """The mute rule on one board, then the routing of the owner alarms."""
++    import alarms
++    import stall as rule
++    with patch.object(alarms, "board_for", lambda decisions, alarm_id: Path(decisions)):
++        alarm_mute_on_one_board()
++    with tempfile.TemporaryDirectory() as scratch, \
++            patch.object(alarms, "MUTE_PATH", str(Path(scratch) / "mute-state.json")):
++        decisions = Path(scratch) / "decisions.json"
++        owner = Path(scratch) / "mac-ops-owner.json"
++        stale = {"id": "factory-overnight-stall", "cause": "stale"}
++        decisions.write_text(json.dumps({"items": [{"id": "SRW-1"}, stale]}))
++        target, action = rule.alert("no board progress for 3 ticks", None, decisions)
++        exact(action, "wrote")
++        exact([i["id"] for i in json.loads(owner.read_text())["items"]], ["factory-overnight-stall"])
++        exact([i["id"] for i in json.loads(decisions.read_text())["items"]], ["SRW-1"])
++        exact(alarms.route_update(decisions, "SRW-1", "remove"), "wrote")
++        exact(alarms.route_update(decisions, "factory-overnight-stall", "remove"), "wrote")
++        exact(json.loads(owner.read_text())["items"], [])
++        decisions.write_text(json.dumps({"items": [{"id": "factory-zero-merge"}, {"id": "factory-watchdog"}]}))
++        owner.unlink()
++        exact(alarms.route_update(decisions, "factory-zero-merge", "remove"), "wrote")
++        exact([i["id"] for i in json.loads(decisions.read_text())["items"]], ["factory-watchdog"])
++        exact(owner.exists(), False)
++        decisions.write_text(json.dumps({"items": [dict(stale, id="factory-zero-merge")]}))
++        before = decisions.read_bytes()
++        with patch.object(alarms, "take_lock", return_value=None):
++            exact(alarms.clear_stale(decisions, "factory-zero-merge"), "failed")
++        exact(decisions.read_bytes(), before)
++        exact(alarms.board_for(decisions, "prompt-merge-SRW-4"), decisions)
++        exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
++
++
+ EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+ 
+ 
+diff --git a/coordinator/overnight/stall.py b/coordinator/overnight/stall.py
+index 152e686c..3028aead 100644
+--- a/coordinator/overnight/stall.py
++++ b/coordinator/overnight/stall.py
+@@ -248,7 +248,7 @@ def alert(reason, cause=None, path=None):
+                 "cause": alarms.cause_of(cause or reason),
+                 "why": reason,
+             }
+-        if alarms.board_update(target, ALERT_ID,
++        if alarms.route_update(target, ALERT_ID,
+                                "raise" if item else "remove", item) != "wrote":
+             return "failed"
+         if action == "unchecked":
+diff --git a/evidence/MO-617/check-proof.md b/evidence/MO-617/check-proof.md
+new file mode 100644
+index 00000000..48ce0ff1
+--- /dev/null
++++ b/evidence/MO-617/check-proof.md
+@@ -0,0 +1,28 @@
++# Check proof
++
++Command: `python3 scripts/mac_ops_fast_check.py`
++Checked commit: `6a0ebe332126e3e0d4d6003b678f2e77e1cb5c96`
++Working tree clean when the checks ran: yes
++Run result: passed
++
++| Check | Command | Result | Detail |
++| --- | --- | --- | --- |
++| lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
++| overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
++| python syntax: coordinator/overnight/alarms.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/alarms.py` | passed |  |
++| python syntax: coordinator/overnight/lane_driver.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/lane_driver.py` | passed |  |
++| python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
++| python syntax: coordinator/overnight/stall.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/stall.py` | passed |  |
++| python syntax: tests/test_prompt_paths.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_prompt_paths.py` | passed |  |
++| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 77 findings, all in the baseline |
++| mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
++| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-p7fxa29i -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-p7fxa29i/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
++| heavy help | `python3 heavy.py --help` | passed |  |
++| tests: tests.test_alarm_panel | `python3 -m unittest tests.test_alarm_panel` | passed |  |
++| tests: tests.test_lane_decisions_board | `python3 -m unittest tests.test_lane_decisions_board` | passed |  |
++| tests: tests.test_prompt_paths | `python3 -m unittest tests.test_prompt_paths` | passed |  |
++
++A result is `passed`, `failed` or `not run`. A failed check stopped the run,
++so every check after it is `not run`. A tool that is not on this machine
++is recorded as `not run` too, and leaves the run incomplete: the run is
++then not a pass.

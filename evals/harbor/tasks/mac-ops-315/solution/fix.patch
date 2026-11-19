@@ -1,0 +1,142 @@
+diff --git a/coordinator/bin/ticket b/coordinator/bin/ticket
+index aee790f9..86118049 100755
+--- a/coordinator/bin/ticket
++++ b/coordinator/bin/ticket
+@@ -46,6 +46,17 @@ PR_REF_WORD = re.compile(r"(?i)\b(?:" + "|".join(PR_REF_WORDS) + r")\b")
+ PR_REF_NUMBER = re.compile(r"(?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(\d+)")
+ REFS_ISSUE = re.compile(r"(?i)\brefs?\s+#(\d+)")
+ RESTART_PATTERN = re.compile(r"(?i)\b(restart|redo|again|reopen|rework|retry|fix|start over|another pass|not done|incomplete)\b")
++# A merged pull request delivers the ticket only when it changed a file outside
++# these paths. A plan or a document may name a ticket whose implementation is
++# still on an unmerged branch, and that reference must not read as delivery.
++DOC_PATH_PREFIXES = ("evidence/", "docs/")
++DOC_PATH_SUFFIXES = (".md",)
++# Some Markdown files are runtime inputs, not documentation: the agent rules,
++# the reviewer prompts and the skills. A merge that changed only one of those
++# delivered work, so it keeps refusing the start.
++RULE_PATH_PREFIXES = (".agents/", "coordinator/config/", "runtime/")
++RULE_FILE_NAMES = ("agents.md", "claude.md", "skill.md")
++CLOSE_VERDICT_PASS = re.compile(r"VERDICT: PASS\.\s*Merged via #(\d+)\b")
+ RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
+ RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
+ SHYAM = re.compile(r"\bshyam\b", re.I)
+@@ -551,6 +562,7 @@ def referencing_pulls(repo, number):
+             "merged": bool(pull.get("merged")),
+             "mergedAt": pull.get("merged_at"),
+             "createdAt": pull.get("created_at"),
++            "changedFiles": pull.get("changed_files"),
+         }
+     return sorted(found.values(), key=lambda pull: pull["number"])
+ 
+@@ -582,13 +594,67 @@ def coordinator_restart_time(issue):
+     return newest
+ 
+ 
+-def pull_guard_reasons(repo, issue):
++def pull_files(repo, number, changed_files=None):
++    """The paths a pull request changed, or None when GitHub cannot say.
++
++    None means the start cannot tell whether the merge delivered anything, so
++    the merge keeps counting as delivery. Only a known list of documentation
++    paths takes a merge out of the delivery count. A list shorter than the
++    pull request's own `changed_files` count is a truncated read, and a
++    truncated read is not a known list.
++    """
++    try:
++        files = gh_json(["api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
++    except (GhError, ValueError):
++        return None
++    if not isinstance(files, list):
++        return None
++    entries = [entry for entry in files if isinstance(entry, dict)]
++    if isinstance(changed_files, int) and len(entries) < changed_files:
++        return None
++    paths = []
++    for entry in entries:
++        paths.append(entry.get("filename") or "")
++        if entry.get("previous_filename"):
++            paths.append(entry["previous_filename"])
++    return paths
++
++
++def delivers_ticket(path):
++    """True when a changed path is outside the plan and documentation paths."""
++    lowered = path.lower()
++    name = lowered.rsplit("/", 1)[-1]
++    if lowered.startswith(RULE_PATH_PREFIXES) or name in RULE_FILE_NAMES:
++        return True
++    return not (lowered.startswith(DOC_PATH_PREFIXES) or lowered.endswith(DOC_PATH_SUFFIXES))
++
++
++def gate_merge_comment(issue, number):
++    """True when a gate comment says the merge of `number` delivered the issue.
++
++    The coordinator writes `VERDICT: PASS. Merged via #N` when a pull request
++    closed the ticket, and that sentence is delivery even when the diff is
++    only documentation.
++    """
++    for comment in issue.get("comments") or []:
++        for match in CLOSE_VERDICT_PASS.finditer(comment.get("body") or ""):
++            if int(match.group(1)) == number:
++                return True
++    return False
++
++
++def pull_guard_reasons(repo, issue, notices=None):
+     """Why a start must be refused because a pull request already carries the issue.
+ 
+     An open pull request means the work is already in flight. A merged one
+     means the work landed, unless the coordinator restarted the issue after
+-    that merge.
++    that merge, or the merge only touched plans and documents and the gate did
++    not record it as the merge that closed the ticket. A merge that changed
++    nothing outside the documentation paths says so on `notices`, and the
++    start goes ahead.
+     """
++    if notices is None:
++        notices = []
+     pulls = referencing_pulls(repo, issue["number"])
+     if not pulls:
+         return []
+@@ -602,8 +668,13 @@ def pull_guard_reasons(repo, issue):
+         if not pull["merged"]:
+             continue
+         merged_at = iso_time(pull["mergedAt"])
+-        if restart is None or merged_at is None or merged_at > restart:
+-            blocking.append(pull)
++        if restart is not None and merged_at is not None and merged_at <= restart:
++            continue
++        files = pull_files(repo, pull["number"], pull.get("changedFiles"))
++        if files and not any(delivers_ticket(name) for name in files) and not gate_merge_comment(issue, pull["number"]):
++            notices.append(f"merged PR #{pull['number']} changed only docs; not treated as delivery")
++            continue
++        blocking.append(pull)
+     if blocking:
+         newest = max(blocking, key=lambda pull: time_key(pull["mergedAt"]))
+         return [f"already merged via #{newest['number']}; close the issue"]
+@@ -821,9 +892,12 @@ def validate_start(cfg, repo, issue, check_text=True):
+     t = parse_ticket(cfg, repo, issue)
+     # The pull request guard comes before the other checks so the refusal
+     # names the pull request that already carries the issue.
+-    pull_reasons = pull_guard_reasons(repo, issue)
++    pull_notices = []
++    pull_reasons = pull_guard_reasons(repo, issue, pull_notices)
+     if pull_reasons:
+         raise Refuse(pull_reasons[0])
++    for notice in pull_notices:
++        print(notice, file=sys.stderr)
+     # A hold is Shyam's own block. It is checked before the state, key and
+     # label rules, so a held ticket says that it waits for Shyam, whatever
+     # else it is missing.
+diff --git a/docs/local-tickets-design.md b/docs/local-tickets-design.md
+index 728570a4..49f8b7c9 100644
+--- a/docs/local-tickets-design.md
++++ b/docs/local-tickets-design.md
+@@ -67,6 +67,7 @@ Start, from the board or the Coordinator, runs one command: `coordq start` with
+ - `message` is the issue body at that moment plus a first line naming the issue URL.
+ - `clientRequestId` makes a retry find the existing thread (`tool_thread_launch` returns it for a known request id) instead of starting a second agent.
+ - The dispatcher refuses to start, with the reason on the card, when a blocker is open, a required template section is empty, the key is missing, or the model check fails.
++- A merged pull request that says `Refs #<ticket>` refuses the start only when it delivered: it changed a file outside `evidence/`, `docs/` and `*.md`, or a gate comment on the ticket says `VERDICT: PASS. Merged via #N`. A merge that changed only plans and documents reports `merged PR #N changed only docs; not treated as delivery` and the start goes ahead, so a plan PR cannot keep a ticket refused after the work moved to an unmerged branch. Agent rules and prompts are not documents for this rule: a `.md` under `.agents/`, `coordinator/config/` or `runtime/`, or one named `AGENTS.md`, `CLAUDE.md` or `SKILL.md`, is delivery. An unreadable, empty or truncated file list counts as delivery.
+ - Queue and cap (6) stay in `coordq`. The board never calls `t3_thread_launch`.
+ 
+ ## Model choice per ticket

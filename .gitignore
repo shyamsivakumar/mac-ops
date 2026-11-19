@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Harbor eval snapshots
+evals/harbor/.cache/
+evals/harbor/tasks/*/environment/snapshot.tar
