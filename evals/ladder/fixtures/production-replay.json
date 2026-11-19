@@ -1,0 +1,10 @@
+{"prs": [
+ {"repo": "o/r", "pr": 1, "created": "2026-11-01", "merged": true, "closed": true, "type": "feature", "model": "codex/gpt-a",
+  "gates": ["Reviewed.\nVERDICT: PASS"]},
+ {"repo": "o/r", "pr": 2, "created": "2026-11-02", "merged": true, "closed": true, "type": "feature", "model": "codex/gpt-a",
+  "gates": ["Found bugs.\nVERDICT: FAIL", "Still bad.\nVERDICT: FAIL", "Fixed.\nVERDICT: PASS"]},
+ {"repo": "o/r", "pr": 3, "created": "2026-11-03", "merged": false, "closed": true, "type": "feature", "model": "codex/gpt-a",
+  "gates": ["Wrong approach.\nVERDICT: FAIL"]},
+ {"repo": "o/r", "pr": 4, "created": "2026-11-04", "merged": false, "closed": false, "type": "feature", "model": "codex/gpt-a",
+  "gates": [null]}
+]}

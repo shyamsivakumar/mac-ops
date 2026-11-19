@@ -1,0 +1,88 @@
+{
+  "since": null,
+  "repos": [
+    "o/r"
+  ],
+  "prs": [
+    {
+      "repo": "o/r",
+      "pr": 1,
+      "model": "codex/gpt-a",
+      "type": "feature",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "o/r",
+      "pr": 2,
+      "model": "codex/gpt-a",
+      "type": "feature",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "o/r",
+      "pr": 3,
+      "model": "codex/gpt-a",
+      "type": "feature",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "o/r",
+      "pr": 4,
+      "model": "codex/gpt-a",
+      "type": "feature",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    }
+  ],
+  "rows": [
+    {
+      "model": "codex/gpt-a",
+      "type": "all",
+      "prs": 4,
+      "too_few": true,
+      "first_gate_known": 3,
+      "first_gate_unknown": 1,
+      "first_gate_pass_rate": 0.333,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.667
+      ],
+      "rounds_to_pass_mean": 2,
+      "rounds_to_pass_median": 2.0,
+      "abandoned_share": 0.25
+    },
+    {
+      "model": "codex/gpt-a",
+      "type": "feature",
+      "prs": 4,
+      "too_few": true,
+      "first_gate_known": 3,
+      "first_gate_unknown": 1,
+      "first_gate_pass_rate": 0.333,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.667
+      ],
+      "rounds_to_pass_mean": 2,
+      "rounds_to_pass_median": 2.0,
+      "abandoned_share": 0.25
+    }
+  ]
+}

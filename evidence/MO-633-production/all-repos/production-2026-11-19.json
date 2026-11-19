@@ -1,0 +1,8757 @@
+{
+  "since": null,
+  "repos": [
+    "digitized/Concerning",
+    "shyamsivakumar/CineJar",
+    "shyamsivakumar/cairn",
+    "shyamsivakumar/catalouge",
+    "shyamsivakumar/fantasy-football-toolkit",
+    "shyamsivakumar/mac-ops",
+    "shyamsivakumar/openscan",
+    "shyamsivakumar/qabot",
+    "shyamsivakumar/recoup",
+    "shyamsivakumar/sams-llm-wiki",
+    "shyamsivakumar/scrapers",
+    "shyamsivakumar/scripture-scroll",
+    "shyamsivakumar/strategy-replay-workbench",
+    "shyamsivakumar/tunerise"
+  ],
+  "prs": [
+    {
+      "repo": "digitized/Concerning",
+      "pr": 59,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 76,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 88,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 89,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 90,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 92,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 95,
+      "model": "unknown",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 96,
+      "model": "unknown",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 97,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 98,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 102,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 104,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 106,
+      "model": "unknown",
+      "type": "unknown",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 105,
+      "model": "unknown",
+      "type": "unknown",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 107,
+      "model": "unknown",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "digitized/Concerning",
+      "pr": 109,
+      "model": "unknown",
+      "type": "unknown",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 55,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 20,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 63,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 71,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 70,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 73,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 75,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/CineJar",
+      "pr": 76,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/cairn",
+      "pr": 71,
+      "model": "router/task/standard",
+      "type": "large",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/cairn",
+      "pr": 69,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "pr": 117,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "pr": 118,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "pr": 119,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "pr": 129,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "pr": 130,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "pr": 120,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 424,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 427,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 430,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 429,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 428,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 431,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 432,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 433,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 434,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 435,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 436,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 438,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 437,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 439,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 440,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 441,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 423,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 442,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 443,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 445,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 446,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 426,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 425,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 469,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 458,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 470,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 468,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 472,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 473,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 474,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 471,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 477,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 479,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 480,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 481,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 482,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 483,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 484,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 485,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 486,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 487,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 488,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 489,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 490,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 491,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 492,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 493,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 494,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 495,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 496,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 497,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 498,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 499,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 500,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 501,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 502,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 503,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 504,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 505,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 506,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 507,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 508,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 509,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 510,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 511,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 512,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 513,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 514,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 515,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 516,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 517,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "pr": 518,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 150,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 151,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 155,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 156,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 159,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 162,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 164,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 165,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 168,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 170,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 171,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 194,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 195,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 198,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 199,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 200,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 201,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 202,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 203,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 204,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 205,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 206,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 207,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 209,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 210,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 211,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 214,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 213,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 215,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 216,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 217,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 218,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 221,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 223,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 224,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 225,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 231,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 232,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 233,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 234,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 236,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 237,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 230,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 220,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 238,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 239,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 240,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 242,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 245,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 247,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 241,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 249,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 251,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 252,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 256,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 258,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 259,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 260,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 261,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 262,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 263,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 265,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 268,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 270,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 274,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 273,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 275,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 276,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 282,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 283,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 285,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 288,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 289,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 290,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 293,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 294,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 295,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 299,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 301,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 300,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 310,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 308,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 311,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS",
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 312,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 313,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS",
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 315,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 304,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 302,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 352,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 359,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 362,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 361,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 367,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 372,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 373,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 389,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 390,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 391,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 392,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 396,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 398,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 399,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 401,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 402,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 404,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 405,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 406,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 408,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 409,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 410,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 411,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 412,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 413,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 414,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 415,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 416,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 417,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 418,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 421,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 422,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 423,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 424,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 425,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 426,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 427,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 429,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 430,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 432,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 434,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 435,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 437,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 439,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 440,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 444,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 431,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 446,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 449,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 451,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 452,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 455,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 457,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 460,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 465,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 467,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 468,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 471,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 472,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 474,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 476,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 478,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 480,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 486,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 487,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 488,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 490,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 492,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 494,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 498,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 499,
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 509,
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 510,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 511,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 513,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 519,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 528,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 529,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 534,
+      "model": "glm/zai/glm-5.3",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 7
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 535,
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 536,
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 537,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 538,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 540,
+      "model": "unknown",
+      "type": "untyped",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 541,
+      "model": "unknown",
+      "type": "untyped",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 542,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 545,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 546,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 547,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 550,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 549,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 552,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 558,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 22
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 559,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 560,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 18
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 566,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 567,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 568,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 569,
+      "model": "unknown",
+      "type": "unknown",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 570,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 579,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 5
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 581,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 580,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 582,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 583,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 584,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 585,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 2
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 588,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 586,
+      "model": "unknown",
+      "type": "unknown",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 589,
+      "model": "pi/claude-sonnet-5-5",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 592,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 595,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 4
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 594,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "PASS",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 597,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 598,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 2
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 599,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 4
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 603,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 602,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 600,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 601,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 609,
+      "model": "glm/zai/glm-5.3",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 608,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 613,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 2
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 615,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 619,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 618,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 626,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 625,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 624,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 623,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 627,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 630,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 632,
+      "model": "glm/zai/glm-5.3",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 634,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 635,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 636,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 638,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 637,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "pr": 291,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 10,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 11,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 12,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 13,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 14,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 16,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/openscan",
+      "pr": 17,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/qabot",
+      "pr": 99,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/qabot",
+      "pr": 100,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/qabot",
+      "pr": 101,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/qabot",
+      "pr": 102,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/recoup",
+      "pr": 47,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/recoup",
+      "pr": 49,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 187,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 188,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 189,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 190,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 191,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 192,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 193,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 194,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 196,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 197,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 198,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 195,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 201,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 202,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 203,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 212,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 213,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 222,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 220,
+      "model": "unknown",
+      "type": "unknown",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 225,
+      "model": "glm/zai/glm-5.3",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "pr": 231,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/scrapers",
+      "pr": 34,
+      "model": "unknown",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/scripture-scroll",
+      "pr": 25,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/scripture-scroll",
+      "pr": 26,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/scripture-scroll",
+      "pr": 29,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/scripture-scroll",
+      "pr": 32,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/scripture-scroll",
+      "pr": 33,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 931,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 933,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 934,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 936,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 937,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 939,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 959,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 961,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 962,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 965,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 966,
+      "model": "codex/gpt-6.1-terra",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 971,
+      "model": "codex/gpt-6.1-terra",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 972,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 973,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 974,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 981,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 986,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 988,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 989,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 992,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 995,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 996,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 997,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 998,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 999,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1004,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1005,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1006,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1007,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1008,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1010,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1011,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1012,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1013,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1014,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1021,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1022,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1024,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1025,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1027,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1028,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1029,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1032,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1034,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1035,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1036,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1037,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1038,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1039,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1040,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1041,
+      "model": "codex/gpt-6.1-terra",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1042,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1045,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1044,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1043,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 993,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 855,
+      "model": "unknown",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1047,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 878,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1048,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1026,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1001,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1050,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 987,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1058,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1059,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1060,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1082,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1075,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1089,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1071,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1072,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1090,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1093,
+      "model": "codex/gpt-6.1-terra",
+      "type": "chore",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1094,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1098,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1099,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1100,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1106,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1115,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1116,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1117,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1122,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1125,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1126,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1118,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1127,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1130,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1131,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1132,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1133,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1136,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1140,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1143,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1144,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1145,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1146,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1147,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1148,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1081,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1150,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1151,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1152,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1153,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1154,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1155,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1156,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1157,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1158,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1159,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1162,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1163,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1164,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1165,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1166,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1167,
+      "model": "router/task/ui",
+      "type": "ui",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1168,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1169,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1170,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1171,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1172,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1173,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1174,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1176,
+      "model": "codex/gpt-6.1-terra",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1177,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1178,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1179,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1180,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1181,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1182,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1183,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1184,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1185,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1186,
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1187,
+      "model": "codex/gpt-6.1-terra",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1188,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1189,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1190,
+      "model": "codex/gpt-6.1-terra",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1191,
+      "model": "codex/gpt-6.1-terra",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1192,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1194,
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1193,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1195,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1196,
+      "model": "unknown",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1197,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1198,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1199,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1200,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1201,
+      "model": "codex/gpt-6.1-terra",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1202,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1204,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1205,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1206,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1207,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1208,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1209,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1210,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1211,
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1212,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1213,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1215,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1217,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1219,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1222,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1226,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1223,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1227,
+      "model": "router/task/chore",
+      "type": "chore",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1228,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1229,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1232,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1233,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1234,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1236,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1239,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1240,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1242,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1244,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1245,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1247,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1249,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1250,
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1252,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1253,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1256,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1254,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1258,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1259,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1260,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1263,
+      "model": "router/task/research",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1262,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1265,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1270,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1271,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1274,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1275,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1276,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1277,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1279,
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1281,
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1282,
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1290,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1291,
+      "model": "glm/zai/glm-5.3",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1293,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1294,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1295,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1296,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1300,
+      "model": "glm/zai/glm-5.3",
+      "type": "research",
+      "verdicts": [
+        "UNKNOWN",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1301,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1302,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1304,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1306,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1308,
+      "model": "unknown",
+      "type": "untyped",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1309,
+      "model": "unknown",
+      "type": "untyped",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "UNKNOWN",
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1315,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 21
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1314,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": 12
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1320,
+      "model": "unknown",
+      "type": "untyped",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1321,
+      "model": "unknown",
+      "type": "untyped",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1324,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 8
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1326,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 18
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1325,
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 7
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1329,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1333,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 2
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1337,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "design",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 4
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1338,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "risky",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 3
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1340,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "pr": 1347,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "risky",
+      "verdicts": [
+        "FAIL"
+      ],
+      "abandoned": false,
+      "ledger_rounds": 1
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 36,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "UNKNOWN"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 27,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 38,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 39,
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 31,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "FAIL"
+      ],
+      "abandoned": true,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 29,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 41,
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "FAIL",
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 32,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 42,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "FAIL",
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    },
+    {
+      "repo": "shyamsivakumar/tunerise",
+      "pr": 30,
+      "model": "router/task/standard",
+      "type": "standard",
+      "verdicts": [
+        "PASS"
+      ],
+      "abandoned": false,
+      "ledger_rounds": null
+    }
+  ],
+  "rows": [
+    {
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "all",
+      "prs": 23,
+      "too_few": false,
+      "first_gate_known": 23,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.087,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.174
+      ],
+      "rounds_to_pass_mean": 4.67,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.348
+    },
+    {
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "design",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "risky",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "claudeAgent/claude-sonnet-5-5",
+      "type": "standard",
+      "prs": 21,
+      "too_few": false,
+      "first_gate_known": 21,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.095,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.19
+      ],
+      "rounds_to_pass_mean": 4.67,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.381
+    },
+    {
+      "model": "codex/gpt-6.1-sol",
+      "type": "all",
+      "prs": 187,
+      "too_few": false,
+      "first_gate_known": 54,
+      "first_gate_unknown": 133,
+      "first_gate_pass_rate": 0.704,
+      "first_gate_pass_ci90": [
+        0.593,
+        0.796
+      ],
+      "rounds_to_pass_mean": 1.35,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.016
+    },
+    {
+      "model": "codex/gpt-6.1-sol",
+      "type": "design",
+      "prs": 71,
+      "too_few": false,
+      "first_gate_known": 23,
+      "first_gate_unknown": 48,
+      "first_gate_pass_rate": 0.826,
+      "first_gate_pass_ci90": [
+        0.696,
+        0.957
+      ],
+      "rounds_to_pass_mean": 1.24,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.014
+    },
+    {
+      "model": "codex/gpt-6.1-sol",
+      "type": "risky",
+      "prs": 97,
+      "too_few": false,
+      "first_gate_known": 30,
+      "first_gate_unknown": 67,
+      "first_gate_pass_rate": 0.633,
+      "first_gate_pass_ci90": [
+        0.5,
+        0.767
+      ],
+      "rounds_to_pass_mean": 1.4,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.021
+    },
+    {
+      "model": "codex/gpt-6.1-sol",
+      "type": "standard",
+      "prs": 19,
+      "too_few": false,
+      "first_gate_known": 1,
+      "first_gate_unknown": 18,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": 3,
+      "rounds_to_pass_median": 3,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "codex/gpt-6.1-terra",
+      "type": "all",
+      "prs": 56,
+      "too_few": false,
+      "first_gate_known": 18,
+      "first_gate_unknown": 38,
+      "first_gate_pass_rate": 0.667,
+      "first_gate_pass_ci90": [
+        0.5,
+        0.833
+      ],
+      "rounds_to_pass_mean": 1.08,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.054
+    },
+    {
+      "model": "codex/gpt-6.1-terra",
+      "type": "chore",
+      "prs": 5,
+      "too_few": false,
+      "first_gate_known": 1,
+      "first_gate_unknown": 4,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "codex/gpt-6.1-terra",
+      "type": "design",
+      "prs": 4,
+      "too_few": true,
+      "first_gate_known": 2,
+      "first_gate_unknown": 2,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "codex/gpt-6.1-terra",
+      "type": "risky",
+      "prs": 20,
+      "too_few": false,
+      "first_gate_known": 3,
+      "first_gate_unknown": 17,
+      "first_gate_pass_rate": 1.0,
+      "first_gate_pass_ci90": [
+        1.0,
+        1.0
+      ],
+      "rounds_to_pass_mean": 1,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.1
+    },
+    {
+      "model": "codex/gpt-6.1-terra",
+      "type": "standard",
+      "prs": 27,
+      "too_few": false,
+      "first_gate_known": 12,
+      "first_gate_unknown": 15,
+      "first_gate_pass_rate": 0.75,
+      "first_gate_pass_ci90": [
+        0.583,
+        0.917
+      ],
+      "rounds_to_pass_mean": 1.1,
+      "rounds_to_pass_median": 1.0,
+      "abandoned_share": 0.037
+    },
+    {
+      "model": "glm/zai/glm-5.3",
+      "type": "all",
+      "prs": 12,
+      "too_few": false,
+      "first_gate_known": 10,
+      "first_gate_unknown": 2,
+      "first_gate_pass_rate": 0.2,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.4
+      ],
+      "rounds_to_pass_mean": 1.33,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.333
+    },
+    {
+      "model": "glm/zai/glm-5.3",
+      "type": "chore",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 1.0,
+      "first_gate_pass_ci90": [
+        1.0,
+        1.0
+      ],
+      "rounds_to_pass_mean": 1,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "glm/zai/glm-5.3",
+      "type": "research",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 0,
+      "first_gate_unknown": 1,
+      "first_gate_pass_rate": null,
+      "first_gate_pass_ci90": null,
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "glm/zai/glm-5.3",
+      "type": "risky",
+      "prs": 4,
+      "too_few": true,
+      "first_gate_known": 3,
+      "first_gate_unknown": 1,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.5
+    },
+    {
+      "model": "glm/zai/glm-5.3",
+      "type": "standard",
+      "prs": 6,
+      "too_few": false,
+      "first_gate_known": 6,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.167,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.5
+      ],
+      "rounds_to_pass_mean": 1.5,
+      "rounds_to_pass_median": 1.5,
+      "abandoned_share": 0.333
+    },
+    {
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "all",
+      "prs": 29,
+      "too_few": false,
+      "first_gate_known": 23,
+      "first_gate_unknown": 6,
+      "first_gate_pass_rate": 0.174,
+      "first_gate_pass_ci90": [
+        0.043,
+        0.304
+      ],
+      "rounds_to_pass_mean": 1.71,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.448
+    },
+    {
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "chore",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 0,
+      "first_gate_unknown": 1,
+      "first_gate_pass_rate": null,
+      "first_gate_pass_ci90": null,
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "design",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": 2,
+      "rounds_to_pass_median": 2,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "research",
+      "prs": 6,
+      "too_few": false,
+      "first_gate_known": 6,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.167,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.5
+      ],
+      "rounds_to_pass_mean": 1.5,
+      "rounds_to_pass_median": 1.5,
+      "abandoned_share": 0.5
+    },
+    {
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "risky",
+      "prs": 6,
+      "too_few": false,
+      "first_gate_known": 3,
+      "first_gate_unknown": 3,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.5
+    },
+    {
+      "model": "minimax/minimax/MiniMax-M3.1-Flash",
+      "type": "standard",
+      "prs": 15,
+      "too_few": false,
+      "first_gate_known": 13,
+      "first_gate_unknown": 2,
+      "first_gate_pass_rate": 0.231,
+      "first_gate_pass_ci90": [
+        0.077,
+        0.385
+      ],
+      "rounds_to_pass_mean": 1.75,
+      "rounds_to_pass_median": 1.0,
+      "abandoned_share": 0.467
+    },
+    {
+      "model": "pi/claude-sonnet-5-5",
+      "type": "all",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": 3,
+      "rounds_to_pass_median": 3,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "pi/claude-sonnet-5-5",
+      "type": "design",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": 3,
+      "rounds_to_pass_median": 3,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "all",
+      "prs": 17,
+      "too_few": false,
+      "first_gate_known": 17,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.176,
+      "first_gate_pass_ci90": [
+        0.059,
+        0.353
+      ],
+      "rounds_to_pass_mean": 2.38,
+      "rounds_to_pass_median": 2.0,
+      "abandoned_share": 0.059
+    },
+    {
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "chore",
+      "prs": 2,
+      "too_few": true,
+      "first_gate_known": 2,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": 2,
+      "rounds_to_pass_median": 2.0,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "design",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": 5,
+      "rounds_to_pass_median": 5,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "risky",
+      "prs": 3,
+      "too_few": true,
+      "first_gate_known": 3,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "pi/deepseek/deepseek-flash",
+      "type": "standard",
+      "prs": 11,
+      "too_few": false,
+      "first_gate_known": 11,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.273,
+      "first_gate_pass_ci90": [
+        0.091,
+        0.545
+      ],
+      "rounds_to_pass_mean": 2,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.091
+    },
+    {
+      "model": "router/task/chore",
+      "type": "all",
+      "prs": 57,
+      "too_few": false,
+      "first_gate_known": 29,
+      "first_gate_unknown": 28,
+      "first_gate_pass_rate": 0.655,
+      "first_gate_pass_ci90": [
+        0.517,
+        0.793
+      ],
+      "rounds_to_pass_mean": 1.26,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.018
+    },
+    {
+      "model": "router/task/chore",
+      "type": "chore",
+      "prs": 57,
+      "too_few": false,
+      "first_gate_known": 29,
+      "first_gate_unknown": 28,
+      "first_gate_pass_rate": 0.655,
+      "first_gate_pass_ci90": [
+        0.517,
+        0.793
+      ],
+      "rounds_to_pass_mean": 1.26,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.018
+    },
+    {
+      "model": "router/task/research",
+      "type": "all",
+      "prs": 21,
+      "too_few": false,
+      "first_gate_known": 18,
+      "first_gate_unknown": 3,
+      "first_gate_pass_rate": 0.778,
+      "first_gate_pass_ci90": [
+        0.611,
+        0.944
+      ],
+      "rounds_to_pass_mean": 1.12,
+      "rounds_to_pass_median": 1.0,
+      "abandoned_share": 0.095
+    },
+    {
+      "model": "router/task/research",
+      "type": "research",
+      "prs": 21,
+      "too_few": false,
+      "first_gate_known": 18,
+      "first_gate_unknown": 3,
+      "first_gate_pass_rate": 0.778,
+      "first_gate_pass_ci90": [
+        0.611,
+        0.944
+      ],
+      "rounds_to_pass_mean": 1.12,
+      "rounds_to_pass_median": 1.0,
+      "abandoned_share": 0.095
+    },
+    {
+      "model": "router/task/standard",
+      "type": "all",
+      "prs": 157,
+      "too_few": false,
+      "first_gate_known": 87,
+      "first_gate_unknown": 70,
+      "first_gate_pass_rate": 0.667,
+      "first_gate_pass_ci90": [
+        0.586,
+        0.747
+      ],
+      "rounds_to_pass_mean": 2.97,
+      "rounds_to_pass_median": 1.0,
+      "abandoned_share": 0.051
+    },
+    {
+      "model": "router/task/standard",
+      "type": "large",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 1.0,
+      "first_gate_pass_ci90": [
+        1.0,
+        1.0
+      ],
+      "rounds_to_pass_mean": 1,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "router/task/standard",
+      "type": "standard",
+      "prs": 156,
+      "too_few": false,
+      "first_gate_known": 86,
+      "first_gate_unknown": 70,
+      "first_gate_pass_rate": 0.663,
+      "first_gate_pass_ci90": [
+        0.581,
+        0.744
+      ],
+      "rounds_to_pass_mean": 3,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.051
+    },
+    {
+      "model": "router/task/ui",
+      "type": "all",
+      "prs": 17,
+      "too_few": false,
+      "first_gate_known": 11,
+      "first_gate_unknown": 6,
+      "first_gate_pass_rate": 0.364,
+      "first_gate_pass_ci90": [
+        0.182,
+        0.636
+      ],
+      "rounds_to_pass_mean": 1.86,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.176
+    },
+    {
+      "model": "router/task/ui",
+      "type": "ui",
+      "prs": 17,
+      "too_few": false,
+      "first_gate_known": 11,
+      "first_gate_unknown": 6,
+      "first_gate_pass_rate": 0.364,
+      "first_gate_pass_ci90": [
+        0.182,
+        0.636
+      ],
+      "rounds_to_pass_mean": 1.86,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.176
+    },
+    {
+      "model": "unknown",
+      "type": "all",
+      "prs": 30,
+      "too_few": false,
+      "first_gate_known": 25,
+      "first_gate_unknown": 5,
+      "first_gate_pass_rate": 0.24,
+      "first_gate_pass_ci90": [
+        0.12,
+        0.36
+      ],
+      "rounds_to_pass_mean": 3.08,
+      "rounds_to_pass_median": 2,
+      "abandoned_share": 0.033
+    },
+    {
+      "model": "unknown",
+      "type": "chore",
+      "prs": 1,
+      "too_few": true,
+      "first_gate_known": 1,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.0,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.0
+      ],
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "unknown",
+      "type": "design",
+      "prs": 2,
+      "too_few": true,
+      "first_gate_known": 0,
+      "first_gate_unknown": 2,
+      "first_gate_pass_rate": null,
+      "first_gate_pass_ci90": null,
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "unknown",
+      "type": "standard",
+      "prs": 13,
+      "too_few": false,
+      "first_gate_known": 12,
+      "first_gate_unknown": 1,
+      "first_gate_pass_rate": 0.167,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.333
+      ],
+      "rounds_to_pass_mean": 1.6,
+      "rounds_to_pass_median": 2,
+      "abandoned_share": 0.077
+    },
+    {
+      "model": "unknown",
+      "type": "ui",
+      "prs": 2,
+      "too_few": true,
+      "first_gate_known": 0,
+      "first_gate_unknown": 2,
+      "first_gate_pass_rate": null,
+      "first_gate_pass_ci90": null,
+      "rounds_to_pass_mean": null,
+      "rounds_to_pass_median": null,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "unknown",
+      "type": "unknown",
+      "prs": 6,
+      "too_few": false,
+      "first_gate_known": 6,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.5,
+      "first_gate_pass_ci90": [
+        0.167,
+        0.833
+      ],
+      "rounds_to_pass_mean": 2.8,
+      "rounds_to_pass_median": 1,
+      "abandoned_share": 0.0
+    },
+    {
+      "model": "unknown",
+      "type": "untyped",
+      "prs": 6,
+      "too_few": false,
+      "first_gate_known": 6,
+      "first_gate_unknown": 0,
+      "first_gate_pass_rate": 0.167,
+      "first_gate_pass_ci90": [
+        0.0,
+        0.5
+      ],
+      "rounds_to_pass_mean": 6,
+      "rounds_to_pass_median": 7,
+      "abandoned_share": 0.0
+    }
+  ]
+}
