@@ -1,6 +1,14 @@
 {
   "build": [
     {
+      "id": "terra",
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
+      },
+      "vendor": "openai"
+    },
+    {
       "id": "minimax",
       "selection": {
         "instanceId": "minimax",
@@ -31,14 +39,6 @@
         "model": "default"
       },
       "vendor": "cursor"
-    },
-    {
-      "id": "terra",
-      "selection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-terra"
-      },
-      "vendor": "openai"
     },
     {
       "id": "sonnet",

@@ -17,6 +17,12 @@ Nothing else keeps a copy of a model id.
 A builder that ran on Terra (OpenAI) is reviewed by an Anthropic entry.
 Sol and other OpenAI API models never build.
 
+The `build` list order is terra, minimax, glm, deepseek, cursor, sonnet. Terra is
+also first in the `fix` list, so build and fix rounds share the Codex quota. When
+the Codex provider is blocked, the list falls through to minimax as before. The
+production numbers behind the order are in
+`evidence/MO-633-build-order/why.md`.
+
 ## Blocked providers
 
 A provider that fails with no credits, a usage limit or an auth error is
