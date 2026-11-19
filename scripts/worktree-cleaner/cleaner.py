@@ -2494,6 +2494,17 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["reasons"] = ["worktree_has_ignored_files" if ignored else "worktree_changed_before_remove"]
                         continue
                     kept = 0
+                    # A lock that arrived after the check keeps the checkout.
+                    # Git refuses to remove a locked worktree, and the check
+                    # says so plainly, so the marker and the registration both
+                    # stay where the owner put them.
+                    if _worktree_is_locked(registration):
+                        _release_index_lock(index_lock)
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_locked"]
+                        continue
                     # Git removes the worktree and its registration. It refuses a
                     # worktree that is dirty, locked or changed under the check, so a lock
                     # taken after the check keeps the checkout. The index lock stays held

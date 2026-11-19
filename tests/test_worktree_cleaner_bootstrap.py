@@ -766,6 +766,37 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             "a locked worktree has to be seen as locked",
         )
 
+    def test_git_refuses_to_remove_a_locked_worktree(self):
+        # The removal leaves the worktree to Git, and Git refuses to remove
+        # a worktree its owner locked. The checkout, the registration and
+        # the marker all stay, so a lock that arrives after the check of the
+        # cleaner keeps the work.
+        repo = Path(self.tmp.name) / "locked-repo-two"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / "file.txt").write_text("text\n", encoding="utf-8")
+        git(repo, "add", "file.txt")
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "text"],
+            check=True,
+            capture_output=True,
+        )
+        worktree = Path(self.tmp.name) / "locked-worktree-two"
+        git(repo, "worktree", "add", str(worktree), "-b", "side")
+        git(repo, "worktree", "lock", str(worktree))
+        registration = cleaner._worktree_registration(worktree)
+        self.assertIsNotNone(registration, "the registration has to be found")
+        with self.assertRaises(cleaner.SafetyError):
+            cleaner.git(repo, "worktree", "remove", str(worktree))
+        self.assertTrue(worktree.exists(), "a locked worktree has to stay")
+        self.assertTrue(registration.exists(), "the registration of a locked worktree has to stay")
+        self.assertTrue(
+            (registration / "locked").exists(),
+            "the lock marker of a locked worktree has to stay",
+        )
+
     def _renamed_repo(self, name: str) -> Path:
         repo = Path(self.tmp.name) / name
         repo.mkdir()
