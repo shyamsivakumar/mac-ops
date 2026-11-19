@@ -38,10 +38,10 @@ Additional Ascend entries can set `ascend: true`.
 
 Queued heads are saved in queue.json's gatedHeads map in the same atomic write
 as their queue item. Keep that map across restarts. A recorded gate whose thread is failed, interrupted, or completed without a
-line that is exactly `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the next run
+unindented line outside a code fence that is exactly `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the next run
 on the next allowed reviewer. The retry, its head record and the dead thread
-it replaces (`retryOf`) are one queue write, made under the block store lock
-and then the queue lock. Each head is retried at most
+it replaces (`retryOf`) are one queue write. The dead thread is read before any lock is taken; the choice
+of reviewer and the write run under the block store lock and then the queue lock. Each head is retried at most
 once per run. Live gates, gates with verdicts, and missing receipts stay deduplicated.
 Dry-run reports `regating` without writing state. A new head can receive a gate.
 
