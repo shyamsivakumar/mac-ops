@@ -6,6 +6,7 @@ from __future__ import annotations
 import concurrent.futures
 import ctypes
 import datetime
+import errno
 import fcntl
 import hashlib
 import json
@@ -568,9 +569,12 @@ def _native_process_info(pid: int) -> Optional[ProcessInfo]:
     function.restype = ctypes.c_int
     info = _ProcBsdInfo()
     size = ctypes.sizeof(info)
+    ctypes.set_errno(0)
     received = function(pid, 3, 0, ctypes.byref(info), size)
     if received == 0:
-        return None
+        if ctypes.get_errno() == errno.ESRCH:
+            return None
+        raise HeavyError("macOS process identity lookup failed")
     if received != size or info.pid != pid:
         raise HeavyError("macOS process identity response was incomplete")
     token = "{}.{:06d}".format(info.start_sec, info.start_usec)
