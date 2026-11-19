@@ -11,6 +11,11 @@ if _BIN_DIR not in sys.path:
 
 from gate_bar import GATE_BAR
 from tick_health import tick_alarm
+import gh_gateway
+
+# Every gh call here goes through the helper, and the helper uses this
+# module's launcher, so a test that replaces `subprocess` still sees them.
+gh_gateway.set_runner(lambda: subprocess.run)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -24,26 +29,17 @@ TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_
 # A launch learns its thread only after the call, so its reservedThreads record
 # carries this prefix and reconcile knows the thread may not be listed live yet.
 LAUNCH_RECORD = "launch:"
-WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
-SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
-DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
-from gate_reviewers import REVIEWER_CHAIN
+# One message is one item. A started item is recorded for this long, so the
+# same message is refused while the thread that took it still works it, while
+# a message the board asks for again after its thread stopped still goes out.
+MESSAGE_TTL = float(os.environ.get("COORDQ_MESSAGE_TTL", "1800"))
+# A reservation covers one step in flight. Past this age the step is over,
+# whatever its reply said, so the slot it holds goes back to the queue.
+RESERVATION_TIMEOUT = float(os.environ.get("COORDQ_RESERVATION_TIMEOUT", "180"))
+import models as model_list
 
-ASTRA_MODEL = REVIEWER_CHAIN[0]
-OPUS_MODEL = REVIEWER_CHAIN[-1]
-TASK_MODELS = {
-    "standard": {"instanceId": "router", "model": "task/standard"},
-    "large": {"instanceId": "router", "model": "task/standard"},
-    "ui": {"instanceId": "router", "model": "task/ui"},
-    "research": {"instanceId": "router", "model": "task/research"},
-    "rca": {"instanceId": "router", "model": "task/rca"},
-    "chore": {"instanceId": "router", "model": "task/chore"},
-    "worker": {"instanceId": "router", "model": "task/standard"},
-    "panel": WORKER_MODEL,
-    "risky": SOL_MODEL,
-    "design": SOL_MODEL,
-    "review": OPUS_MODEL,
-}
+BUILD_TASK_TYPES = ("standard", "large", "ui", "research", "rca", "chore", "worker", "risky", "design")
+TASK_TYPES = BUILD_TASK_TYPES + ("fix", "review", "panel")
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
@@ -75,6 +71,9 @@ STAGE = "stage:todo"
 # tick can see it. A PR that is skipped on the same head this many times is
 # stuck; a new head starts the count again.
 STUCK_COUNT = 3
+# The calls kept in reserve before an optional read is skipped. The lane
+# driver, gatekeep and the shift share this one floor.
+FLOOR = gh_gateway.floor()
 STUCK_FILE = "gatekeep-stuck.txt"
 # A gate that dies without a verdict is queued again, but a reviewer that
 # cannot run at all fails the same way, so a retry with no end relaunches it
@@ -151,27 +150,57 @@ def gate_label(state):
     return f"coordq #{state['id']}" if state["id"] is not None else "an earlier gate"
 
 
+def task_list(task_type):
+    return {"fix": "fix", "review": "review", "panel": "panel"}.get(task_type, "build")
+
+
 def with_model(args):
     task_type = args.get("taskType")
-    if task_type and task_type not in TASK_MODELS:
-        return None, f"refused: unknown taskType {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_MODELS))}"
+    if task_type not in TASK_TYPES:
+        return None, f"refused: a launch needs a taskType, got {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_TYPES))}"
     resolved = dict(args)
-    resolved.pop("taskType", None)
     if not resolved.get("modelSelection"):
-        if not task_type:
-            return None, "refused: a launch needs a taskType or a modelSelection"
-        resolved["modelSelection"] = TASK_MODELS[task_type]
-    elif task_type == "review" and not is_gate_model(resolved["modelSelection"]):
-        return None, (f"refused: taskType 'review' runs on the gate model "
-                      f"{{'instanceId': 'claudeAgent', 'model': 'claude-opus-5-5'}}, "
-                      f"but the payload names {resolved['modelSelection']!r}")
+        if task_type == "panel":
+            return None, "refused: a panel launch names its model from the panel list"
+        entry = model_list.first_available(task_list(task_type))
+        if entry is None:
+            return None, f"refused: every model for taskType {task_type!r} is blocked"
+        resolved["modelSelection"] = entry["selection"]
+    else:
+        list_name = task_list(task_type)
+        allowed = model_list.find(resolved["modelSelection"], (list_name,))
+        if allowed is None:
+            return None, (f"refused: taskType {task_type!r} runs on a model from the {list_name} list, "
+                          f"but the payload names {resolved['modelSelection']!r}")
+        if model_list.is_blocked(allowed["selection"]):
+            return None, (f"refused: {model_list.identity(allowed['selection'])} is blocked, "
+                          f"so taskType {task_type!r} cannot run on it")
+        resolved["modelSelection"] = allowed["selection"]
     return resolved, None
 
 
+LEGACY_ROUTE_TASK_TYPES = {f"task/{name}": name for name in ("standard", "ui", "research", "rca", "chore")}
+
+
+def queued_launch_args(tool, args):
+    """A launch queued before taskType was required carries none, so the list that names its model classifies it.
+
+    A router route the old task table stored becomes its task type and resolves through the current build
+    list. A model no list names stays unclassified and is refused at dispatch."""
+    if tool != "t3_thread_launch" or "taskType" in args or not args.get("modelSelection"):
+        return args
+    selection = args["modelSelection"]
+    if selection.get("instanceId") == "router" and selection.get("model") in LEGACY_ROUTE_TASK_TYPES:
+        return {**{k: v for k, v in args.items() if k != "modelSelection"},
+                "taskType": LEGACY_ROUTE_TASK_TYPES[selection["model"]]}
+    for list_name, task_type in (("review", "review"), ("build", "worker"), ("fix", "fix")):
+        if model_list.find(args["modelSelection"], (list_name,)):
+            return {**args, "taskType": task_type}
+    return args
+
+
 def is_gate_model(selection):
-    return (isinstance(selection, dict)
-            and selection.get("instanceId") == OPUS_MODEL["instanceId"]
-            and selection.get("model") == OPUS_MODEL["model"])
+    return model_list.find(selection, ("review",)) is not None
 
 
 def tool_refusal(tool):
@@ -206,6 +235,7 @@ def call(tool, args, rules=None):
             if rules is None:
                 return 1, "agent rules were not loaded"
             args = with_rules(args, rules)
+        args = {key: value for key, value in args.items() if key != "taskType"}
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
@@ -273,34 +303,256 @@ def thread_status(thread_id):
     return json.loads(out).get("thread", {}).get("status")
 
 
-def reconcile_reservations(queue, active, statuses=None):
+def message_identity(item):
+    """The title and the target of one message.
+
+    The title is the one the caller supplied, under `messageTitle`. A send the
+    caller left untitled carries its thread id as its display title, and that
+    is not a message identity: two callers can send two different
+    instructions to one thread without a title, and neither is the other's
+    duplicate. An item written before the identity was kept falls back to its
+    title, which its caller supplied.
+
+    The target is the thread the message goes to. A launch has no thread yet,
+    so its client request names the work it starts: a second launch for the
+    same work is the same message.
+    """
+    args = item.get("args") or {}
+    target = str(args.get("threadId") or args.get("clientRequestId") or "")
+    if "messageTitle" in item:
+        title = item.get("messageTitle") or ""
+    else:
+        # An item written before the identity was kept. Its title is the
+        # caller's when the payload names it and when it is not the thread id
+        # the old code fell back to: an untitled send stored its thread id
+        # there, and that says nothing about what the caller meant.
+        title = item.get("title") or ""
+        if title and title == target and args.get("title") != title:
+            title = ""
+    return (str(title), target)
+
+
+def prune_messages(queue, live_ids=None):
+    """Drop the started-message records that are no longer running.
+
+    A record whose thread is still live is kept however old it is: that
+    thread is working the message now, so the queue must keep refusing a
+    second copy of it (ticket #544 counts a running item). The age only
+    retires a record once its thread is gone. An unreadable thread list
+    (live_ids None) keeps every record, the same way duplicate_message
+    counts an unreadable list as a duplicate: a refused start costs one
+    attempt, and dropping the record costs a second thread on the work.
+
+    Returns whether anything was dropped, so a caller saves only a change.
+    """
+    started = queue.get("started") or []
+    now = time.time()
+    kept = [record for record in started
+            if isinstance(record, dict)
+            and (live_ids is None
+                 or record.get("thread") in live_ids
+                 or now - float(record.get("at") or 0) < MESSAGE_TTL)]
+    changed = len(kept) != len(started)
+    queue["started"] = kept
+    return changed
+
+
+def dispatch_is_active(queue, record):
+    """Whether a started record is the dispatch running on its thread now.
+
+    A thread runs one message at a time, so a later message started on the
+    same thread makes the earlier one spent: the thread moved on, and a caller
+    asking for the earlier message again is asking for real work. A record
+    whose thread is not known yet (a launch whose reply carried none) cannot
+    be ordered against another, so it stays active.
+    """
+    thread = record.get("thread") or ""
+    if not thread:
+        return True
+    at = record.get("at") or 0
+    for other in queue.get("started") or []:
+        if other is record or not isinstance(other, dict):
+            continue
+        if other.get("thread") != thread:
+            continue
+        later = other.get("at") or 0
+        if later > at or (later == at and (other.get("id") or 0) > (record.get("id") or 0)):
+            return False
+    return True
+
+
+def duplicate_message(queue, title, target, live_ids=None, started_before=None):
+    """The queued or running item that already carries this message, or None.
+
+    A started message counts while the thread that took it is live, and only
+    while it is the latest message started on that thread: once a later
+    message starts there, the earlier one is spent and asking for it again is
+    real work. An unreadable thread list counts a record too, because a refused
+    start costs one attempt while a second copy of the message costs a second
+    thread on the same work.
+
+    An action key names one board action, but it does not make a second copy
+    of the same message a different message: the queue names a message by its
+    title and its target, and the lane puts the whole head in its title, so
+    messages for different heads stay distinct without the key. A message with
+    no title or no target is never a duplicate: without a title the caller
+    supplied, or without a thread or a client request, there is nothing to
+    tell two of them apart, and refusing one would drop work the queue was
+    asked to start.
+    """
+    if not title or not target:
+        return None
+    for item in queue.get("items") or []:
+        if message_identity(item) != (title, target):
+            continue
+        return "queued", item.get("id")
+    for record in queue.get("started") or []:
+        if (record.get("title"), record.get("target")) != (title, target):
+            continue
+        if not dispatch_is_active(queue, record):
+            # A later message started on this thread, so this one is spent and
+            # asking for it again is real work.
+            continue
+        if live_ids is None:
+            # An unreadable thread list cannot say a thread stopped.
+            return "started", record.get("id")
+        if started_before is not None and (record.get("id"), record.get("at")) not in started_before:
+            # Recorded after the list was read, so the list cannot say whether
+            # its thread is live, and it is the message just taken.
+            return "started", record.get("id")
+        if str(record.get("id")) in (queue.get("reserved") or {}):
+            # The queue still holds this launch's slot: a launch learns its
+            # thread only after the call, so a record whose thread the list
+            # does not show yet is an unfinished launch, not a spent message.
+            return "started", record.get("id")
+        if record.get("thread") in live_ids:
+            return "started", record.get("id")
+    return None
+
+
+def started_snapshot(queue):
+    """The started-message records as they stood before the thread list read.
+
+    A record added since then names a message another start has just taken,
+    and the list cannot say whether its thread is live, so it counts as
+    running.
+    """
+    return {(record.get("id"), record.get("at"))
+            for record in queue.get("started") or [] if isinstance(record, dict)}
+
+
+def record_started(queue, item, thread):
+    """Remember a message the queue started, so it is not queued again."""
+    title, target = message_identity(item)
+    queue.setdefault("started", []).append({"id": item.get("id"), "title": title,
+                                            "target": target, "thread": thread or "",
+                                            "actionKey": item.get("actionKey") or "",
+                                            "at": time.time()})
+
+
+def started_thread(queue, item, key):
+    """The thread a dispatched item works, as far as the queue knows it."""
+    if item.get("tool") == "t3_thread_send":
+        return str((item.get("args") or {}).get("threadId") or "")
+    record = (queue.get("reservedThreads") or {}).get(key) or ""
+    if isinstance(record, str) and record.startswith(LAUNCH_RECORD):
+        return record[len(LAUNCH_RECORD):]
+    return ""
+
+
+def live_thread_ids():
+    """The live thread ids, or None when they cannot be read."""
+    try:
+        return active_thread_ids()
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError):
+        return None
+
+
+def reservation_snapshot(queue):
+    """The reservations as they stood when the thread list was read.
+
+    A reservation taken after that read is not judged by it: the thread it
+    names may have been free when the list was made, and busy a moment later.
+    """
+    threads = queue.get("reservedThreads") or {}
+    return {key: {"at": at, "thread": threads.get(key)}
+            for key, at in (queue.get("reserved") or {}).items()}
+
+
+def thread_status_or_none(thread):
+    """The status of `thread`, or None when it cannot be read."""
+    try:
+        return thread_status(thread)
+    except (RuntimeError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def launch_statuses(queue, live_ids):
+    """The status of every launch the snapshot holds that is not live.
+
+    The lookups happen before the writer lock is taken, so a slow t3 call
+    never blocks a start. A launch thread can finish before any pass lists it
+    live, so its status is what says whether its slot is still in use.
+    """
+    statuses = {}
+    reserved = queue.get("reserved") or {}
+    threads = queue.get("reservedThreads") or {}
+    now = time.time()
+    for key, at in reserved.items():
+        record = threads.get(key)
+        if not (isinstance(record, str) and record.startswith(LAUNCH_RECORD)):
+            continue
+        if now - float(at) >= RESERVATION_TIMEOUT:
+            continue
+        thread = record[len(LAUNCH_RECORD):]
+        if not thread or thread in live_ids:
+            continue
+        statuses[thread] = thread_status_or_none(thread)
+    return statuses
+
+
+def reconcile_reservations(queue, active, statuses=None, snapshot=None):
+    """Release the reservations no thread uses any more.
+
+    With `snapshot` only the reservations that stood when the thread list was
+    read are judged: a reservation taken since then names a thread the list
+    cannot speak for, and releasing it would free a slot a live launch holds.
+    """
     reserved = queue.setdefault("reserved", {})
     threads = queue.setdefault("reservedThreads", {})
     known = {} if statuses is None else statuses
+    released = 0
     for key, at in list(reserved.items()):
         record = threads.get(key)
+        if snapshot is not None:
+            before = snapshot.get(key)
+            if before is None or before.get("at") != at or before.get("thread") != record:
+                continue
         launched = isinstance(record, str) and record.startswith(LAUNCH_RECORD)
         thread = record[len(LAUNCH_RECORD):] if launched else record
-        expired = time.time() - at >= 600
+        expired = time.time() - at >= RESERVATION_TIMEOUT
         seen = bool(thread) and thread in active
         finished = False
         if launched and not (expired or seen):
             # A launch thread can finish before any pass lists it live.
-            if thread not in known:
-                try:
-                    known[thread] = thread_status(thread)
-                except (RuntimeError, ValueError, TypeError, AttributeError):
-                    known[thread] = None
-            finished = known[thread] in TERMINAL_STATUSES
+            if thread and thread not in known:
+                # With a snapshot the statuses were read before the writer
+                # lock was taken. A launch they do not cover keeps its slot:
+                # looking it up here would hold every start for the length of
+                # a t3 call.
+                known[thread] = None if snapshot is not None else thread_status_or_none(thread)
+            finished = known.get(thread) in TERMINAL_STATUSES
         if not (expired or seen or finished):
             continue
         if expired:
-            log(f"EXPIRED reservation #{key} after ten minutes")
+            log(f"EXPIRED reservation #{key} after {int(RESERVATION_TIMEOUT)}s")
         elif finished:
             log(f"released reservation #{key}: thread {thread} is {known[thread]}")
         reserved.pop(key)
         threads.pop(key, None)
-    save(queue)
+        released += 1
+    if released:
+        save(queue)
 
 
 def undispatchable_tool(item):
@@ -344,6 +596,8 @@ def drain():
             log(f"{e}, nothing started")
             return
         reconcile_reservations(queue, active, statuses)
+        if prune_messages(queue, active):
+            save(queue)
         if not ready:
             return
         n = max(n, len(active))
@@ -351,9 +605,15 @@ def drain():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
         item = ready[0]
-        steps = item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]
+        try:
+            steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
+                     for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
+            needs_rules = any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps)
+        except model_list.ModelsError as e:
+            log(f"#{item['id']} not started, the model files cannot be read: {e}")
+            return
         rules = None
-        if any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps):
+        if needs_rules:
             try:
                 rules = read_rules()
             except RuntimeError as e:
@@ -375,12 +635,23 @@ def drain():
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
                 code, out = call(step["tool"], step["args"], rules)
-            except (OSError, subprocess.SubprocessError) as e:
+            except model_list.ModelsError as e:
+                for unused in keys[index:]:
+                    queue["reserved"].pop(unused, None)
+                    queue["reservedThreads"].pop(unused, None)
+                item["pre"] = item.get("pre", [])[index:]
+                if item.get("actionKey"):
+                    set_action_key_state(queue, item["actionKey"], "queued")
+                save(queue)
+                log(f"#{item['id']} not started, the model files cannot be read: {e}")
+                return
+            except (OSError, subprocess.SubprocessError, ValueError) as e:
                 code, out = 1, str(e)
             if code != 0:
                 for unused in keys[index:]:
                     queue["reserved"].pop(unused, None)
                     queue["reservedThreads"].pop(unused, None)
+                item["pre"] = item.get("pre", [])[index:]
                 save(queue)
                 break
             if step["tool"] == "t3_thread_launch":
@@ -425,6 +696,7 @@ def drain():
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
+            record_started(queue, item, started_thread(queue, item, reservation))
             if item.get("actionKey"):
                 set_action_key_state(queue, item["actionKey"], "dispatched")
             save(queue)
@@ -524,14 +796,23 @@ def cmd_start(a):
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
+        requested = args
         args, refusal = with_model(args)
         if refusal:
             die(refusal)
+        if not requested.get("modelSelection"):
+            args = requested
         if wants_rules(args, task_type):
             try:
                 read_rules()
             except RuntimeError as e:
                 die(f"refused: {e}")
+    # The thread list is read before the writer lock is taken: a slow t3 call
+    # under it would hold every other start for its length. The started-message
+    # records it speaks for are snapshotted first, because a record added since
+    # then cannot be judged by it.
+    started_before = started_snapshot(load())
+    live = live_thread_ids() if started_before else None
     with Lock(True):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
@@ -543,7 +824,18 @@ def cmd_start(a):
                 die(f"refused: the action key {key} is already "
                     f"{action_key_state(queue, record.get('id'), record.get('state'))} "
                     f"{where}")
-        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        explicit = a.title or args.get("title") or ""
+        item = {"id": queue["next"], "tool": tool, "args": args,
+                "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
+                "priority": a.priority}
+        title, target = message_identity(item)
+        if prune_messages(queue, live):
+            save(queue)
+        duplicate = duplicate_message(queue, title, target, live,
+                                      started_before if started_before else None)
+        if duplicate:
+            die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
+                f"already {duplicate[0]} as coordq #{duplicate[1]}")
         if key:
             item["actionKey"] = key
         queue["next"] += 1
@@ -587,11 +879,11 @@ def mark_refill():
 
 def search_stage_todo(owner):
     """The open stage:todo issues of one owner, oldest first."""
-    run = subprocess.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
+    run = gh_gateway.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
                           "--label", STAGE, "--sort", "created", "--order", "asc",
                           "--limit", str(REFILL_LIMIT),
                           "--json", "repository,number,title,createdAt,updatedAt,labels"],
-                         capture_output=True, text=True, timeout=40)
+                         timeout=40, limit=FLOOR)
     if run.returncode:
         raise RuntimeError(f"GitHub search failed for {owner}: {run.stderr.strip()[:200]}")
     return json.loads(run.stdout)
@@ -677,9 +969,9 @@ def board_candidates():
     occupied = live_lane_repositories(cfg)
     rows = []
     for repo in cfg["repos"]:
-        run = subprocess.run(["gh", "api", "--paginate", "--slurp",
+        run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
                               f"repos/{repo}/issues?state=open&per_page=100"],
-                             capture_output=True, text=True, timeout=40)
+                             timeout=40, limit=FLOOR)
         if run.returncode:
             raise RuntimeError(f"open issue snapshot failed for {repo}")
         for page in json.loads(run.stdout):
@@ -969,16 +1261,46 @@ def cmd_drop(a):
 
 
 def cmd_status(a):
+    # A reservation outlives its launch when nothing reconciles it, so the read
+    # reconciles before it reports: a slot a finished launch no longer needs
+    # never shows as held. The thread list and the launch statuses are read
+    # before the writer lock is taken, because a t3 call under the lock would
+    # hold every start for its length, and the reservations they speak for are
+    # snapshotted first, so a launch reserved after the read is left alone.
+    before = load()
+    snapshot = reservation_snapshot(before)
+    live_ids = active_thread_ids() if snapshot else None
+    statuses = launch_statuses(before, live_ids) if live_ids is not None else {}
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    print(json.dumps({"cap": cap(), "live": live(), "reserved": load().get("reserved", {}), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck, "tickAlarm": tick_alarm()}))
+    threads = live()
+    # A start can enqueue between a read and a write, and saving an older
+    # snapshot would drop the item it just queued. So the queue is read,
+    # reconciled and written under the same lock the start takes.
+    with Lock(True):
+        queue = load()
+        if live_ids is not None:
+            try:
+                reconcile_reservations(queue, live_ids, statuses, snapshot)
+            except (RuntimeError, ValueError, KeyError, TypeError, OSError) as e:
+                log(f"status left the reservations alone: {e}")
+            queue = load()
+        report = {"cap": cap(), "live": threads, "reserved": queue.get("reserved", {}),
+                  "queued": len(queue["items"]), "failed": queue.get("failed", []),
+                  "stuck": stuck, "tickAlarm": tick_alarm()}
+    print(json.dumps(report))
 
 
 
-def gh_json(endpoint):
-    run = subprocess.run(["gh", "api", "--paginate", "--slurp", endpoint],
-                         capture_output=True, text=True, timeout=40)
+def gh_json(endpoint, optional=True, fresh=False):
+    """Read one endpoint as JSON.
+
+    `optional` is what the floor applies to: the polling reads that run on
+    a timer, and not an explicit `gate` an operator asked for."""
+    run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
+                         timeout=40, limit=FLOOR if optional else None,
+                         fresh=fresh)
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
@@ -1093,7 +1415,9 @@ def builder_models(thread, runs):
 
 
 def reviewer_model(models):
-    return ASTRA_MODEL
+    """The first unblocked review model of a vendor other than the builder's, or None."""
+    reviewers = model_list.reviewers(models)
+    return reviewers[0]["selection"] if reviewers else None
 
 
 def quota_failure(value):
@@ -1126,19 +1450,21 @@ def quota_failure(value):
 
 
 def fallback_reviewer(queue, key, current, models=()):
-    if current not in REVIEWER_CHAIN:
+    listed = [model_list.identity(e["selection"]) for e in model_list.entries("review")]
+    if model_list.identity(current) not in listed:
         return None
+    later = listed[listed.index(model_list.identity(current)) + 1:]
     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
-    for selection in REVIEWER_CHAIN[REVIEWER_CHAIN.index(current) + 1:]:
-        identity = f"{selection['instanceId']}:{selection['model']}"
-        if identity not in tried:
+    for entry in model_list.reviewers(models):
+        identity = model_list.identity(entry["selection"])
+        if identity in later and identity not in tried:
             tried.append(identity)
-            return selection
+            return entry["selection"]
     return None
 
 
-def failed_gate_reviewer(queue, key, current, failure):
-    selection = fallback_reviewer(queue, key, current)
+def failed_gate_reviewer(queue, key, current, failure, models=()):
+    selection = fallback_reviewer(queue, key, current, models)
     if selection is not None:
         return selection
     state = queue.setdefault("gateInfrastructure", {}).setdefault(key, {"retries": 0})
@@ -1157,7 +1483,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     message = build_gate_brief(settings, repo, issue, number, head, publisher,
                                proof=proof, proof_path=proof_path, proof_state=proof_state)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
-            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
 
 
@@ -1180,8 +1506,8 @@ def gate_candidates(config):
     Every event carries the pull request it belongs to, so the caller can
     count the skips of a pull request and report the ones it cannot gate.
     """
-    login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                               capture_output=True, text=True, timeout=40)
+    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
+                               timeout=40, limit=FLOOR)
     if login_run.returncode:
         raise RuntimeError("cannot identify authenticated GitHub user")
     login = login_run.stdout.strip()
@@ -1223,15 +1549,24 @@ def gate_candidates(config):
                 models = builder_models(thread, runs)
                 if models:
                     model = reviewer_model(models)
+                    if model is None:
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                               "reason": "every gate reviewer of a vendor other than the builder's is blocked"}
+                        continue
                 else:
                     # A build whose executed model is not known is still
                     # gated, on the backstop reviewer. The check below
                     # still decides whether the pull request is gated.
                     model = backstop_model(thread, runs)
+                    if model is None:
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                               "reason": "every gate reviewer is blocked"}
+                        continue
                     if (repo, number) not in noted:
                         print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
                               f"{model['instanceId']} {model['model']}", file=sys.stderr)
                         noted.add((repo, number))
+                # The gatekeep scan is optional polling: the floor applies.
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1268,6 +1603,12 @@ def executed_models(value):
 def cmd_gatekeep(a):
     with open(a.config) as f:
         config = json.load(f)
+    # The gate is an optional read: below the shared floor it waits for the
+    # quota instead of spending the last calls and stalling every caller.
+    remaining = gh_gateway.remaining_or_none()
+    if remaining and min(remaining.values()) < FLOOR:
+        print(f"gatekeep skipped: below the API floor {FLOOR} {remaining}", flush=True)
+        return
     try:
         counts = load_counts()
         seen = set()
@@ -1326,7 +1667,7 @@ def cmd_gatekeep(a):
                         continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
-                    model = failed_gate_reviewer(queue, key, current, data)
+                    model = failed_gate_reviewer(queue, key, current, data, event.get("builderModels", []))
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
@@ -1357,6 +1698,10 @@ def cmd_gatekeep(a):
                               "at": time.time() if retries else None, "givenUp": False}
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
+    except gh_gateway.ApiBudgetExhausted as e:
+        # The quota fell below the floor mid-run: the gate is optional, so
+        # this run stops where it is instead of spending the last calls.
+        print(f"gatekeep skipped: {e}", flush=True)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
         die(f"gatekeep stopped: {e}")
 
@@ -1407,8 +1752,9 @@ def cmd_fix(a):
             receipts = json.load(f)
     except (OSError, ValueError) as e:
         die(f"refused: the dispatch receipts could not be read: {e}")
-    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
-                         capture_output=True, text=True, timeout=40)
+    # An explicit request is not optional polling: the floor is not applied,
+    # so a below-floor quota still lets the operator's read through.
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=40)
     if run.returncode:
         die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
     pr = json.loads(run.stdout)
@@ -1481,7 +1827,7 @@ def cmd_fix(a):
 
 
 def backstop_model(thread, runs):
-    return ASTRA_MODEL
+    return reviewer_model([])
 
 
 def check_names_head(body, head, publisher, checks):
@@ -1499,7 +1845,8 @@ def check_names_head(body, head, publisher, checks):
     return False
 
 
-def gate_request(repo, pr, settings, config, receipts, login):
+def gate_request(repo, pr, settings, config, receipts, login, optional=True,
+                 fresh=False):
     """Return the gate request of one open pull request, or None.
 
     The backstop gates a head the queue's own gatekeeper left alone. The
@@ -1513,8 +1860,11 @@ def gate_request(repo, pr, settings, config, receipts, login):
         if not thread_id:
             continue
         thread, runs = read_builder_thread(thread_id)
-        model = backstop_model(thread, runs)
-        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+        model = reviewer_model(builder_models(thread, runs))
+        if model is None:
+            return None
+        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
+                           optional=optional, fresh=fresh)
         checks = [x for x in statuses if x["context"] == "srw/agent-check"]
         publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
         if not check_names_head(body, head, publisher, checks):
@@ -1523,14 +1873,18 @@ def gate_request(repo, pr, settings, config, receipts, login):
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state), builder_models(thread, runs)
-    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
+                       optional=optional, fresh=fresh)
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
         return None
+    model = backstop_model({}, [])
+    if model is None:
+        return None
     key = f"gate:{repo}#{number}:{head}"
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
-    return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),
+    return key, gate_args(settings, repo, None, number, head, publisher, model,
                            proof=proof, proof_path=proof_path, proof_state=proof_state), []
 
 
@@ -1556,8 +1910,9 @@ def cmd_gate(a):
     settings = (config.get("repos") or {}).get(repo)
     if not settings:
         die(f"refused: {repo} is not on the board")
-    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
-                         capture_output=True, text=True, timeout=40)
+    # An explicit request is not optional polling: the floor is not applied,
+    # so a below-floor quota still lets the operator's read through.
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=40)
     if run.returncode:
         die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
     pr = json.loads(run.stdout)
@@ -1575,12 +1930,13 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
-    login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                               capture_output=True, text=True, timeout=40)
+    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
     if login_run.returncode:
         die("refused: the authenticated GitHub user is unknown")
     login = login_run.stdout.strip()
-    found = gate_request(repo, pr, settings, config, load_receipts(), login)
+    # An explicit gate is a required read: the floor applies to polling.
+    found = gate_request(repo, pr, settings, config, load_receipts(), login,
+                         optional=False, fresh=True)
     if not found:
         die(
             f"refused: no passing builder check of {repo}#{number} names the "
