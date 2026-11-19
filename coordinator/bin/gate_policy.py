@@ -1,3 +1,4 @@
+import json
 import re
 import sys
 from pathlib import Path
@@ -13,6 +14,18 @@ from gate_bar import GATE_BAR
 
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
               "shyamsivakumar/catalouge"]
+PERSONAL_OWNER = "shyamsivakumar"
+ASCEND_PARTS = ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni")
+
+
+def merge_repos():
+    for candidate in (Path(_BIN_DIR).parent / "config" / "tickets.json", Path.home() / ".coordinator" / "tickets.json"):
+        if candidate.exists():
+            return list(json.loads(candidate.read_text())["repos"])
+    raise FileNotFoundError("tickets.json not found next to the module or in ~/.coordinator")
+
+
+MERGE_REPOS = merge_repos()
 
 # The sentence a prompt pull request ends on: it never merges itself.
 PROMPT_NO_MERGE = (
@@ -36,8 +49,17 @@ def brief_base(message, head):
     return found.group(1) if found else None
 
 
-def manual_merge(settings):
-    return settings.get("merge") == "manual"
+def merge_mode(repo, settings, ascend=None):
+    if ascend is None:
+        ascend = (settings.get("ascend", False) or repo.split("/")[0] != PERSONAL_OWNER
+                  or any(part in repo for part in ASCEND_PARTS))
+    if settings.get("merge") == "manual" or ascend:
+        return "manual"
+    return "lane" if repo in MERGE_REPOS else "reviewer"
+
+
+def brief_merger(message):
+    return "reviewer-merges" if "gh pr merge" in message else "lane-merges"
 
 
 def manual_gate_ending():
@@ -46,25 +68,21 @@ def manual_gate_ending():
 
 def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False):
     import proof_file
-    ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
-    if ascend_override is not None:
-        ascend = ascend_override
+    mode = merge_mode(repo, settings, ascend_override)
     merge = (PROMPT_NO_MERGE if prompt else
-             "Ascend repo: do not merge; stop at the verdict." if ascend else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-    lane = repo in LANE_REPOS and not ascend and not prompt
+    provides_ask = (f"Verify every Provides claim from the ticket on head {head}. Only if all hold, include the exact line "
+                    f"`PROVIDES: PASS {head}` before the final CHECK and VERDICT lines.")
+    lane = mode == "lane" and not prompt
     if lane:
-        merge = ("Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. "
-                 f"Verify every Provides claim from the ticket on head {head}. Only if all hold, include the exact line "
-                 f"`PROVIDES: PASS {head}` before the final CHECK and VERDICT lines.")
-    fast_forward = ("" if ascend or lane or not fast_forward_main else
+        merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. " + provides_ask
+    fast_forward = ("" if lane or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
                     "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
                     "`git merge --ff-only origin/main` there; when no worktree has main checked out, run `git fetch origin main:main`. "
                     "Report `git rev-parse main origin/main` (one hash twice) or the exact refusal. Fast-forward no other repository.")
     close = ("" if lane else
              PROMPT_CLOSE_NOTHING if prompt else
-             " Ascend repo: do not close the issue." if ascend else
              f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. "
              f"Before the close, run the close checklist: `python3 coordinator/bin/close_check.py --repo {repo} --pr {number}"
              + (f" --issue {issue}" if issue is not None else "") + "` (the coordinator's mac-ops checkout holds it). "
@@ -89,7 +107,7 @@ Tag findings critical, major, minor with file:line. Runtime changes outside the 
 {GATE_BAR}
 {ANSWER_FORMAT}
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{manual_gate_ending() if manual_merge(settings) else merge + fast_forward + close + " Never call emp. Never print secrets."}"""
-    if not fast_forward_main and not manual_merge(settings):
+{manual_gate_ending() + " " + provides_ask if mode == "manual" else merge + fast_forward + close + " Never call emp. Never print secrets."}"""
+    if not fast_forward_main and mode != "manual":
         message = message.replace(" Never call emp. Never print secrets.", "\nNever call emp. Never print secrets.")
     return message
