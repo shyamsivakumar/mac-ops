@@ -407,18 +407,25 @@ def gate_pipeline():
         ("earlier-fail-later-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"], None),
         ("retry-replaced-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
         ("merge-timeout-but-merged", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("older-running-newer-pass", repo, "PASS", "VERDICT: PASS", {}, [], None),
+        ("older-pass-newer-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("no-receipts-file", repo, "absent", "", {}, [chain[0]], None),
         ("retargeted-after-pass", repo, "PASS", "VERDICT: PASS", {}, [chain[0]], None),
     ]
     gate_key = f"gate:{repo}#20:{head}"
     extra = {"stray-pass-ignored": {"stray": "VERDICT: PASS"},
              "earlier-fail-later-pass": {gate_key + ":old:retry": "old"},
-             "retry-replaced-pass": {gate_key + ":old:retry": "old"}}
+             "retry-replaced-pass": {gate_key + ":old:retry": "old"},
+             "older-running-newer-pass": {gate_key + ":old:retry": "old"},
+             "older-pass-newer-pass": {gate_key + ":old:retry": "old"}}
     replies = {"stray": "VERDICT: PASS", "old": "dead\nVERDICT: FAIL"}
-    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}}
+    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": "VERDICT: PASS"}}
+    live_by_case = {"older-running-newer-pass": {"old"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
         receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate", "base:gate": "main"}
         receipts.update(extra.get(name, {}))
+        receipts.update({f"base:{v}": "main" for k, v in extra.get(name, {}).items() if k.startswith("gate:")})
         thread_replies = {**replies, **replies_by_case.get(name, {}), "gate": reply}
         pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
@@ -492,11 +499,11 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args, thread_replies=thread_replies):
+        def threads(tool, args, thread_replies=thread_replies, live=live_by_case.get(name, ())):
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
-                return {"thread": {"status": "completed"},
+                return {"thread": {"status": "running" if args["threadId"] in live else "completed"},
                         "items": [{"type": "assistant_message", "text": thread_replies[args["threadId"]]}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -521,7 +528,8 @@ def gate_pipeline():
                                                 baseRefName="other" if name == "retargeted-after-pass" else "main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
-                Path(scratch, "receipts.json").write_text(json.dumps(receipts))
+                if name != "no-receipts-file":
+                    Path(scratch, "receipts.json").write_text(json.dumps(receipts))
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
             try:
