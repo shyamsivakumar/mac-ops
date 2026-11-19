@@ -22,6 +22,29 @@ SPEC = json.loads((ROOT / "runtime/agents/deny-rules.json").read_text())
 HOOK = ROOT / "runtime/agents/deny-merge-guard.py"
 
 
+def git(repo, *args):
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+    )
+
+
+def make_repo(path, branch, upstream=None, remote="origin", config=()):
+    """A repo on `branch` with a committed file and a local bare `remote`."""
+    bare = Path(str(path) + "-remote.git")
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", branch, str(path)], check=True)
+    git(path, "commit", "-q", "--allow-empty", "-m", "init")
+    git(path, "remote", "add", remote, str(bare))
+    if upstream:
+        git(path, "config", f"branch.{branch}.remote", remote)
+        git(path, "config", f"branch.{branch}.merge", upstream)
+    for key, value in config:
+        git(path, "config", key, value)
+    return path
+
+
 def load(path):
     return json.loads(Path(path).read_text())
 
@@ -171,11 +194,26 @@ class InstallTest(FakeHome):
         prior = {"driver": "claudeAgent", "displayName": "mine", "enabled": False}
         t3_path.write_text(json.dumps({"providerInstances": {conf["instanceId"]: prior}}))
         self.installer.install(SPEC)
+        installed = load(t3_path)["providerInstances"][conf["instanceId"]]
+        self.assertFalse(installed["enabled"])
         self.installer.uninstall(SPEC)
         self.assertEqual(load(settings_path)["permissions"]["deny"], [kept])
         self.assertEqual(hook.read_text(), "# user hook\n")
         self.assertEqual(guard.read_text(), "// user guard\n")
         self.assertEqual(load(t3_path)["providerInstances"][conf["instanceId"]], prior)
+
+    def test_a_failed_install_rolls_back_what_it_changed(self):
+        blocked = self.home / SPEC["pi_instances"][-1][2:] / "extensions"
+        blocked.parent.mkdir(parents=True, exist_ok=True)
+        blocked.write_text("a file where the extensions directory must go\n")
+        with self.assertRaises(OSError):
+            self.installer.install(SPEC)
+        settings = load(self.home / ".claude/settings.json")
+        self.assertEqual(settings["permissions"].get("deny") or [], [])
+        self.assertEqual(settings["hooks"]["PreToolUse"], [])
+        self.assertFalse((self.home / ".claude/hooks/deny-merge-guard.py").exists())
+        self.assertFalse(self.installer.status(SPEC)["t3_gate_instance"])
+        self.assertFalse(self.installer.receipt.exists())
 
     def test_t3_gate_instance_is_installed_and_removed(self):
         conf = SPEC["t3_gate_instance"]
@@ -365,17 +403,10 @@ class HookTest(unittest.TestCase):
         "--match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"
     )
 
-    def scratch_repo(self, branch, upstream=None):
-        repo = Path(tempfile.mkdtemp(prefix="deny-rules-repo-", dir=TMP))
-        self.addCleanup(shutil.rmtree, repo, True)
-        subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True)
-        if upstream:
-            for key, value in (("remote", "origin"), ("merge", upstream)):
-                subprocess.run(
-                    ["git", "-C", str(repo), "config", f"branch.{branch}.{key}", value],
-                    check=True,
-                )
-        return repo
+    def scratch_repo(self, branch, upstream=None, **options):
+        root = Path(tempfile.mkdtemp(prefix="deny-rules-repo-", dir=TMP))
+        self.addCleanup(shutil.rmtree, root, True)
+        return make_repo(root / "work", branch, upstream, **options)
 
     def decided(self, command, role=None, cwd=None):
         payload = {"tool_name": "Bash", "tool_input": {"command": command}}
@@ -450,13 +481,27 @@ class HookTest(unittest.TestCase):
         on_main = self.scratch_repo("main", "refs/heads/main")
         on_task = self.scratch_repo("t3/x", "refs/heads/t3/x")
         task_tracking_main = self.scratch_repo("t3/y", "refs/heads/main")
-        for repo in (on_main, task_tracking_main):
-            for command in (
-                "git push",
-                "git push origin",
-                "git push -u origin",
-                "git push origin HEAD",
-            ):
+        task_remote_pushes_main = self.scratch_repo(
+            "t3/z",
+            "refs/heads/t3/z",
+            config=[("remote.origin.push", "refs/heads/t3/z:refs/heads/main")],
+        )
+        task_on_remote_named_main = self.scratch_repo(
+            "t3/w", remote="main", config=[("push.default", "current")]
+        )
+        self.assertIsNone(
+            self.decided("git push main", cwd=task_on_remote_named_main),
+            "a remote named main, pushing a task branch",
+        )
+        for command in ("git push", "git push origin"):
+            decision = self.decided(command, cwd=task_remote_pushes_main)
+            self.assertIsNotNone(decision, command)
+            self.assertEqual(decision["permissionDecision"], "deny", command)
+        for repo, commands in (
+            (on_main, ("git push", "git push origin", "git push -u origin", "git push origin HEAD")),
+            (task_tracking_main, ("git push", "git push origin")),
+        ):
+            for command in commands:
                 decision = self.decided(command, cwd=repo)
                 self.assertIsNotNone(decision, (repo, command))
                 self.assertEqual(decision["permissionDecision"], "deny", command)
@@ -633,8 +678,8 @@ console.log(JSON.stringify(out));
         gate = {"MAC_OPS_ROLE": "gate"}
         on_main = scratch / "on-main"
         on_task = scratch / "on-task"
-        for repo, branch in ((on_main, "main"), (on_task, "t3/x")):
-            subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True)
+        make_repo(on_main, "main", "refs/heads/main")
+        make_repo(on_task, "t3/x", "refs/heads/t3/x")
         cases = [
             ({"toolName": "read", "input": {"path": ascend}}, True, {}),
             ({"toolName": "edit", "input": {"path": str(fake_env)}}, True, {}),

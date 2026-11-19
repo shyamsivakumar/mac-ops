@@ -1,6 +1,6 @@
-PASS installer status: every pi guard installed and current: {"/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.pi/agent/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.pi/agent-minimax/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.pi/agent-glm/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.pi/agent-deepseek/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.pi/agent-openai-api/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.pi/agent-anthropic-api/extensions/deny-guard.ts": "installed"}
+PASS installer status: every pi guard installed and current: {"/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.pi/agent/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.pi/agent-minimax/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.pi/agent-glm/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.pi/agent-deepseek/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.pi/agent-openai-api/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.pi/agent-anthropic-api/extensions/deny-guard.ts": "installed"}
 PASS installer status: claude deny list complete: missing=[]
-PASS installer status: merge hook file present: /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.claude/hooks/deny-merge-guard.py
+PASS installer status: merge hook file present: /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.claude/hooks/deny-merge-guard.py
 PASS pi guard agent: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
 PASS pi guard agent-minimax: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
 PASS pi guard agent-glm: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
@@ -14,7 +14,7 @@ not run claude permissions.deny: edit an env file: Edit(**/.env) is installed; C
 not run claude permissions.deny: read the auth file: Read(**/auth.json) is installed; Claude evaluates it in-session, so run `claude -p 'read the auth file'` in a scratch folder to record the decision
 not run claude permissions.deny: read the ssh directory: Read(~/.ssh/**) is installed; Claude evaluates it in-session, so run `claude -p 'read the ssh directory'` in a scratch folder to record the decision
 not run claude permissions.deny: read a token file: Read(**/*token*.json) is installed; Claude evaluates it in-session, so run `claude -p 'read a token file'` in a scratch folder to record the decision
-PASS claude PreToolUse hook registered in settings.json: python3 /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.XBpp/.claude/hooks/deny-merge-guard.py
+PASS claude PreToolUse hook registered in settings.json: python3 /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/fakehome.u1WH/.claude/hooks/deny-merge-guard.py
 PASS claude hook: unpinned gh pr merge: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
 PASS claude hook: pinned gh pr merge as a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
 PASS claude hook: pinned gh pr merge from a gate role (not executed): allow (no decision)
@@ -53,6 +53,8 @@ PASS claude hook: push HEAD on main: deny (mac-ops deny rules (#530): pushing to
 PASS claude hook: bare push on a task branch: allow (no decision)
 PASS claude hook: push to origin with no refspec on a task branch: allow (no decision)
 PASS claude hook: explicit task-branch push from a task branch: allow (no decision)
+PASS claude hook: task-branch push to a remote named main: allow (no decision)
+PASS claude hook: implicit push that remote.origin.push maps to main: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
 PASS claude hook: --all push from a task branch: deny (mac-ops deny rules (#530): bulk pushes (--all, --mirror, matching or w)
 PASS claude hook: --mirror push from a task branch: deny (mac-ops deny rules (#530): bulk pushes (--all, --mirror, matching or w)
 PASS claude hook: matching refspec push from a task branch: deny (mac-ops deny rules (#530): bulk pushes (--all, --mirror, matching or w)
@@ -61,7 +63,7 @@ PASS claude hook: bare push on main reached with cd: deny (mac-ops deny rules (#
 PASS claude hook: gh -R x/y pr merge 1 from a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
 PASS claude hook: gh --repo=x/y pr merge 1 from a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
 PASS claude hook: gh -R x/y pr view 1: allow (no decision)
-PASS pushing a task branch is still allowed (scratch remote): pushed to /private/tmp/claude-501/deny-rules-probe-0kr7hmku/remote.git: ['refs/heads/t3/deny-probe']
+PASS pushing a task branch is still allowed (scratch remote): pushed to /private/tmp/claude-501/deny-rules-probe-hn2_qdml/remote.git: ['refs/heads/t3/deny-probe']
 PASS scratch remote has no main branch (nothing was pushed to main): refs on scratch remote: ['refs/heads/t3/deny-probe']
 
-58 passed, 0 failed, 7 not run
+60 passed, 0 failed, 7 not run

@@ -21,7 +21,7 @@
     "protected_reason": "pushing to main or master is denied; push a task branch instead",
     "bulk_reason": "bulk pushes (--all, --mirror, matching or wildcard refspecs) can write main or master; push a named task branch",
     "ambiguous_reason": "this push has no explicit destination branch that can be resolved; name a task branch, for example `git push -u origin <task-branch>`",
-    "note": "A push is judged from the destination ref of its refspecs (the right side of src:dst, with a leading + or refs/heads/ ignored), read from the real git push command the shell would run. A push with no refspec (or HEAD) writes the checked-out branch and its upstream, resolved from the command's directory; it is refused when either is protected or cannot be resolved, as is any push after a cd. --all, --mirror, matching and wildcard refspecs are refused. A protected branch name anywhere else in the command text (a PR body, an hc message, a commit message, a heredoc) is not a push to it."
+    "note": "A push is judged from the destination ref of its refspecs (the right side of src:dst, with a leading + or refs/heads/ ignored), read from the real git push command the shell would run. A push with no refspec (or HEAD) goes where git's configuration sends it, so the destination comes from `git push --dry-run --porcelain` with the same options in the command's directory; it is refused when a listed destination is protected, when git fails, times out or lists nothing, and after a cd. --all, --mirror, matching and wildcard refspecs are refused. A protected branch name anywhere else in the command text (a PR body, an hc message, a commit message, a heredoc) is not a push to it."
   },
   "t3_gate_instance": {
     "settings": "~/.t3/userdata/settings.json",

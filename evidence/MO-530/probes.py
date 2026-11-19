@@ -128,6 +128,8 @@ DESTINATION_ROWS = [
 
 MAIN_REPO = SCRATCH / "repo-main"
 TASK_REPO = SCRATCH / "repo-task"
+REMOTE_MAIN_REPO = SCRATCH / "repo-remote-named-main"
+REMAP_REPO = SCRATCH / "repo-remote-push-maps-to-main"
 # (label, command, refused, repo the command runs in). A push with no refspec
 # writes the checked-out branch and its upstream, so the repo decides it; bulk
 # pushes and gh global options are refused or allowed from any repo.
@@ -138,6 +140,8 @@ CWD_ROWS = [
     ("bare push on a task branch", "git push", False, TASK_REPO),
     ("push to origin with no refspec on a task branch", "git push -u origin", False, TASK_REPO),
     ("explicit task-branch push from a task branch", "git push origin t3/deny-probe", False, TASK_REPO),
+    ("task-branch push to a remote named main", "git push main", False, REMOTE_MAIN_REPO),
+    ("implicit push that remote.origin.push maps to main", "git push", True, REMAP_REPO),
     ("--all push from a task branch", "git push --all origin", True, TASK_REPO),
     ("--mirror push from a task branch", "git push --mirror origin", True, TASK_REPO),
     ("matching refspec push from a task branch", "git push origin :", True, TASK_REPO),
@@ -650,18 +654,40 @@ def probe_installer_status() -> None:
     )
 
 
+def make_scratch_repo(
+    repo: Path, branch: str, upstream: str | None, remote: str, config: list[tuple[str, str]]
+) -> None:
+    bare = Path(str(repo) + "-remote.git")
+    who = ["-c", "user.name=probe", "-c", "user.email=probe@example.invalid"]
+    steps = [
+        ["git", "init", "-q", "--bare", str(bare)],
+        ["git", "init", "-q", "-b", branch, str(repo)],
+        ["git", *who, "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "init"],
+        ["git", "-C", str(repo), "remote", "add", remote, str(bare)],
+    ]
+    if upstream:
+        steps += [
+            ["git", "-C", str(repo), "config", f"branch.{branch}.remote", remote],
+            ["git", "-C", str(repo), "config", f"branch.{branch}.merge", upstream],
+        ]
+    steps += [["git", "-C", str(repo), "config", key, value] for key, value in config]
+    for step in steps:
+        subprocess.run(step, check=True, timeout=60)
+
+
 def make_scratch_repos() -> None:
-    for repo, branch, upstream in (
-        (MAIN_REPO, "main", "refs/heads/main"),
-        (TASK_REPO, "t3/deny-probe", "refs/heads/t3/deny-probe"),
-    ):
-        subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True, timeout=60)
-        for key, value in (("remote", "origin"), ("merge", upstream)):
-            subprocess.run(
-                ["git", "-C", str(repo), "config", f"branch.{branch}.{key}", value],
-                check=True,
-                timeout=60,
-            )
+    make_scratch_repo(MAIN_REPO, "main", "refs/heads/main", "origin", [])
+    make_scratch_repo(TASK_REPO, "t3/deny-probe", "refs/heads/t3/deny-probe", "origin", [])
+    make_scratch_repo(
+        REMOTE_MAIN_REPO, "t3/deny-probe", None, "main", [("push.default", "current")]
+    )
+    make_scratch_repo(
+        REMAP_REPO,
+        "t3/deny-probe",
+        "refs/heads/t3/deny-probe",
+        "origin",
+        [("remote.origin.push", "refs/heads/t3/deny-probe:refs/heads/main")],
+    )
 
 
 def main() -> int:

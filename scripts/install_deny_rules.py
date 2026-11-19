@@ -280,11 +280,18 @@ class Installer:
         settings = dict(current or {})
         instances = dict(settings.get("providerInstances") or {})
         prior = instances.get(conf["instanceId"])
+        base = prior or {}
         instances[conf["instanceId"]] = {
-            "driver": conf["driver"],
-            "displayName": conf["displayName"],
-            "enabled": True,
+            **base,
+            "driver": base.get("driver", conf["driver"]),
+            "displayName": base.get("displayName", conf["displayName"]),
+            "enabled": base.get("enabled", True),
             "environment": [
+                entry
+                for entry in base.get("environment") or []
+                if entry.get("name") != conf["env"]["name"]
+            ]
+            + [
                 {
                     "name": conf["env"]["name"],
                     "value": conf["env"]["value"],
@@ -303,7 +310,7 @@ class Installer:
         if not isinstance(settings, dict):
             return "absent"
         instances = settings.get("providerInstances")
-        if not isinstance(instances, dict):
+        if not saved.get("t3_touched") or not isinstance(instances, dict):
             return "absent"
         instance_id = spec["t3_gate_instance"]["instanceId"]
         if instance_id not in instances:
@@ -333,9 +340,35 @@ class Installer:
             self.uninstall(spec, quiet=True)
         self.backups = self.state / "deny-rules-backups" / str(time.time_ns())
         report: dict = {"owner": OWNER, "actions": []}
-        prior_files: dict = {}
+        receipt = {
+            "owner": OWNER,
+            "spec_sha256": digest(SPEC_PATH),
+            "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "backups": str(self.backups),
+            "managed_deny": [],
+            "hook_registered": False,
+            "prior_files": {},
+            "scope_copies": [expand(e, self.root) for e in spec["scope_files"]["copies"]],
+            "scope_claude": expand(spec["scope_files"]["claude"], self.root),
+            "t3_gate_instance": spec["t3_gate_instance"]["instanceId"],
+            "t3_touched": False,
+            "t3_prior": None,
+        }
+        try:
+            self.apply(spec, receipt, report)
+        except BaseException:
+            atomic_write(self.receipt, json.dumps(receipt, indent=2) + "\n")
+            self.uninstall(spec, quiet=True)
+            raise
+        atomic_write(self.receipt, json.dumps(receipt, indent=2) + "\n")
+        report["backups"] = str(self.backups)
+        return report
 
+    def apply(self, spec: dict, receipt: dict, report: dict) -> None:
+        prior_files = receipt["prior_files"]
         merged = self.merge_claude(spec)
+        receipt["managed_deny"] = merged["deny_added"]
+        receipt["hook_registered"] = merged["hook_registered"]
         report["actions"].append(f"claude settings: +{len(merged['deny_added'])} deny entries")
         report["actions"].append(
             "claude merge hook: " + ("registered" if merged["hook_registered"] else "already present")
@@ -347,7 +380,8 @@ class Installer:
         shutil.copyfile(MERGE_HOOK_SOURCE, hook_target)
         os.chmod(hook_target, os.stat(MERGE_HOOK_SOURCE).st_mode | stat.S_IXUSR)
         report["actions"].append("claude merge hook file installed")
-        t3_prior = self.merge_t3_gate(spec)
+        receipt["t3_prior"] = self.merge_t3_gate(spec)
+        receipt["t3_touched"] = True
         report["actions"].append("t3 gate instance: installed")
 
         guard = render_guard(spec, self.root)
@@ -361,25 +395,8 @@ class Installer:
         for entry in spec["scope_files"]["copies"]:
             path = Path(expand(entry, self.root))
             report["actions"].append(f"scope {path}: " + self.write_scope_section(path, spec))
-        claude_md = Path(expand(spec["scope_files"]["claude"], self.root))
+        claude_md = Path(receipt["scope_claude"])
         report["actions"].append(f"scope {claude_md}: " + self.write_scope_section(claude_md, spec))
-
-        receipt = {
-            "owner": OWNER,
-            "spec_sha256": digest(SPEC_PATH),
-            "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "backups": str(self.backups),
-            "managed_deny": merged["deny_added"],
-            "hook_registered": merged["hook_registered"],
-            "prior_files": prior_files,
-            "scope_copies": [expand(e, self.root) for e in spec["scope_files"]["copies"]],
-            "scope_claude": str(claude_md),
-            "t3_gate_instance": spec["t3_gate_instance"]["instanceId"],
-            "t3_prior": t3_prior,
-        }
-        atomic_write(self.receipt, json.dumps(receipt, indent=2) + "\n")
-        report["backups"] = str(self.backups)
-        return report
 
     def uninstall(self, spec: dict, quiet: bool = False) -> dict:
         saved = load_json(self.receipt)

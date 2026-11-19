@@ -23,11 +23,14 @@ each tool checks tools, and written into the scope files as prose.
    branch name anywhere else in the command text, such as a PR body, an `hc`
    message, a commit message or a heredoc, is not a push to it. The same
    command-position rule applies to the merge command. A push with no
-   refspec (`git push`, `git push origin`, `git push origin HEAD`) writes the
-   checked-out branch and the upstream branch it tracks, so the guards read
-   both from the command's directory and refuse the push when either is
-   protected or cannot be resolved (detached HEAD, `--git-dir`, or a `cd`
-   earlier in the command). `--all`, `--mirror`, `:` and wildcard refspecs are
+   refspec (`git push`, `git push origin`, `git push origin HEAD`, a push to
+   a remote named `main`) goes where git's configuration sends it
+   (`remote.<name>.push`, `push.default`, the upstream branch), so the guards
+   ask git: `git push --dry-run --porcelain` with the same options, run in the
+   command's directory, lists the refs it would update and writes nothing.
+   The push is refused when a listed destination is protected, and refused
+   when git fails, times out (8 seconds) or lists nothing, or when a `cd`
+   earlier in the command changed the directory. `--all`, `--mirror`, `:` and wildcard refspecs are
    refused because they can write `main`. `gh` global options such as
    `-R owner/repo` are skipped before the merge rule reads the subcommand.
 4. No `gh pr merge` for a builder. Only a gate thread merges, and only with
@@ -105,7 +108,9 @@ added. Uninstall removes only those entries: the Claude deny entries install
 added (entries that were already there stay), the hook registration if install
 added it, and the managed scope sections. A hook file, pi guard file or
 `claudeAgentGate` instance that existed before install is restored from its
-backup, and one that did not exist is removed.
+backup, and one that did not exist is removed. An existing gate instance
+keeps its `enabled` flag and its other environment entries; install only adds
+the role entry. An install that fails part way rolls back what it changed.
 
 ## Rollback
 

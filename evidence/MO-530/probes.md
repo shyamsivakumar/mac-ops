@@ -36,7 +36,7 @@ not write about the list itself.
 
 ## Probe results
 
-`python3 evidence/MO-530/probes.py` → `58 passed, 0 failed, 7 not run`, see
+`python3 evidence/MO-530/probes.py` → `60 passed, 0 failed, 7 not run`, see
 `probes.txt`. The seven `not run` rows are the Claude `permissions.deny`
 entries: Claude Code evaluates them inside a session, so the probe names the
 live check instead of counting the file's text as a refusal. The rows that
@@ -73,6 +73,9 @@ all six pi instances and for Claude Code:
   - bare push on main (upstream `origin/main`) refused, also `git push -u
     origin` and `git push origin HEAD`; the same bare pushes on a task branch
     allowed, and an explicit task-branch push allowed
+  - a task-branch push to a remote named `main` allowed (git's dry run shows
+    the task branch); an implicit push that `remote.origin.push` maps to `main`
+    refused (destinations come from `git push --dry-run --porcelain`)
   - `--all`, `--mirror`, `:` and a wildcard refspec refused; a bare push on main
     reached with `git -C` or `cd` refused
   - `gh -R x/y pr merge 1` and `gh --repo=x/y pr merge 1` from a builder
