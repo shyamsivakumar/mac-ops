@@ -229,6 +229,73 @@ export function blocksOf(text) {
   return out;
 }
 
+const STATUS_BLOCK = /(?:^|\n)```status[ \t]*\n([\s\S]*?)\n```[ \t\n]*$/;
+const STATUS_FENCE = /^\s*```status\b/m;
+const STATUS_TICK = /^[*_#>\s]*status\b/i;
+const QUESTION_LINE = /\?[*_`")\s]*$/m;
+
+const isText = (value) => typeof value === "string";
+const listOf = (value, ok) => Array.isArray(value) && value.every((entry) => entry && ok(entry));
+
+function statusFrom(raw) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const need = (n) => isText(n.id) && isText(n.text) && Number.isFinite(Date.parse(n.since));
+  const stuck = (s) => isText(s.key) && isText(s.why) && isText(s.action);
+  if (!data || !listOf(data.needs, need) || !listOf(data.stuck, stuck) || !isText(data.note)) return null;
+  return {
+    needs: data.needs.map((n) => ({ id: n.id, text: n.text, since: Date.parse(n.since) })),
+    stuck: data.stuck.map((s) => ({ key: s.key, why: s.why, action: s.action })),
+    note: data.note.trim(),
+  };
+}
+
+function statusMessage(text) {
+  const tail = STATUS_BLOCK.exec(text);
+  if (!tail) return { kind: !STATUS_FENCE.test(text) && STATUS_TICK.test(text) ? "bare" : "plain" };
+  const status = statusFrom(tail[1]);
+  return status ? { kind: "card", status, prose: text.slice(0, tail.index).trim() } : { kind: "plain" };
+}
+
+function statusItem(found) {
+  const { status, prose } = found;
+  const question = status.needs.length === 0 && QUESTION_LINE.test(prose);
+  return {
+    k: "status",
+    status,
+    question,
+    blocks: blocksOf(prose),
+    lines: prose.split("\n").filter((l) => l.trim()).length,
+    foldable: prose !== "" && !question,
+  };
+}
+
+const statusSig = ({ needs, stuck, note }) => JSON.stringify([needs, stuck, note]);
+
+export function tickEntries(turns, quiet, isOpen) {
+  const entries = [];
+  const sameRun = (a, b) => quiet(b) && b.status.sig === a.status.sig;
+  for (let i = 0; i < turns.length; i++) {
+    const first = turns[i];
+    let last = i;
+    if (quiet(first)) while (last + 1 < turns.length && sameRun(first, turns[last + 1])) last++;
+    if (last > i) {
+      const hidden = turns.slice(i, last);
+      const key = `ticks-${first.role}-${first.at}`;
+      const open = isOpen(key);
+      entries.push({ key, run: hidden, open });
+      if (open) for (const m of hidden) entries.push({ key: `${m.role}-${m.at}`, turn: m });
+    }
+    entries.push({ key: `${turns[last].role}-${turns[last].at}`, turn: turns[last] });
+    i = last;
+  }
+  return entries;
+}
+
 const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0, model: "", errored: false, failure: null });
 
 const TEMPLATE_MARK = /\]<\][^\[\]]*\[>\[\w*/g;
@@ -264,7 +331,7 @@ function failureItem(m) {
 }
 
 function lastTurn(p, at) {
-  if (p.turns.at(-1)?.role !== "coordinator") p.turns.push({ role: "coordinator", at, items: [] });
+  if (p.turns.at(-1)?.role !== "coordinator") p.turns.push({ role: "coordinator", at, items: [], tick: Boolean(p.turns.at(-1)?.tick) });
   const turn = p.turns.at(-1);
   turn.view = null;
   return turn;
@@ -317,6 +384,7 @@ function feedModel(p, rec, at) {
   lastTurn(p, at).items.push({ k: "event", text: `Switched to ${rec.modelId} (${rec.provider})` });
 }
 
+const STATUS_TICK_PROMPT = /^Status tick\b/;
 const HC_FROM = /^<hc\s+from="([^"]*)"/;
 const ANSWERS = /^Decisions:\n/;
 const squash = (text) => text.replace(/\s+/g, " ").trim();
@@ -346,6 +414,7 @@ function feedUser(p, m, at) {
     role: hc && !composed(text, at) ? "session" : "you",
     from: hc?.[1] ?? "",
     at,
+    tick: STATUS_TICK_PROMPT.test(text),
     items: [...(text ? [{ k: "text", text }] : []), ...(images.length ? [{ k: "images", images }] : [])],
   });
 }
@@ -382,14 +451,22 @@ function feed(p, text) {
   }
 }
 
+function textItem(role, text, tick) {
+  const found = role === "coordinator" ? statusMessage(text) : { kind: "plain" };
+  return found.kind === "card" ? statusItem(found) : { k: "text", blocks: blocksOf(text), untagged: tick && found.kind === "bare" };
+}
+
 function present(t) {
   const texts = t.items.filter((i) => i.k === "text").map((i) => i.text);
+  const items = t.items.map((i) => (i.k === "text" ? textItem(t.role, i.text, t.tick) : i));
+  const card = items.filter((i) => i.k === "status").at(-1);
   return {
     role: t.role,
     from: t.from ?? "",
     at: t.at,
     text: texts.join("\n\n"),
-    items: t.items.map((i) => (i.k === "text" ? { k: "text", blocks: blocksOf(i.text) } : i)),
+    items,
+    status: card ? { ...card.status, sig: statusSig(card.status), question: card.question, foldable: card.foldable, lone: items.every((i) => i.k === "tool" || i.k === "status") } : null,
     tasks: t.role === "coordinator" ? [...new Set(texts.join("\n").match(TASK_ID) ?? [])].slice(0, 6) : [],
   };
 }
