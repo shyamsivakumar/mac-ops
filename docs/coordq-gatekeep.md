@@ -46,10 +46,12 @@ Dry-run reports `regating` without writing state. A new head can receive a gate.
 A gate that dies without a verdict looks the same whether it lost its thread
 or its reviewer could not run at all, so the retry is bounded by count, not by
 the failure text. A head is retried at most `COORDQ_GATE_RETRY_LIMIT` times
-(two by default), the second and later retries wait `COORDQ_GATE_RETRY_BACKOFF`
-seconds (300 by default) after the retry before them, and then the head is
-given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
+(once by default), a retry after the first waits `COORDQ_GATE_RETRY_BACKOFF`
+seconds (300 by default) after the retry before it, and then the head is given
+up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
 a verdict` in `queue/gatekeep.log`, and nothing is queued for that head again.
+A head moves to another reviewer once, even when `COORDQ_GATE_RETRY_LIMIT` is
+raised (`GATE_MOVE_LIMIT` in `coordq`).
 The retry count lives with the head's queue item in `gatedHeads`, as
 `{id, retries, at, givenUp}`, and a bare queue item id is read as a head with
 no retry behind it. The record names the head, so a pull request that pushes a
@@ -59,6 +61,17 @@ retry count and is recorded as undecided again, so a second explicit gate for
 the same head is refused while that one is live, and if it dies without a
 verdict the head is given up again in one line rather than reopening the
 automatic retries.
+Gatekeep chooses a reviewer and queues the item that carries it while it holds
+the provider block store lock (`models.blocked_lock()`, the lock
+`models.block_provider` holds for its read-modify-write), then the queue lock,
+in that order. `models.block_provider` takes that lock itself, so a caller must
+not hold the queue lock when it calls it. A first gate whose reviewer was
+blocked after it was chosen is chosen again under the lock
+(`rechoosing <repo>#<pr>: <reviewer> is blocked`), and a head with no free
+reviewer waits (`defer <repo>#<pr>: every gate reviewer is blocked`). A gate
+that dies without a verdict moves one step down the `review` list to the next
+unblocked reviewer; a run that ends in a verdict is never retried elsewhere.
+
 Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
 visibly. This command never merges; the reviewer brief permits merge only after
 CHECK and VERDICT pass for the exact head, using --match-head-commit.

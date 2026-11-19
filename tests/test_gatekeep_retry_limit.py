@@ -9,10 +9,11 @@ import io
 import json
 import os
 import tempfile
+import threading
 import time
 import types
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -169,6 +170,103 @@ class FirstRetryTest(RetryLimitBase):
         self.assertNotIn("regating", out)
 
 
+class ReviewerFallbackTest(RetryLimitBase):
+    """A verdictless gate moves one step down the review list, past a blocked
+    reviewer, and the choice and the queue item happen under the block lock."""
+
+    def setUp(self):
+        super().setUp()
+        self.selections = [e["selection"] for e in coordq.model_list.entries("review")]
+        self.ids = [coordq.model_list.identity(s) for s in self.selections]
+        self.blocked_file = os.path.join(QUEUE_DIR, coordq.model_list.BLOCKED_FILE)
+        self.addCleanup(lambda: os.path.exists(self.blocked_file) and os.remove(self.blocked_file))
+
+    def block(self, *selections):
+        for selection in selections:
+            coordq.model_list.block_provider(selection, time.time() + 3600)
+
+    def queued_reviewer(self):
+        return coordq.model_list.identity(self.gate_items()[0]["args"]["modelSelection"])
+
+    def block_before_the_lock(self, *selections):
+        """Replay a writer landing after the reviewer was chosen and before gatekeep takes the lock."""
+        models = coordq.model_list
+        real_lock = models.blocked_lock
+        self.addCleanup(setattr, models, "blocked_lock", real_lock)
+
+        @contextmanager
+        def lock():
+            models.blocked_lock = real_lock
+            self.block(*selections)
+            with real_lock():
+                yield
+
+        models.blocked_lock = lock
+
+    def test_gatekeep_waits_for_the_block_lock(self):
+        self.write_queue(heads={self.key: 4})
+        runner = threading.Thread(target=self.run_gatekeep)
+        with coordq.model_list.blocked_lock():
+            runner.start()
+            time.sleep(0.5)
+            self.assertEqual(self.gate_items(), [], "gatekeep queued a gate without the block lock")
+        runner.join(10)
+        self.assertEqual(len(self.gate_items()), 1)
+
+    def test_a_blocked_reviewer_is_skipped(self):
+        self.block(self.selections[1])
+        self.write_queue(heads={self.key: 4})
+        self.run_gatekeep()
+        self.assertEqual(self.queued_reviewer(), self.ids[2])
+
+    def test_a_block_recorded_under_the_lock_is_not_queued(self):
+        self.write_queue(heads={self.key: 4})
+        self.block_before_the_lock(self.selections[1])
+        self.run_gatekeep()
+        self.assertEqual(self.queued_reviewer(), self.ids[2])
+
+    def test_a_first_gate_whose_reviewer_was_blocked_is_chosen_again(self):
+        self.write_queue()
+        self.block_before_the_lock(self.selections[0])
+        out, _ = self.run_gatekeep()
+        self.assertIn(f"rechoosing o/r#7: {self.ids[0]} is blocked", out)
+        self.assertEqual(self.queued_reviewer(), self.ids[1])
+
+    def test_a_first_gate_with_every_reviewer_blocked_waits(self):
+        self.write_queue()
+        self.block_before_the_lock(*self.selections)
+        out, _ = self.run_gatekeep()
+        self.assertIn("defer o/r#7: every gate reviewer is blocked", out)
+        self.assertEqual(self.gate_items(), [])
+        self.assertNotIn(self.key, self.read_queue()["gatedHeads"])
+
+    def test_a_failed_verdict_is_not_retried_elsewhere(self):
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": "completed"},
+                           "items": [{"type": "assistant_message", "text": "VERDICT: FAIL"}]}))
+        self.write_queue(heads={self.key: 4})
+        self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_second_dead_gate_gives_the_head_up(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        dead = {**DEAD_GATE, "thread": {"status": "failed", "providerInstanceId": second["instanceId"],
+                                        "model": second["model"]}}
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(dead))
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time() - coordq.GATE_RETRY_BACKOFF - 1,
+                                          "givenUp": False}})
+        out, _ = self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+        self.assertIn("gave up", out)
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+
+    def test_a_raised_retry_limit_does_not_move_a_head_twice(self):
+        self.addCleanup(setattr, coordq, "GATE_RETRY_LIMIT", coordq.GATE_RETRY_LIMIT)
+        coordq.GATE_RETRY_LIMIT = 2
+        self.test_a_second_dead_gate_gives_the_head_up()
+
+
 class NonAstraGateTest(RetryLimitBase):
     """A dead gate that did not run on the Astra model is left alone."""
 
@@ -187,6 +285,12 @@ class NonAstraGateTest(RetryLimitBase):
 class BackoffTest(RetryLimitBase):
     """The second retry waits, so a reviewer that cannot run is not
     relaunched on every run."""
+
+    def setUp(self):
+        super().setUp()
+        for name, value in (("GATE_RETRY_LIMIT", 2), ("GATE_MOVE_LIMIT", 2)):
+            self.addCleanup(setattr, coordq, name, getattr(coordq, name))
+            setattr(coordq, name, value)
 
     def test_a_second_retry_waits_for_the_backoff(self):
         self.write_queue(heads={self.key: {"id": 4, "retries": 1,
