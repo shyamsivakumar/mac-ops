@@ -105,6 +105,10 @@ class RetryLimitBase(unittest.TestCase):
             json.dump(CONFIG, f)
 
     def fake_gh(self, endpoint):
+        if endpoint == f"repos/{REPO}/pulls/7":
+            return {"changed_files": 0}
+        if endpoint.startswith(f"repos/{REPO}/pulls/7/files"):
+            return []
         if endpoint.startswith(f"repos/{REPO}/pulls"):
             return [self.pr]
         if "/issues/" in endpoint and "/comments" in endpoint:
@@ -184,25 +188,61 @@ class NonAstraGateTest(RetryLimitBase):
                          {"id": 4, "retries": 0, "at": None, "givenUp": True})
 
 
-class BackoffTest(RetryLimitBase):
-    """The second retry waits, so a reviewer that cannot run is not
-    relaunched on every run."""
+class GateRetryOnceTest(RetryLimitBase):
+    """A gate with no exact verdict line moves once to the next reviewer."""
 
-    def test_a_second_retry_waits_for_the_backoff(self):
-        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
-                                          "at": time.time(), "givenUp": False}})
+    def report(self, text, status="completed"):
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": status, **ASTRA_GATE},
+                           "items": [{"type": "assistant_message", "text": text}]}))
+
+    def test_a_refused_verdict_is_not_a_verdict(self):
+        self.report("Checked it.\nUnable to issue VERDICT: PASS")
+        self.write_queue(heads={self.key: 4})
+        out, _ = self.run_gatekeep()
+        self.assertIn("regating o/r#7", out)
+
+    def test_a_verdict_with_a_diagnostic_line_after_it_is_a_verdict(self):
+        self.report("Bad.\nVERDICT: FAIL\nwarning: tool call timed out")
+        self.write_queue(heads={self.key: 4})
+        out, _ = self.run_gatekeep()
+        self.assertNotIn("regating", out)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_the_retry_is_one_queue_write(self):
+        self.write_queue(heads={self.key: 4})
+        saves = []
+        real_save = coordq.save
+        coordq.save = lambda queue: (saves.append(json.dumps(queue)), real_save(queue))[1]
+        self.addCleanup(setattr, coordq, "save", real_save)
+        self.run_gatekeep()
+        self.assertTrue(all(self.key in json.loads(saved)["gatedHeads"] for saved in saves))
+        self.assertEqual(len([saved for saved in saves if '"retryOf"' in saved]), len(saves))
+        head = self.read_queue()["gatedHeads"][self.key]
+        self.assertEqual((head["retries"], head["retryOf"]), (1, "gate-1"))
+
+    def test_the_stale_receipt_does_not_queue_a_second_retry(self):
+        self.write_queue(heads={self.key: {"id": 5, "retries": 1, "at": time.time(),
+                                          "givenUp": False, "retryOf": "gate-1"}})
         out, _ = self.run_gatekeep()
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn("regating", out)
 
-    def test_a_second_retry_happens_after_the_backoff(self):
-        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
-                                          "at": time.time() - coordq.GATE_RETRY_BACKOFF - 1,
-                                          "givenUp": False}})
+    def test_a_second_dead_gate_is_given_up(self):
+        self.write_queue(heads={self.key: {"id": 5, "retries": 1, "at": 0,
+                                          "givenUp": False, "retryOf": "gate-0"}})
         out, _ = self.run_gatekeep()
-        self.assertIn("regating o/r#7", out)
-        self.assertEqual(len(self.gate_items()), 1)
-        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 2)
+        self.assertIn("gave up", out)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_blocked_reviewer_is_skipped_on_the_retry(self):
+        self.write_queue(heads={self.key: 4})
+        second = coordq.model_list.entries("review")[1]["selection"]
+        coordq.model_list.block_provider(second, time.time() + 600)
+        self.addCleanup(os.unlink, coordq.model_list.blocked_path())
+        self.run_gatekeep()
+        chosen = self.gate_items()[0]["args"]["modelSelection"]
+        self.assertFalse(coordq.model_list.same_selection(chosen, second))
 
 
 class GiveUpTest(RetryLimitBase):
