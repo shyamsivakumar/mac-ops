@@ -1601,6 +1601,18 @@ def gate_round_cap():
         exact(sorted(item["id"] for item in json.loads(board.read_text())["items"])[-1],
               "lane-gate-rounds-shyamsivakumar-mac-ops-23")
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # A capped pull request that later passes while the board removal
+        # fails is not merged: the command stub raises on any merge call.
+        # The ledger key stays, so the next pass retries the removal.
+        passing = ("PASS", {"threadId": "gate"}, "VERDICT: PASS")
+        with patch.object(lane.alarms, "board_update", return_value="failed"):
+            result = act(20, heads[3], ledger, verdict=passing)
+        exact("no merge until it is" in result, True)
+        exact(f"rounds-decision:{repo}#20" in ledger, True)
+        exact(len(json.loads(board.read_text())["items"]), 3)
+        exact(lane.clear_gate_round_decision(repo, 20, ledger), True)
+        exact(f"rounds-decision:{repo}#20" in ledger, False)
+        exact(len(json.loads(board.read_text())["items"]), 2)
 
 
 def decisions_board_guard():
