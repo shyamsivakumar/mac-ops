@@ -1582,7 +1582,7 @@ def cmd_shift(args: argparse.Namespace) -> int:
             emit(f"overnight: skip {repo}: excluded by policy")
             continue
         selected.append(repo)
-        mode = "manual-merge" if lane_driver.merge_mode(repo, {}) == "manual" else "allowed"
+        mode = "manual-merge" if lane_driver.merge_mode(repo, {}) in ("manual", "ascend") else "allowed"
         emit(f"overnight: lane {repo}: {mode}")
     lane_driver.LANE_REPOS = selected
     if not args.dry_run:

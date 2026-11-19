@@ -1086,7 +1086,7 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     # the board before the merge, or the merge waits.
     if not clear_gate_round_decision(repo, number, ledger):
         return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
-    if merge_mode(repo, CFG[repo]) == "manual":
+    if merge_mode(repo, CFG[repo]) in ("manual", "ascend"):
         return manual_merge_ask(repo, number, head)
     base = pr.get("baseRefName") or "main"
     if DRY:
