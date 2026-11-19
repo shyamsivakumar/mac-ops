@@ -6,7 +6,7 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, 
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, optionsText, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, HIDDEN_PROJECTS, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, optionsText, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { actRates, awayCounts, flushFlowLog, logAct, logLaneChange, markPass, readFlow } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
@@ -570,8 +570,12 @@ export default class Board extends View {
     }, cx, force);
   }
 
-  groups() {
-    return (this.board?.groups ?? []).flatMap((g) => {
+  hides(g) {
+    return this.isBoard() && !this.project && HIDDEN_PROJECTS.includes(g.project);
+  }
+
+  groups(everything = false) {
+    return (this.board?.groups ?? []).filter((g) => everything || !this.hides(g)).flatMap((g) => {
       const threads = g.threads.filter((c) => !(this.settled.get(c.key) >= c.at));
       return threads.length ? [{ ...g, threads, primary: threads[0], lead: threads.find((c) => c.led) ?? threads[0], kind: threads[0].kind }] : [];
     });
@@ -632,8 +636,9 @@ export default class Board extends View {
     const live = this.groups();
     const replaced = new Set(this.issueGroups.map((g) => g.key));
     const liveKeys = new Set(live.map((g) => g.key));
-    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))].filter((g) => !liveKeys.has(g.key));
-    this.projects = tally([...live, ...queued]);
+    const everyQueued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))].filter((g) => !liveKeys.has(g.key));
+    const queued = everyQueued.filter((g) => !this.hides(g));
+    this.projects = tally([...this.groups(true), ...everyQueued]);
     const inProject = (g) => !this.project || g.project === this.project;
     const matches = this.filterOf();
     const searching = Boolean(this.query.trim());
