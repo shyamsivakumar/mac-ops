@@ -270,3 +270,29 @@ def pi_identities():
         for e in entries("build")
         if "/" in e["selection"]["model"]
     }
+
+
+def first_other(list_name, own_model=None):
+    """The first unblocked entry whose model is not `own_model` (a model name, any provider prefix)."""
+    own = str(own_model or "").split("/")[-1]
+    blocked = blocked_identities()
+    for entry in entries(list_name):
+        if entry["selection"]["model"].split("/")[-1] != own and identity(entry["selection"]) not in blocked:
+            return entry
+    return None
+
+
+def main(argv):
+    if len(argv) not in (3, 4) or argv[1] != "first" or argv[2] not in LISTS:
+        print(f"usage: models.py first {{{'|'.join(LISTS)}}} [own-model]", file=sys.stderr)
+        return 2
+    entry = first_other(argv[2], argv[3] if len(argv) == 4 else None)
+    if entry is None:
+        print(f"no unblocked model in the {argv[2]} list", file=sys.stderr)
+        return 1
+    print(f"{entry['id']} {entry['selection']['model']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
