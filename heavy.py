@@ -2230,15 +2230,27 @@ def _runtime_version(identifier: str) -> Tuple[int, ...]:
     return _version_numbers(identifier.rsplit(".", 1)[-1])
 
 
+def _newest_runtime_matches(
+    matches: List[Dict[str, str]], requested: Tuple[int, ...]
+) -> List[Dict[str, str]]:
+    if requested:
+        return [row for row in matches if _runtime_version(row["runtime"])[: len(requested)] == requested]
+    if not matches:
+        return matches
+    newest = max(_runtime_version(row["runtime"]) for row in matches)
+    return [row for row in matches if _runtime_version(row["runtime"]) == newest]
+
+
 def devices_named_by_job(
     argv: Sequence[str], devices: Sequence[Dict[str, str]]
 ) -> List[str]:
     """Return the simulator devices that the job's arguments name.
 
-    A job names a device when a device identifier appears in its arguments, or
-    when a ``-destination`` names a device by its name. A destination with a
-    name and no OS names the newest runtime that has a device of that name. A job
-    that names no device is never credited with booting one.
+    A job names a device when a device identifier appears in its arguments, when
+    a ``-destination`` names a device by its name, or when an argument after
+    ``simctl`` is exactly a device name. A name with no OS names the newest
+    runtime that has a device of that name. A job that names no device is never
+    credited with booting one.
     """
     named = {match.upper() for arg in argv for match in SIMULATOR_UDID_PATTERN.findall(str(arg))}
     for index, arg in enumerate(argv[:-1]):
@@ -2254,12 +2266,14 @@ def devices_named_by_job(
             continue
         matches = [row for row in devices if fields.get("name") and row["name"] == fields["name"]]
         requested = _version_numbers(fields.get("os", "")) if fields.get("os", "").lower() != "latest" else ()
-        if requested:
-            matches = [row for row in matches if _runtime_version(row["runtime"])[: len(requested)] == requested]
-        elif matches:
-            newest = max(_runtime_version(row["runtime"]) for row in matches)
-            matches = [row for row in matches if _runtime_version(row["runtime"]) == newest]
-        named.update(row["udid"].upper() for row in matches)
+        named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, requested))
+    simctl_positions = [
+        index for index, arg in enumerate(argv) if os.path.basename(str(arg)) == "simctl"
+    ]
+    if simctl_positions:
+        for arg in argv[simctl_positions[0] + 1 :]:
+            matches = [row for row in devices if row["name"] and row["name"] == str(arg)]
+            named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, ()))
     return sorted(named)
 
 
@@ -2312,7 +2326,8 @@ def simulator_device_owners(
     runtime. A process that only mentions a simulator path in its arguments is
     not one. A runtime process with no simulator launchd above it and a parent
     chain that ends at pid 1 has no device, and maps to None. A runtime process
-    whose parent chain cannot be followed is left out.
+    whose parent chain cannot be followed, or passes through a simulator launchd
+    whose executable cannot be read, is left out.
     """
     parents = {pid: ppid for pid, ppid, _ in rows}
     executables: Dict[int, str] = {}
@@ -2322,6 +2337,11 @@ def simulator_device_owners(
         executable = executable_reader(pid)
         if executable:
             executables[pid] = executable
+    unreadable_launchd = {
+        pid
+        for pid, _, command in rows
+        if "launchd_sim" in command and pid not in executables
+    }
     launchd: Dict[int, str] = {}
     for pid, _, command in rows:
         executable = executables.get(pid)
@@ -2348,6 +2368,8 @@ def simulator_device_owners(
         for _ in range(16):
             if current in launchd:
                 owners[pid] = launchd[current]
+                break
+            if current in unreadable_launchd:
                 break
             if current <= 1:
                 owners[pid] = None
@@ -2512,13 +2534,10 @@ def stop_orphan_simulator_processes(
             try:
                 kill(pid, signal.SIGTERM)
             except OSError:
-                pass
+                continue
             signalled.append(pid)
         if not signalled:
             continue
-        stopped += len(signalled)
-        if udid is not None:
-            devices.append(udid)
         deadline = clock() + 2.0
         remaining = list(signalled)
         while remaining and clock() < deadline:
@@ -2529,22 +2548,27 @@ def stop_orphan_simulator_processes(
             ]
             if remaining:
                 sleep(0.2)
-        if not remaining:
-            continue
-        still_orphans = snapshot()
-        for pid in remaining:
-            current = still_orphans.get(pid)
-            if current is None or current[1] != targets[pid][1]:
-                continue
-            verdict = revalidate(pid, udid, targets[pid][1])
-            if verdict == "booting":
-                break
-            if verdict == "reused":
-                continue
-            try:
-                kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
+        failed = 0
+        if remaining:
+            still_orphans = snapshot()
+            for pid in remaining:
+                current = still_orphans.get(pid)
+                if current is None or current[1] != targets[pid][1]:
+                    continue
+                verdict = revalidate(pid, udid, targets[pid][1])
+                if verdict == "booting":
+                    break
+                if verdict == "reused":
+                    continue
+                try:
+                    kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    failed += 1
+        stopped += len(signalled) - failed
+        if udid is not None and len(signalled) > failed:
+            devices.append(udid)
     return {"stopped": stopped, "devices": sorted(devices)}
 
 
