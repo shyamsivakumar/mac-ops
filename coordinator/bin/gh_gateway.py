@@ -391,6 +391,10 @@ def cacheable(argv):
     words = [str(word) for word in argv[1:]]
     if not words:
         return False
+    if argv_host(argv) is None:
+        # The host cannot be established, so one entry could answer another
+        # host's read. Skip the cache rather than guess.
+        return False
     if has_flag(argv, "--web", "-w"):
         # `--web` opens a browser; a cached answer would silently skip it.
         # `--web=true` is the same flag.
@@ -626,6 +630,8 @@ SHORT_BOOLEAN = {
     ("issue", "create"): {"-e", "-w"},
     # `gh pr comment`: `-e` opens the editor and `-w` the browser.
     ("pr", "comment"): {"-e", "-w"},
+    # `gh issue comment`: `-e` opens the editor and `-w` the browser.
+    ("issue", "comment"): {"-e", "-w"},
     # `gh pr checkout`: `-f` is `--force`.
     ("pr", "checkout"): {"-f"},
 }
@@ -636,7 +642,7 @@ LONG_BOOLEAN = {
 SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
     ("run", "list"): {"-w", "-b"},
-    ("pr", "list"): {"-a", "-A", "-H"},
+    ("pr", "list"): {"-a", "-A", "-H", "-S"},
 }
 
 
@@ -742,13 +748,44 @@ def parse_options(argv):
     return options, positionals, ordered
 
 
+def ambiguous_selector(argv):
+    """True when a `-R` token follows a short flag this code does not know.
+
+    That token may be the flag's value rather than a selector, and guessing
+    either way risks the wrong host's quota, so the caller is told the host
+    is unknown."""
+    words = [str(word) for word in (argv or [])[1:]]
+    group, verb = command_of(argv)
+    key = (group, verb)
+    booleans = SHORT_BOOLEAN.get(key)
+    if booleans is None:
+        booleans = {"-a", "-d", "-w"} if verb == "list" else set()
+    for index, word in enumerate(words):
+        if not word.startswith("-R"):
+            continue
+        if index == 0:
+            continue
+        previous = words[index - 1]
+        if not previous.startswith("-") or previous.startswith("--"):
+            continue
+        if previous in booleans or previous in SHORT_VALUE.get(key, set()):
+            continue
+        return True
+    return False
+
+
 def argv_host(argv):
-    """Return the host a command targets, or "" when it names none.
+    """Return the host a command targets, "" when it names none, None when unknown.
 
     Only two things name a host: `--hostname`, and a repository selector
     (`-R`, `--repo` or `GH_REPO`) whose value has a host in it. The command
     is parsed once, with its own subcommand's option arity, so a value that
-    looks like a flag or like a repository is never read as one."""
+    looks like a flag or like a repository is never read as one.
+
+    A selector that follows a short flag this code does not know could be
+    that flag's value, so the host is reported as unknown (None) rather than
+    guessed. Unknown means: no response cache, and no optional-read floor
+    decided against a host that may be the wrong one."""
     _options, _positionals, ordered = parse_options(argv)
     # `gh` uses the last selector given, whichever alias it is, so the host
     # is taken from the last one in argument order.
@@ -764,6 +801,10 @@ def argv_host(argv):
             # A two-part selector names no host, and it still overrides
             # `GH_REPO`, so the answer is "" rather than the environment's.
             host = parts[0] if len(parts) == 3 and parts[0] else ""
+    if ambiguous_selector(argv):
+        # A `-R` token sits after a short flag this code doesn't know: it may
+        # be that flag's value, so no host can be claimed.
+        return None
     if explicit:
         return host
     selector = os.environ.get("GH_REPO") or ""
@@ -1160,11 +1201,12 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
         if hit is not None:
             return subprocess.CompletedProcess(argv, 0, hit, "")
     started = time.monotonic()
-    if limit is not None:
+    host = argv_host(argv)
+    if limit is not None and host is not None:
         # The probe and the read share one deadline: the probe gets half of
-        # it, and the read gets whatever is left.
-        guard_floor(limit, timeout=max(1, int(timeout) // 2),
-                    host=argv_host(argv) or None)
+        # it, and the read gets whatever is left. A host that cannot be
+        # established is not probed: its reserve is unknown, not zero.
+        guard_floor(limit, timeout=max(1, int(timeout) // 2), host=host or None)
         timeout = max(1, int(timeout - (time.monotonic() - started)))
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout, caller_name)
