@@ -47,10 +47,8 @@ Dry-run reports `regating` without writing state. A new head can receive a gate.
 
 A gate that dies without a verdict looks the same whether it lost its thread
 or its reviewer could not run at all, so the retry is bounded by count, not by
-the failure text. A head is retried at most `COORDQ_GATE_RETRY_LIMIT` times
-(one by default), the second and later retries wait `COORDQ_GATE_RETRY_BACKOFF`
-seconds (300 by default) after the retry before them, and then the head is
-given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
+the failure text. A head is retried exactly once, whatever the environment says,
+and then the head is given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
 a verdict` in `queue/gatekeep.log`, and nothing is queued for that head again.
 The retry count lives with the head's queue item in `gatedHeads`, as
 `{id, retries, at, givenUp, retryOf}`, and a bare queue item id is read as a head with
