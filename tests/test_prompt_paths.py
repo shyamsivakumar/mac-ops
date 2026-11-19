@@ -425,8 +425,8 @@ class CoordqGateTest(unittest.TestCase):
         kept = [f"repos/o/r/git/trees/{sha}", f"repos/o/r/git/trees/{sha}?recursive=1",
                 f"repos/o/r/compare/{sha}...{other}", f"repos/o/r/contents/evidence/x.md?ref={sha}"]
         moving = ["repos/o/r/git/trees/main", "repos/o/r/compare/main..." + other,
-                  f"repos/o/r/contents/x.md?ref=main", f"repos/o/r/commits/{sha}/statuses?per_page=100",
-                  f"repos/o/r/git/ref/heads/main"]
+                  "repos/o/r/contents/x.md?ref=main", f"repos/o/r/commits/{sha}/statuses?per_page=100",
+                  "repos/o/r/git/ref/heads/main"]
         for route in kept:
             self.assertTrue(gh_gateway.immutable(["gh", "api", route]), route)
         for route in moving:
