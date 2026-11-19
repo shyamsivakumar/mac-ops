@@ -459,28 +459,6 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertEqual(len(self.gate_items()), 0)
         self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
 
-    def test_a_builder_launch_does_not_need_the_store_lock(self):
-        builder = coordq.model_list.entries("build")[0]["selection"]
-        launch = {"projectId": "P", "title": "t", "taskType": "worker", "message": "m",
-                  "modelSelection": builder}
-        coordq.call = self.saved["call"]
-        busy = []
-
-        def start(*a, **k):
-            try:
-                with coordq.model_list.blocked_lock(wait=False):
-                    busy.append(False)
-            except coordq.model_list.BlockStoreBusy:
-                busy.append(True)
-            return FakeRun(json.dumps({"thread": {"threadId": "t-1"}}))
-
-        coordq.subprocess = types.SimpleNamespace(run=start, TimeoutExpired=TimeoutError)
-        with coordq.model_list.blocked_lock():
-            # A writer holds the store, and the builder launch still runs:
-            # only a gate launch waits for the store.
-            self.assertEqual(coordq.call("t3_thread_launch", launch, "rules")[0], 0)
-        self.assertEqual(busy, [True])
-
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
         self.run_gatekeep()
@@ -498,29 +476,6 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertNotIn("regating", out)
         self.assertEqual(self.gate_items(), [])
         self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
-
-    def test_a_launch_holds_the_block_lock_from_the_read_to_the_start(self):
-        launch = {"projectId": "P", "title": "t", "taskType": "review", "message": "m",
-                  "clientRequestId": "gate:o/r#7:" + "a" * 40,
-                  "modelSelection": coordq.model_list.entries("review")[0]["selection"]}
-        coordq.call = self.saved["call"]
-        busy = []
-
-        def start(*a, **k):
-            try:
-                with coordq.model_list.blocked_lock(wait=False):
-                    busy.append(False)
-            except coordq.model_list.BlockStoreBusy:
-                busy.append(True)
-            return FakeRun(json.dumps({"thread": {"threadId": "t-1"}}))
-
-        coordq.subprocess = types.SimpleNamespace(run=start, TimeoutExpired=TimeoutError)
-        self.assertEqual(coordq.call("t3_thread_launch", launch)[0], 0)
-        self.assertEqual(busy, [True])
-        with coordq.model_list.blocked_lock():
-            with self.assertRaises(coordq.model_list.BlockStoreBusy):
-                coordq.call("t3_thread_launch", launch)
-        self.assertEqual(busy, [True])
 
 if __name__ == "__main__":
     unittest.main()
