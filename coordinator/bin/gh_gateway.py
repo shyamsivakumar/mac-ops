@@ -627,6 +627,10 @@ SHORT_BOOLEAN = {
     # `gh pr checkout`: `-f` is `--force`.
     ("pr", "checkout"): {"-f"},
 }
+LONG_BOOLEAN = {
+    # `gh pr review --comment` is `-c`: a flag, with the text in `--body`.
+    ("pr", "review"): {"--comment"},
+}
 SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
     ("run", "list"): {"-w", "-b"},
@@ -682,7 +686,7 @@ def parse_options(argv):
                 ordered.append((name, inline))
                 index += 1
                 continue
-            if name in LONG_VALUE_FLAGS:
+            if name in LONG_VALUE_FLAGS and name not in LONG_BOOLEAN.get(key, ()):
                 options[name] = following
                 ordered.append((name, following))
                 index += 2
