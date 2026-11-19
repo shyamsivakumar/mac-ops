@@ -1,0 +1,33 @@
+## 1 direct api rate_limit: shim vs real
+real exit 0
+shim exit 0
+stdout and stderr identical: 5000
+log lines:        1
+{"ts": 1795113154.112, "caller": "bash", "resource": "core", "verb": "api", "via": "shim"}
+## 2 failing command
+real exit 1
+shim exit 1
+identical; stderr: gh: Not Found (HTTP 404)
+## 3 stdin (shim baked with a fake gh that echoes stdin)
+{"a":1}
+args: api --input - repos/x/y
+exit 7
+## 4 gateway call logs once
+rc 0 5000
+new lines: 1
+{"ts": 1795113158.651, "caller": "proof", "resource": "core", "verb": "api"}
+## 4b direct call from same kind of process logs via shim
+5000
+{"ts": 1795113159.868, "caller": "proof", "resource": "core", "verb": "api", "via": "shim"}
+## 5 read-only log dir
+5000
+exit 0
+## 6 report
+hour              caller                     core  graphql  other  via shim (bypassed the gateway)
+2026-11-19 10:00  bash                          3        0      0                                3
+2026-11-19 10:00  proof                         2        0      0                                1
+## 7 timing, 50 calls (fake gh: exit 0, no network)
+bare fake gh:
+5.1 ms per call
+via shim:
+16.0 ms per call
