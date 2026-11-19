@@ -23,7 +23,8 @@ _BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
-from gate_policy import LANE_REPOS, complete_pass
+import gate_policy
+from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
 import prompt_paths
 
 # The lane driver loads inside the overnight command, so it names itself on
@@ -51,7 +52,12 @@ SNAPSHOT = {}
 # Where each lane repository is checked out. The path is the shared root
 # of the repository: work there moves the branch everyone installs from.
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue",
+         "shyamsivakumar/tunerise": "tunerise", "shyamsivakumar/openscan": "openscan", "shyamsivakumar/CineJar": "CineJar",
+         "digitized/Concerning": "concerning", "shyamsivakumar/sams-llm-wiki": "llmwiki",
+         "shyamsivakumar/scripture-scroll": "scripture-scroll", "shyamsivakumar/scrapers": "scrapers",
+         "shyamsivakumar/recoup": "recoup"}
+MERGE_WAIT_PASSES = 5
 # The calls left in reserve before an optional read is skipped. The lane
 # driver, gatekeep and the overnight shift share this one floor.
 API_FLOOR = gh_gateway.floor()
@@ -1093,8 +1099,8 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     # the board before the merge, or the merge waits.
     if not clear_gate_round_decision(repo, number, ledger):
         return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
-    if repo == "digitized/Concerning":
-        return f"skip #{number}: gate PASS, manual merge"
+    if merge_mode(repo, CFG[repo]) in ("manual", "ascend"):
+        return manual_merge_ask(repo, number, head)
     base = pr.get("baseRefName") or "main"
     if DRY:
         return f"DRY merge #{number} {head}"
@@ -1108,6 +1114,16 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
         return note
     close_after_merge(repo, number, head, issue, gate, ledger)
     return note
+
+
+def manual_merge_ask(repo, number, head):
+    key = CFG[repo]["key"]
+    item = {"id": f"manual-merge-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": f"{key}-{number} passed its gate in {repo}. This repository merges by hand: merge it or send it back.",
+            "why": f"Nothing merged. Merge with `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`."}
+    if not DRY:
+        publish_decision(item)
+    return f"#{number}: gate PASS, manual merge, decisions item raised"
 
 
 def after_merge(repo, number, head, issue, gate):
@@ -1169,6 +1185,64 @@ def settle_merged_prs(repo, ledger):
         else:
             publish_decision(merged_without_gate_item(repo, number, head))
             ledger[lkey] = "item raised"
+
+
+def merge_wait_item(repo, number, head, passes):
+    key = CFG[repo]["key"]
+    return {"id": f"merge-pass-stuck-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": f"{key}-{number} has a gate PASS on head {head[:8]} and is still unmerged after {passes} passes: check why and merge it.",
+            "why": "The merge pass tried each pass and the merge was refused or failed."}
+
+
+def merge_candidates(repo, ledger):
+    receipts = stall_receipts()
+    for key, thread in sorted(receipts.items()):
+        found = re.fullmatch(r"gate:(.+)#(\d+):([0-9a-f]{40})", key)
+        if (found and found[1] == repo and receipts.get(f"brief:{thread}") == "lane-merges"
+                and f"merge-pass:{key[5:]}:{thread}" not in ledger):
+            yield int(found[2]), found[3], thread, receipts.get(f"base:{thread}")
+
+
+def merge_pass(repo, ledger):
+    for number, head, thread, base in merge_candidates(repo, ledger):
+        verdict, gate, _ = gate_verdict(repo, number, head, base)
+        settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
+        if verdict in ("running", "none", "absent"):
+            continue
+        if verdict == "SPLIT":
+            print(f"{CFG[repo]['key']:5} {gate_split_decision(repo, number, head)}")
+        if verdict in ("FAIL", "SPLIT"):
+            ledger[settled] = verdict
+            continue
+        pr, skip = pr_action_skip(repo, number)
+        if skip:
+            ledger[settled] = skip
+            continue
+        if gate_verdict(repo, number, head, pr["baseRefName"])[0] != "PASS":
+            continue
+        found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
+        wait = f"merge-wait:{repo}#{number}:{head}"
+        ledger[wait] = ledger.get(wait, 0) + 1
+        if ledger[wait] >= MERGE_WAIT_PASSES:
+            publish_decision(merge_wait_item(repo, number, head, ledger[wait]))
+        note = merge_passed_pr(repo, number, head, pr, found[1] if found else None, gate, ledger)
+        print(f"{CFG[repo]['key']:5} {note}")
+        if not note.endswith("no merge until it is"):
+            ledger[settled] = note
+            if ledger.pop(wait) >= MERGE_WAIT_PASSES:
+                withdraw_decision(merge_wait_item(repo, number, head, 0)["id"])
+
+
+def restrict_merge_repos(allowed):
+    global MERGE_REPOS
+    MERGE_REPOS = [repo for repo in MERGE_REPOS if allowed is None or repo in allowed]
+
+
+def merge_passes(ledger):
+    for repo in MERGE_REPOS:
+        if repo not in gate_policy.LANE_REPOS:
+            with item_boundary(repo, "merge-pass", ledger):
+                merge_pass(repo, ledger)
 
 
 def act_on_pr(repo, number, ledger):
@@ -1272,6 +1346,9 @@ def act_on_pr(repo, number, ledger):
 
 
 def fast_forward_main(repo):
+    if repo not in PATHS or not os.path.isdir("/Users/shyamsivakumar/Code/" + PATHS[repo]):
+        print(f"{CFG[repo]['key']:5} no local checkout for {repo}; main not fast-forwarded")
+        return
     canonical = "/Users/shyamsivakumar/Code/" + PATHS[repo]
     listing = run(["git", "-C", canonical, "worktree", "list", "--porcelain", "-z"])
     records = [record.split("\0") for record in listing.split("\0\0") if record]
@@ -2136,6 +2213,8 @@ def run_pass(ledger):
                         print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
             elif not done and not b:
                 print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
+
+    merge_passes(ledger)
 
     if item_failure_summary(ledger):
         raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures")
