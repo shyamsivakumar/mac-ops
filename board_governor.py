@@ -1254,7 +1254,7 @@ def controller_tick(*, board_control=True, cfg=None):
         if reaped:
             entry["dead_jobs_reaped"] = reaped
     except Exception as exc:
-        entry["reap_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
+        entry["reap_error"] = type(exc).__name__ + ": " + (str(exc).splitlines() or [""])[0][:180]
     boot_id = None
     sample = None
     census = None

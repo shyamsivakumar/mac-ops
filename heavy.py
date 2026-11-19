@@ -64,6 +64,7 @@ LEGACY_SLOTS = Path("/tmp/heavy-slots")
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
+HEARTBEAT_TEMP_PATTERN = re.compile(r"\.heartbeat-[0-9a-f]{32}\.tmp")
 
 
 def monotonic_ns() -> int:
@@ -1005,7 +1006,12 @@ class Registry:
     def remove(self, job_id: str) -> None:
         """Delete a job's record and heartbeat files and its directory."""
         directory = self._job_dir(job_id)
-        for name in ("record.json", "heartbeat"):
+        names = ["record.json", "heartbeat"] + sorted(
+            name
+            for name in os.listdir(str(directory))
+            if HEARTBEAT_TEMP_PATTERN.fullmatch(name)
+        )
+        for name in names:
             path = directory / name
             try:
                 info = os.lstat(str(path))
@@ -1756,6 +1762,7 @@ def _prune_finished_locked(
             continue
         alive, supervisor_alive = _record_live(record, table)
         if not alive and not supervisor_alive:
+            registry.remove(record["job_id"])
             if record.get("state") not in ("complete", "removed"):
                 _log_event(
                     registry.directory,
@@ -1763,7 +1770,6 @@ def _prune_finished_locked(
                     record,
                     detail="supervisor process is gone",
                 )
-            registry.remove(record["job_id"])
             removed += 1
     return removed
 
