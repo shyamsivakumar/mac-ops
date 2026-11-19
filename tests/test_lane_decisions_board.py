@@ -4,7 +4,7 @@ The lane raises one item on the decisions board when a pull request uses
 its review rounds. A test must never write the board Shyam reads, so the
 path comes from the environment and a test points it at a scratch file.
 These tests prove both: the environment sets the path, and the board
-Shyam reads is byte for byte what it was after the lane raised an item.
+Shyam reads is never named as the destination when the lane raises an item.
 """
 
 import importlib.machinery
@@ -50,18 +50,24 @@ class DecisionsBoardTests(unittest.TestCase):
                 fresh = load_lane("lane_driver_with_environment")
             self.assertEqual(fresh.DECISIONS_PATH, str(board))
 
-    def test_the_item_lands_on_the_scratch_board_and_not_on_the_real_one(self):
-        before = REAL_BOARD.read_bytes() if REAL_BOARD.exists() else None
+    def test_the_item_is_written_to_the_scratch_board_and_to_no_other_path(self):
+        targets = []
+        real_update = lane.alarms.board_update
+
+        def record(target, *args, **kwargs):
+            targets.append(str(target))
+            return real_update(target, *args, **kwargs)
+
         with tempfile.TemporaryDirectory() as scratch:
             board = Path(scratch) / "decisions.json"
             board.write_text(json.dumps({"items": []}))
-            with patch.object(lane, "DECISIONS_PATH", str(board)):
+            with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                    patch.object(lane.alarms, "board_update", record):
                 lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
             items = json.loads(board.read_text())["items"]
+        self.assertEqual(targets, [str(board)])
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
-        after = REAL_BOARD.read_bytes() if REAL_BOARD.exists() else None
-        self.assertEqual(after, before)
 
     def test_the_real_board_holds_no_item_of_this_test(self):
         board = json.loads(REAL_BOARD.read_text()) if REAL_BOARD.exists() else {"items": []}
