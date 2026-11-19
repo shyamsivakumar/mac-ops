@@ -1254,7 +1254,8 @@ def act_on_pr(repo, number, ledger):
         return f"skip #{number}: PR is merged or closed"
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
-    if issue and superseded_by(repo, number, int(issue)):
+    if (issue and superseded_by(repo, number, int(issue))
+            and gate_verdict(repo, number, head, pr.get("baseRefName") or "main")[0] != "PASS"):
         return f"skip #{number}: superseded by a newer pull request for #{issue}"
     proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
