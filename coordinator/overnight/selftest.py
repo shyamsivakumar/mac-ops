@@ -767,7 +767,26 @@ def completion_boundary():
     ticket = load_ticket()
     head = "a" * 40
     proof = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
+    bare = f"CHECK: PASS {head}\nVERDICT: PASS"
+    # Replay of mac-ops#632, whose ticket has no Provides section. The brief now
+    # always asks for the PROVIDES line and says a ticket with no claims passes
+    # that check trivially, so the reply it prescribes is a complete PASS. Every
+    # brief mode asks for the line, so no reviewer can return a PASS without it.
+    briefs = {
+        "lane": ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX"}, 10, 20, head, "main", False, False),
+        "manual": ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX", "merge": "manual"}, 10, 20, head, "main", False, False),
+        "prompt": ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX"}, 10, 20, head, "main", False, False, prompt=True),
+        "ascend": ticket.gate_brief("ascend/fixture", {"key": "FIX"}, 10, 20, head, "main", False, True),
+        "reviewer": ticket.gate_brief("shyamsivakumar/fixture", {"key": "FIX"}, 10, 20, head, "main", False, False),
+    }
+    for brief in briefs.values():
+        exact(f"`PROVIDES: PASS {head}`" in brief, True)
+        exact("no Provides section has no claims, so it passes this check trivially" in brief, True)
+        exact("A PASS reply without the PROVIDES line is read as no verdict." in brief, True)
     merged = dict(state="MERGED", headRefOid=head, body="Refs #10", mergeCommit={"oid": "b" * 40})
+    # The bare reply is refused on a code pull request: `prompt_cases` below
+    # covers it with prompt "clear", so a reply missing PROVIDES on a ticket
+    # that does have claims is still no verdict.
     cases = [(merged, proof, True), (dict(merged, state="OPEN"), proof, False),
              (dict(merged, headRefOid="c" * 40), proof, False),
              (dict(merged, body="Refs #11"), proof, False),
@@ -775,7 +794,6 @@ def completion_boundary():
              (merged, proof.replace("PROVIDES: PASS", "PROVIDES: FAIL"), False),
              (merged, proof.replace("CHECK: PASS", "CHECK: FAIL"), False),
              (merged, proof.replace("VERDICT: PASS", "VERDICT: FAIL"), False)]
-    bare = f"CHECK: PASS {head}\nVERDICT: PASS"
     prompt_cases = [(bare, "hold", True), (bare, "clear", False), (bare, "unknown", False)]
     for pull, reply, allowed, prompt in ([(*case, "clear") for case in cases]
                                          + [(merged, r, a, s) for r, s, a in prompt_cases]):
