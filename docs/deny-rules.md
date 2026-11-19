@@ -12,7 +12,7 @@ each tool checks tools, and written into the scope files as prose.
 1. No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP,
    OPS, DBT, OMN).
 2. No reads or edits of secret files: `.env` files, `auth.json`, key and
-   token files, `~/.ssh`.
+   token files (`*token*.json`, `.txt`, `.yaml`, `.yml`), `~/.ssh`.
 3. No force-push in any form, and no push to `main` or `master` on any
    remote. Task-branch pushes stay allowed, including a task branch whose
    name continues a protected one (`main.fix`, `main/fix`), and including a
@@ -22,7 +22,14 @@ each tool checks tools, and written into the scope files as prose.
    (including one behind `heavy`, `timeout`, `bash -c` or `eval`). A protected
    branch name anywhere else in the command text, such as a PR body, an `hc`
    message, a commit message or a heredoc, is not a push to it. The same
-   command-position rule applies to the merge command.
+   command-position rule applies to the merge command. A push with no
+   refspec (`git push`, `git push origin`, `git push origin HEAD`) writes the
+   checked-out branch and the upstream branch it tracks, so the guards read
+   both from the command's directory and refuse the push when either is
+   protected or cannot be resolved (detached HEAD, `--git-dir`, or a `cd`
+   earlier in the command). `--all`, `--mirror`, `:` and wildcard refspecs are
+   refused because they can write `main`. `gh` global options such as
+   `-R owner/repo` are skipped before the merge rule reads the subcommand.
 4. No `gh pr merge` for a builder. Only a gate thread merges, and only with
    the pinned `--match-head-commit` head given as a merge argument.
 
@@ -94,9 +101,11 @@ python3 scripts/install_deny_rules.py uninstall
 Every edited file is backed up first to
 `~/.local/state/mac-ops/deny-rules-backups/<timestamp>/`, and the receipt at
 `~/.local/state/mac-ops/deny-rules-receipt.json` records exactly what install
-added. Uninstall removes only those entries: Claude deny entries by value, the
-hook registration by command, the installed guard files, and the managed
-scope sections.
+added. Uninstall removes only those entries: the Claude deny entries install
+added (entries that were already there stay), the hook registration if install
+added it, and the managed scope sections. A hook file, pi guard file or
+`claudeAgentGate` instance that existed before install is restored from its
+backup, and one that did not exist is removed.
 
 ## Rollback
 

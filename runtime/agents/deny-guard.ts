@@ -9,6 +9,7 @@
 // This guard only denies. It never allows anything and never widens a
 // permission: every check returns either a block reason or nothing.
 // @ts-nocheck
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -66,7 +67,7 @@ function secretPath(a) {
 function checkTool(name, input, cwd, env) {
   const tool = String(name || "");
   const isBash = tool === "bash" || tool === "powershell";
-  if (isBash) return checkBash(String(input.command || ""), env);
+  if (isBash) return checkBash(String(input.command || ""), env, cwd);
   for (const [key, value] of Object.entries(input || {})) {
     if (typeof value !== "string") continue;
     if (!PATH_KEY.test(key)) continue;
@@ -101,6 +102,9 @@ const COMMAND_NAMES = new Set([...WRAPPERS, ...SHELLS, "git", "gh", "eval"]);
 const SEPARATOR_CHARS = ";&|\n()`";
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix", "--config-env"]);
 const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--receive-pack", "--exec", "--repo"]);
+const BULK_FLAGS = new Set(["--all", "--branches", "--mirror"]);
+const GH_VALUE_OPTIONS = new Set(["-R", "--repo", "--hostname"]);
+const DIRECTORY_CHANGERS = new Set(["cd", "pushd"]);
 const MAX_NESTING = 4;
 
 function baseName(word) {
@@ -334,6 +338,22 @@ function pinnedCommit(words) {
   return "";
 }
 
+// The group and action words of a gh command, plus the words after them.
+// Options before the action, such as `-R owner/repo`, are skipped.
+function ghCommand(words) {
+  const positionals = [];
+  let index = 1;
+  while (index < words.length && positionals.length < 2) {
+    const word = words[index];
+    if (word.startsWith("-")) index += GH_VALUE_OPTIONS.has(word) ? 2 : 1;
+    else {
+      positionals.push(word);
+      index += 1;
+    }
+  }
+  return { positionals, rest: words.slice(index) };
+}
+
 // A real merge command is denied unless both hold:
 //   1. the caller is a gate. The role comes from the environment the gate was
 //      launched with, never from the command text, so a builder cannot claim
@@ -344,9 +364,11 @@ function mergeDeny(commands, env) {
   if (!MERGE) return undefined;
   const isGate = String((env && env[MERGE.role_env]) || "") === MERGE.role_value;
   for (const words of commands) {
-    if (baseName(words[0]) !== "gh" || words[1] !== "pr" || words[2] !== "merge") continue;
+    if (baseName(words[0]) !== "gh") continue;
+    const { positionals, rest } = ghCommand(words);
+    if (positionals[0] !== "pr" || positionals[1] !== "merge") continue;
     if (!isGate) return MERGE.reason;
-    if (!pinnedCommit(words.slice(3))) return MERGE.pin_reason || MERGE.reason;
+    if (!pinnedCommit(rest)) return MERGE.pin_reason || MERGE.reason;
   }
   return undefined;
 }
@@ -359,28 +381,52 @@ function destinationRef(token) {
   return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
 }
 
-// The arguments after `git ... push`, or undefined when this is not a push.
-function pushArguments(words) {
+// The arguments after `git ... push` and the directory git runs in, or
+// undefined when this is not a push. The directory is null when `--git-dir`
+// or `--work-tree` makes it unknown.
+function pushArguments(words, directory) {
   let index = 1;
-  while (index < words.length) {
+  while (index < words.length && words[index].startsWith("-")) {
     const word = words[index];
-    if (!word.startsWith("-")) return word === "push" ? words.slice(index + 1) : undefined;
+    if (word === "-C" && index + 1 < words.length && directory) directory = path.resolve(directory, words[index + 1]);
+    else if (["--git-dir", "--work-tree"].includes(word.split("=")[0])) directory = null;
     index += GIT_VALUE_OPTIONS.has(word) ? 2 : 1;
   }
+  if (index < words.length && words[index] === "push") return { args: words.slice(index + 1), directory };
   return undefined;
 }
 
-// Deny a force-push, and a push whose destination ref is protected. The first
-// bare word after `push` is the repository argument when another word follows
-// it: it names a remote or a URL, never a destination branch, so a task-branch
-// push to a remote called `main` is not a push to main. A lone bare word is
-// read as a refspec, so `git push main` stays refused: it would write
-// whatever branch is checked out.
-function pushVerdict(args) {
+function gitOutput(directory, args) {
+  const proc = spawnSync("git", ["-C", directory, ...args], { encoding: "utf8", timeout: 5000 });
+  return proc.status === 0 ? String(proc.stdout).trim() : "";
+}
+
+// The branch names a push without a refspec writes (the checked-out branch and
+// the upstream branch it tracks), or undefined when they cannot be resolved.
+function implicitDestinations(directory) {
+  if (!directory) return undefined;
+  const branch = gitOutput(directory, ["symbolic-ref", "--short", "-q", "HEAD"]);
+  if (!branch) return undefined;
+  const upstream = gitOutput(directory, ["config", "--get", `branch.${branch}.merge`]);
+  return upstream ? [branch, destinationRef(upstream)] : [branch];
+}
+
+// Deny a force-push, a bulk push, and a push that can write a protected
+// branch. The first bare word after `push` is the repository argument when
+// another word follows it: it names a remote or a URL, never a destination
+// branch, so a task-branch push to a remote called `main` is not a push to
+// main. A lone bare word is read both as a refspec, so `git push main` stays
+// refused, and as a remote, so `git push origin` is an implicit push. An
+// implicit push (no refspec, or `HEAD`) writes the current branch and its
+// upstream: it is refused when either is protected, and refused when the
+// branch cannot be resolved (detached HEAD, unknown directory, or a `cd`
+// earlier in the command).
+function pushVerdict(args, directory, moved) {
   const bare = [];
   let hasRepoOption = false;
   let optionsDone = false;
   let forced = false;
+  let bulk = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!optionsDone && arg === "--") optionsDone = true;
@@ -388,6 +434,7 @@ function pushVerdict(args) {
       const name = arg.split("=")[0];
       if (name.startsWith("--force") || FORCE_FLAGS.has(name)) forced = true;
       else if (/^-[A-Za-z]+$/.test(arg) && arg.slice(1).includes("f")) forced = true;
+      if (BULK_FLAGS.has(name)) bulk = true;
       if (PUSH_VALUE_OPTIONS.has(name)) {
         hasRepoOption = hasRepoOption || name === "--repo";
         if (!arg.includes("=")) index += 1;
@@ -395,25 +442,35 @@ function pushVerdict(args) {
     } else bare.push(arg);
   }
   if (forced || bare.some((token) => token.startsWith("+") && token.length > 1)) return PUSH.force_reason;
-  const refspecs = hasRepoOption || bare.length <= 1 ? bare : bare.slice(1);
+  const lone = !hasRepoOption && bare.length === 1;
+  const refspecs = hasRepoOption || lone ? bare : bare.slice(1);
+  if (bulk || refspecs.some((token) => token === ":" || token.includes("*"))) return PUSH.bulk_reason;
   if (refspecs.some((token) => PROTECTED.has(destinationRef(token)))) return PUSH.protected_reason;
+  if (lone || !refspecs.length || refspecs.some((token) => token === "HEAD" || token === "@")) {
+    const destinations = moved ? undefined : implicitDestinations(directory);
+    if (!destinations) return PUSH.ambiguous_reason;
+    if (destinations.some((name) => PROTECTED.has(name))) return PUSH.protected_reason;
+  }
   return undefined;
 }
 
-function pushDeny(commands) {
+function pushDeny(commands, directory) {
+  let moved = false;
   for (const words of commands) {
-    if (baseName(words[0]) !== "git") continue;
-    const args = pushArguments(words);
-    if (args === undefined) continue;
-    const why = pushVerdict(args);
+    const name = baseName(words[0]);
+    moved = moved || DIRECTORY_CHANGERS.has(name);
+    if (name !== "git") continue;
+    const parsed = pushArguments(words, directory);
+    if (!parsed) continue;
+    const why = pushVerdict(parsed.args, parsed.directory, moved);
     if (why) return why;
   }
   return undefined;
 }
 
-function checkBash(cmd, env) {
+function checkBash(cmd, env, cwd) {
   const commands = realCommands(cmd);
-  const decided = mergeDeny(commands, env) || pushDeny(commands);
+  const decided = mergeDeny(commands, env) || pushDeny(commands, cwd);
   if (decided) return decided;
   if (ASCEND_TEXT_RES.some((re) => re.test(cmd))) return SPEC.ascend_bash_reason;
   if (!SINGLE_LS.test(cmd) && SECRET_TEXT_RE.test(cmd)) return SPEC.secret_bash_reason;

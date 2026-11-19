@@ -126,6 +126,28 @@ DESTINATION_ROWS = [
     ("plus-prefixed task-branch refspec", "git push origin +t3/deny-probe", True),
 ]
 
+MAIN_REPO = SCRATCH / "repo-main"
+TASK_REPO = SCRATCH / "repo-task"
+# (label, command, refused, repo the command runs in). A push with no refspec
+# writes the checked-out branch and its upstream, so the repo decides it; bulk
+# pushes and gh global options are refused or allowed from any repo.
+CWD_ROWS = [
+    ("bare push on main (upstream origin/main)", "git push", True, MAIN_REPO),
+    ("push to origin with no refspec on main", "git push -u origin", True, MAIN_REPO),
+    ("push HEAD on main", "git push origin HEAD", True, MAIN_REPO),
+    ("bare push on a task branch", "git push", False, TASK_REPO),
+    ("push to origin with no refspec on a task branch", "git push -u origin", False, TASK_REPO),
+    ("explicit task-branch push from a task branch", "git push origin t3/deny-probe", False, TASK_REPO),
+    ("--all push from a task branch", "git push --all origin", True, TASK_REPO),
+    ("--mirror push from a task branch", "git push --mirror origin", True, TASK_REPO),
+    ("matching refspec push from a task branch", "git push origin :", True, TASK_REPO),
+    ("bare push on main reached with git -C", f"git -C {MAIN_REPO} push", True, TASK_REPO),
+    ("bare push on main reached with cd", f"cd {MAIN_REPO} && git push", True, TASK_REPO),
+    ("gh -R x/y pr merge 1 from a builder", "gh -R x/y pr merge 1", True, TASK_REPO),
+    ("gh --repo=x/y pr merge 1 from a builder", "gh --repo=x/y pr merge 1", True, TASK_REPO),
+    ("gh -R x/y pr view 1", "gh -R x/y pr view 1", False, TASK_REPO),
+]
+
 results: list[tuple[str, str, str]] = []
 
 
@@ -162,13 +184,21 @@ def reason(decision: dict | None) -> str:
     return (decision or {}).get("reason", "")
 
 
-def hook_decision(command: str, role: str | None = None) -> dict | None:
+def hook_decision(
+    command: str, role: str | None = None, cwd: Path | None = None
+) -> dict | None:
     env = {k: v for k, v in os.environ.items() if k != "MAC_OPS_ROLE"}
     if role is not None:
         env["MAC_OPS_ROLE"] = role
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
-        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+        input=json.dumps(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                **({"cwd": str(cwd)} if cwd else {}),
+            }
+        ),
         capture_output=True,
         text=True,
         check=False,
@@ -345,6 +375,14 @@ def probe_pi_guards() -> None:
         }
         for label, command, _ in DESTINATION_ROWS
     ]
+    events += [
+        {
+            "label": label,
+            "cwd": str(cwd),
+            "event": {"toolName": "bash", "input": {"command": command}},
+        }
+        for label, command, _, cwd in CWD_ROWS
+    ]
     expect_block = [
         True,
         True,
@@ -370,6 +408,7 @@ def probe_pi_guards() -> None:
         True,
     ]
     expect_block += [refused for _, _, refused in DESTINATION_ROWS]
+    expect_block += [refused for _, _, refused, _ in CWD_ROWS]
     for instance in PI_INSTANCES:
         guard = HOME / ".pi" / instance / "extensions/deny-guard.ts"
         if not guard.is_file():
@@ -415,6 +454,7 @@ def probe_claude_settings() -> None:
         ("edit an env file", "Edit(**/.env)"),
         ("read the auth file", "Read(**/auth.json)"),
         ("read the ssh directory", "Read(~/.ssh/**)"),
+        ("read a token file", "Read(**/*token*.json)"),
     ):
         present = entry in deny
         record(
@@ -497,8 +537,12 @@ def probe_claude_settings() -> None:
         (label, command, None, "deny" if refused else "allow")
         for label, command, refused in DESTINATION_ROWS
     )
-    for label, command, role, want in cases:
-        decision = hook_decision(command, role)
+    cases += tuple(
+        (label, command, None, "deny" if refused else "allow", cwd)
+        for label, command, refused, cwd in CWD_ROWS
+    )
+    for label, command, role, want, *where in cases:
+        decision = hook_decision(command, role, *where)
         got = (decision or {}).get("permissionDecision", "allow")
         record(
             f"claude hook: {label}",
@@ -606,7 +650,22 @@ def probe_installer_status() -> None:
     )
 
 
+def make_scratch_repos() -> None:
+    for repo, branch, upstream in (
+        (MAIN_REPO, "main", "refs/heads/main"),
+        (TASK_REPO, "t3/deny-probe", "refs/heads/t3/deny-probe"),
+    ):
+        subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True, timeout=60)
+        for key, value in (("remote", "origin"), ("merge", upstream)):
+            subprocess.run(
+                ["git", "-C", str(repo), "config", f"branch.{branch}.{key}", value],
+                check=True,
+                timeout=60,
+            )
+
+
 def main() -> int:
+    make_scratch_repos()
     if not FAKE_ENV.parent.is_dir():
         FAKE_ENV.parent.mkdir(parents=True)
     # A fake secret, only for the probes to be denied on. It is never read.
