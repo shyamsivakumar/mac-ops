@@ -2743,6 +2743,16 @@ def _limit_action(
     return None
 
 
+def _limit_claim_active(record: Dict[str, Any], now_ns: int) -> bool:
+    termination = record.get("termination") or {}
+    claimed_ns = int(termination.get("takeover_ns") or termination.get("requested_ns") or 0)
+    return (
+        termination.get("reason") == WALL_CLOCK_REASON
+        and now_ns - claimed_ns < LIMIT_RETRY_NS
+        and _pid_alive(termination.get("claimant_pid"))
+    )
+
+
 def _terminate_for_limit(
     registry: Registry,
     record: Dict[str, Any],
@@ -3272,6 +3282,9 @@ def watchdog_loop(
                 continue
         except Exception:
             pass
+        if _limit_claim_active(record, clock_ns()):
+            sleep(WATCHDOG_INTERVAL)
+            continue
         heartbeat_age = clock_ns() - (heartbeat or 0)
         stale = heartbeat is None or heartbeat_age > int(
             WATCHDOG_STALE_SECONDS * 1_000_000_000
@@ -3289,17 +3302,28 @@ def watchdog_loop(
                     claimant_pid=os.getpid(),
                     expected_workload=cached["workload"],
                     takeover=bool(termination),
+                    observed_termination=termination or None,
                 )
             except Exception:
                 claimed = None
             if claimed is None:
                 try:
                     claimed = _takeover_termination(
-                        registry, job_id, cached["workload"], os.getpid()
+                        registry,
+                        job_id,
+                        cached["workload"],
+                        os.getpid(),
+                        termination,
                     )
                 except Exception:
                     claimed = None
             if claimed is None:
+                try:
+                    if _limit_claim_active(_record(registry, job_id), clock_ns()):
+                        sleep(WATCHDOG_INTERVAL)
+                        continue
+                except Exception:
+                    pass
                 try:
                     success = terminate(
                         cached["workload"],
@@ -3332,11 +3356,19 @@ def watchdog_loop(
 
 
 def _watchdog_takeover_record(
-    record: Dict[str, Any], workload: Dict[str, Any], claimant_pid: int
+    record: Dict[str, Any],
+    workload: Dict[str, Any],
+    claimant_pid: int,
+    observed: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     if _workload_identity(record) != workload or not record.get("termination"):
         return None
     termination = record["termination"]
+    if any(
+        termination.get(key) != observed.get(key)
+        for key in ("claimant_pid", "requested_ns", "takeover_ns")
+    ):
+        return None
     termination["claimant_pid"] = claimant_pid
     termination["takeover_ns"] = monotonic_ns()
     record["termination"] = termination
@@ -3345,12 +3377,18 @@ def _watchdog_takeover_record(
 
 
 def _takeover_termination(
-    registry: Registry, job_id: str, workload: Dict[str, Any], claimant_pid: int
+    registry: Registry,
+    job_id: str,
+    workload: Dict[str, Any],
+    claimant_pid: int,
+    observed: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     with registry.lock():
         return registry.update(
             job_id,
-            lambda current: _watchdog_takeover_record(current, workload, claimant_pid),
+            lambda current: _watchdog_takeover_record(
+                current, workload, claimant_pid, observed
+            ),
         )
 
 
