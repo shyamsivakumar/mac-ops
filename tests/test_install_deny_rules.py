@@ -659,7 +659,10 @@ console.log(JSON.stringify(out));
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         reasons = json.loads(proc.stdout)
-        for (event, want_block, _), reason in zip(cases, reasons):
+        self.assertEqual(len(reasons), len(cases))
+        for (event, want_block, _), reason in [
+            (case, reasons[index]) for index, case in enumerate(cases)
+        ]:
             self.assertEqual(
                 reason is not None,
                 want_block,

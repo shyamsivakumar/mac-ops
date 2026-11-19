@@ -291,7 +291,9 @@ def probe_pi_guards() -> None:
         decisions = pi_decisions(guard, events)
         ok = True
         details = []
-        for index, (item, want) in enumerate(zip(decisions, expect_block)):
+        ok = ok and len(decisions) == len(expect_block)
+        for index, item in enumerate(decisions):
+            want = expect_block[index]
             got = blocked(item["decision"])
             label = events[index]["label"]
             say = "blocked" if got else "allowed"
