@@ -2246,13 +2246,13 @@ def devices_named_by_job(
 ) -> List[str]:
     """Return the simulator devices that the job's arguments name.
 
-    A job names a device when a device identifier appears in its arguments, when
-    a ``-destination`` names a device by its name, or when an argument after
-    ``simctl`` is exactly a device name. A name with no OS names the newest
-    runtime that has a device of that name. A job that names no device is never
-    credited with booting one.
+    A job names a device when a ``-destination`` names it by ``id`` or by name,
+    or when an argument after ``simctl`` is exactly a device identifier or a
+    device name. A device identifier anywhere else, such as in an output path,
+    names nothing. A name with no OS names the newest runtime that has a device
+    of that name. A job that names no device is never credited with booting one.
     """
-    named = {match.upper() for arg in argv for match in SIMULATOR_UDID_PATTERN.findall(str(arg))}
+    named: set = set()
     for index, arg in enumerate(argv[:-1]):
         if arg != "-destination":
             continue
@@ -2264,6 +2264,8 @@ def devices_named_by_job(
         platform = fields.get("platform", "")
         if platform and "simulator" not in platform.lower():
             continue
+        if SIMULATOR_UDID_PATTERN.fullmatch(fields.get("id", "")):
+            named.add(fields["id"].upper())
         matches = [row for row in devices if fields.get("name") and row["name"] == fields["name"]]
         requested = _version_numbers(fields.get("os", "")) if fields.get("os", "").lower() != "latest" else ()
         named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, requested))
@@ -2272,6 +2274,8 @@ def devices_named_by_job(
     ]
     if simctl_positions:
         for arg in argv[simctl_positions[0] + 1 :]:
+            if SIMULATOR_UDID_PATTERN.fullmatch(str(arg)):
+                named.add(str(arg).upper())
             matches = [row for row in devices if row["name"] and row["name"] == str(arg)]
             named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, ()))
     return sorted(named)
@@ -2590,7 +2594,7 @@ def _device_used_by_other_job(
         command = str(other.get("command_basename") or "")
         simulators = other.get("simulators")
         if not isinstance(simulators, dict):
-            if command in SIMULATOR_JOB_COMMANDS:
+            if other.get("simulator_job") is True or command in SIMULATOR_JOB_COMMANDS:
                 return True
             continue
         booted_before = simulators.get("booted")
@@ -2716,6 +2720,26 @@ def _attach_simulator_state(
                 registry.update(job_id, attach)
     except HeavyError:
         return
+
+
+def _mark_simulator_job(
+    registry: Registry, job_id: str, command_basename: str, argv: Sequence[str]
+) -> None:
+    """Persist that the job may boot simulators, before it waits or launches.
+
+    The mark survives a missing simulator snapshot, so a competing job's cleanup
+    keeps every device on for a job such as ``xcrun simctl`` whose basename alone
+    does not show that it uses simulators.
+    """
+    if not _is_simulator_job(command_basename, argv):
+        return
+
+    def mark(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        current["simulator_job"] = True
+        return current
+
+    with registry.lock():
+        registry.update(job_id, mark)
 
 
 def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[str]:
@@ -3554,6 +3578,7 @@ def _launch_job(
     cleanup_record = False
     project_fd = None
     try:
+        _mark_simulator_job(registry, job_id, command_basename, argv)
         record = _record(registry, job_id)
         project_fd = _acquire_project_lock(
             registry,
