@@ -241,7 +241,7 @@ class GateBriefTest(unittest.TestCase):
     def brief(self, **kwargs):
         gate_policy = load(BIN / "gate_policy.py", "gate_policy")
         return gate_policy.build_gate_brief(
-            {"key": "MO"}, "shyamsivakumar/mac-ops", 543, 544, "a" * 40, False,
+            {"key": "MO"}, "shyamsivakumar/fixture", 543, 544, "a" * 40, False,
             proof="| syntax | passed |", proof_path="evidence/MO-543/check-proof.md",
             proof_state="found", **kwargs)
 
@@ -258,7 +258,7 @@ class GateBriefTest(unittest.TestCase):
 
     def test_code_only_keeps_the_merge_order(self):
         text = self.brief(prompt=False)
-        self.assertIn("gh pr merge 544 -R shyamsivakumar/mac-ops --squash", text)
+        self.assertIn("gh pr merge 544 -R shyamsivakumar/fixture --squash", text)
         self.assertNotIn("never auto-merges", text)
         self.assertIn("review and merge", text)
 
@@ -346,6 +346,9 @@ class CoordqGateTest(unittest.TestCase):
         from tests.test_gatekeep_backstop_reviewer import load_coordq
         self.coordq = load_coordq()
         self.coordq._base_pins.clear()
+        patcher = patch.object(self.coordq, "load", return_value={"gatedHeads": {}})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_the_queue_reads_the_same_list(self):
         with patch.object(self.coordq, "gh_json",
@@ -537,9 +540,9 @@ class CoordqGateTest(unittest.TestCase):
                                      "a" * 40, False, model, prompt=True)
         self.assertIn("never auto-merges", args["message"])
         self.assertNotIn("gh pr merge", args["message"])
-        code = self.coordq.gate_args(settings, "shyamsivakumar/mac-ops", 543, 544,
+        code = self.coordq.gate_args(settings, "shyamsivakumar/fixture", 543, 544,
                                      "a" * 40, False, model)
-        self.assertIn("gh pr merge 544 -R shyamsivakumar/mac-ops", code["message"])
+        self.assertIn("gh pr merge 544 -R shyamsivakumar/fixture", code["message"])
 
     def gatekeep(self, changed):
         """The gate the queue's own gatekeeper would queue, for one file list."""

@@ -1,0 +1,5 @@
+process 1: ticket closed
+process exits before the fast-forward
+process 2 (next pass): FIX   main fast-forwarded (54e7bfeb -> 93ba0f32)
+process 3 (pass again): ''
+local main 54e7bfeb -> 93ba0f32 once; second pass no-op

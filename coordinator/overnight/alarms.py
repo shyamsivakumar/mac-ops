@@ -252,7 +252,7 @@ def board_update(target, alarm_id, action, item=None, attempts=5, create=False):
 
 OWNER_IDS = re.compile(
     r"factory-zero-merge|factory-overnight-stall"
-    r"|prompt-merge-MO-\d+|lane-gate-rounds-shyamsivakumar-mac-ops-\d+")
+    r"|lane-gate-rounds-shyamsivakumar-mac-ops-\d+|.+-MO-\d+")
 
 
 def board_for(decisions, alarm_id):
@@ -401,6 +401,7 @@ def write_board(path, board):
         temporary.write_text(json.dumps(board, indent=1))
         os.replace(temporary, path)
     except OSError:
+        temporary.unlink(missing_ok=True)
         return False
     return True
 

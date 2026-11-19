@@ -336,7 +336,7 @@ the tick every 30 minutes, on DeepSeek, and the installer leaves it alone
 (the retired set is empty). The tick reads the whole board but starts no
 tickets: the shift and `coordq`'s refill own board intake, so there is one
 intake owner. The tick decides, gates, routes failures and reports drift.
-The shift's own launchd job (`dev.coordinator.overnight`) fires the shift on
+The shift's own launchd job (`dev.coordinator.lanes`) fires the shift on
 a fixed interval, every day, and is never unarmed. The shift's runbook is
 `coordinator/overnight/README.md` in this checkout. The launcher
 (`~/.local/bin/coord-tick`) is installed as a tool too: it runs one

@@ -8,7 +8,7 @@ import unittest
 
 from tests.test_gatekeep_backstop_reviewer import load_coordq
 
-REPO = "shyamsivakumar/mac-ops"
+REPO = "shyamsivakumar/fixture"
 ISSUE = 296
 NUMBER = 297
 HEAD = "a" * 40

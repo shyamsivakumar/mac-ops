@@ -75,7 +75,9 @@ def ruff_command(*extra):
     """
     runners = [name for name in SUFFIXLESS_PYTHON if (ROOT / name).is_file()]
     return uvx_command("ruff", "check", "--select", RUFF_RULES,
-                       "--output-format", "json", ".", *runners, *extra)
+                       "--output-format", "json",
+                       "--extend-exclude", "evals/harbor/tasks/*/tests/files",
+                       ".", *runners, *extra)
 
 
 def ruff_counts():
