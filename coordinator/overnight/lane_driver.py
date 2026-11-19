@@ -1635,7 +1635,7 @@ def recover_dead_runs(ledger):
                 workspace, where, note = {"type": "existing_worktree", "worktreePath": path}, "this existing worktree", ""
             else:
                 base, note = pull_base(repo, open_pr)
-                workspace, where = {"type": "worktree", "baseRef": base, "startFromOrigin": True}, "a fresh worktree of the pull request branch"
+                workspace, where = {"type": "worktree", "baseRef": base, "startFromOrigin": True}, "a fresh worktree of the pull request branch" if open_pr else "a fresh worktree"
             ticket_url = f"https://github.com/{repo}/issues/{ticket}"
             message = (f"Continue {repo}#{ticket} ({ticket_url}) in {where}. The prior thread {thread_id} stopped. "
                        "Read the ticket and current diff, preserve completed work, finish the acceptance checks, and report the exact remaining blocker. "

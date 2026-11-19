@@ -288,6 +288,11 @@ def dead_run_recovery():
     exact(len(launches), 1)
     exact(launches[0]["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/builder/fixture",
                                               "startFromOrigin": True})
+    dead["pullRequests"] = []
+    launches.clear()
+    recover({})
+    exact(launches[0]["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
+    exact("pull request branch" in launches[0]["message"], False)
     dead_run_no_receipt()
 
 
