@@ -13,13 +13,23 @@ ROOT = HERE.parent.parent
 EPSILON = 1e-9
 
 
+def covered(report):
+    """The task set, split and repeat count a report ran, or None when the report does not say."""
+    tasks = report.get("tasks")
+    if tasks is None:
+        return None
+    return report.get("repeats"), sorted((t["id"], bool(t.get("heldout", False))) for t in tasks)
+
+
 def judge(candidate, baseline, cfg):
     train, held = candidate["train"], candidate["heldout"]
     base_train, base_held = baseline["train"], baseline["heldout"]
-    if None in (train["correct_per_dollar"], base_train["correct_per_dollar"]):
-        return False, "cost UNVERIFIED on the non-held-out tasks"
+    if any(s["cost_status"] != "OK" for s in (train, base_train, held, base_held)):
+        return False, "cost UNVERIFIED on the compared tasks"
     if None in (held["pass_rate"], base_held["pass_rate"]):
         return False, "no held-out runs to compare"
+    if base_train["correct_per_dollar"] <= 0:
+        return False, "the baseline got nothing correct on the non-held-out tasks"
     ratio = train["correct_per_dollar"] / base_train["correct_per_dollar"]
     if ratio < cfg["min_cpd_ratio"] - EPSILON:
         return False, f"correct per dollar is {ratio:.2f}x the baseline, need {cfg['min_cpd_ratio']}x"
@@ -56,18 +66,31 @@ def main(argv=None):
         sys.exit("gate: baseline.json has no pinned report yet; score a baseline run and pin it")
     baseline_path = Path(pin["report"])
     baseline_path = baseline_path if baseline_path.is_absolute() else args.baseline.parent / baseline_path
-    baseline = json.loads(baseline_path.read_text())["models"].get(pin["model"])
+    baseline_report = json.loads(baseline_path.read_text())
+    baseline = baseline_report["models"].get(pin["model"])
     if baseline is None:
         sys.exit(f"gate: the pinned report has no entry for {pin['model']}")
-    reports = [json.loads(p.read_text()) for p in args.reports]
+    reports, seen = [], set()
+    for path in args.reports:
+        report = json.loads(path.read_text())
+        if report["run_id"] in seen:
+            continue
+        seen.add(report["run_id"])
+        reports.append(report)
 
     need = cfg["consecutive_reports"]
     candidates = sorted({m for r in reports for m in r["models"]} - {pin["model"]})
     verdicts = {}
+    baseline_cover = covered(baseline_report)
     for model in candidates:
         per_report = []
         for r in reports:
-            ok, why = judge(r["models"][model], baseline, cfg) if model in r["models"] else (False, "not measured")
+            if model not in r["models"]:
+                ok, why = False, "not measured"
+            elif baseline_cover is None or covered(r) != baseline_cover:
+                ok, why = False, "ran a different task set or split from the baseline"
+            else:
+                ok, why = judge(r["models"][model], baseline, cfg)
             per_report.append({"run_id": r["run_id"], "wins_clearly": ok, "reason": why})
         tail = per_report[-need:]
         verdicts[model] = {

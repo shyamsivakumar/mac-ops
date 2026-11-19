@@ -37,6 +37,17 @@ def load_trials(run_dir, prices):
     return trials
 
 
+def missing_trials(run_dir, record):
+    """Name every scheduled trial with no result, so a short run cannot be scored."""
+    short = []
+    for model in record["models"]:
+        for task in record["tasks"]:
+            found = len(list((run_dir / model["id"] / task["id"]).glob("*/*/result.json")))
+            if found != record["repeats"]:
+                short.append(f"{model['id']}/{task['id']}: {found} of {record['repeats']} trials")
+    return short
+
+
 def summarize(trials):
     runs = len(trials)
     correct = sum(t["correct"] for t in trials)
@@ -104,12 +115,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     record = json.loads((args.run_dir / "run.json").read_text())
+    short = missing_trials(args.run_dir, record)
+    if short:
+        sys.exit("score: the run does not match its schedule; do not score it: " + "; ".join(short))
     meta = {t["id"]: t for t in record["tasks"]}
     trials = load_trials(args.run_dir, json.loads(args.prices.read_text()))
     report = {
         "run_id": record["run_id"],
         "repeats": record["repeats"],
         "unreachable": record["unreachable"],
+        "tasks": record["tasks"],
         "models": {m: score_model([t for t in trials if t["model"] == m], meta) for m in sorted({t["model"] for t in trials})},
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)

@@ -361,12 +361,12 @@ PASS  e flaky task detected: [{'task': 'alpha-2', 'correct': 2, 'runs': 3}]
         {
           "run_id": "r1",
           "wins_clearly": false,
-          "reason": "cost UNVERIFIED on the non-held-out tasks"
+          "reason": "cost UNVERIFIED on the compared tasks"
         },
         {
           "run_id": "r2",
           "wins_clearly": false,
-          "reason": "cost UNVERIFIED on the non-held-out tasks"
+          "reason": "cost UNVERIFIED on the compared tasks"
         }
       ],
       "promote": false
@@ -391,4 +391,268 @@ PASS  e flaky task detected: [{'task': 'alpha-2', 'correct': 2, 'runs': 3}]
     "glm"
   ]
 }
-PASS  f missing price marks cost UNVERIFIED and blocks promotion: {'deepseek': 'cost UNVERIFIED on the non-held-out tasks', 'promoted': ['glm']}
+PASS  f missing price marks cost UNVERIFIED and blocks promotion: {'deepseek': 'cost UNVERIFIED on the compared tasks', 'promoted': ['glm']}
+# Ladder report r1
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| glm | 12 | 100.0% | 0.1440 | 0.0120 | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+# Ladder report baseline
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| minimax | 12 | 100.0% | 1.2000 | 0.1000 | 0 |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+{
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "min_cpd_ratio": 1.5,
+    "max_pass_drop": 0.0,
+    "consecutive_reports": 2
+  },
+  "verdicts": {
+    "glm": {
+      "reports": [
+        {
+          "run_id": "r1",
+          "wins_clearly": true,
+          "reason": "wins clearly at 8.33x correct per dollar"
+        }
+      ],
+      "promote": false
+    }
+  },
+  "promoted": []
+}
+PASS  g the same winning report passed twice writes no proposal: ['r1']
+# Ladder report r1
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| glm | 6 | 100.0% | 0.0720 | 0.0120 | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 3 | 100.0% |
+| feature | 3 | 100.0% |
+
+# Ladder report r2
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| glm | 6 | 100.0% | 0.0720 | 0.0120 | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 3 | 100.0% |
+| feature | 3 | 100.0% |
+
+# Ladder report baseline
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| minimax | 12 | 100.0% | 1.2000 | 0.1000 | 0 |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+{
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "min_cpd_ratio": 1.5,
+    "max_pass_drop": 0.0,
+    "consecutive_reports": 2
+  },
+  "verdicts": {
+    "glm": {
+      "reports": [
+        {
+          "run_id": "r1",
+          "wins_clearly": false,
+          "reason": "ran a different task set or split from the baseline"
+        },
+        {
+          "run_id": "r2",
+          "wins_clearly": false,
+          "reason": "ran a different task set or split from the baseline"
+        }
+      ],
+      "promote": false
+    }
+  },
+  "promoted": []
+}
+PASS  h a win on fewer tasks than the baseline writes no proposal: ran a different task set or split from the baseline
+# Ladder report r1
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| glm | 12 | 100.0% | 0.1440 | 0.0120 | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+# Ladder report r2
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| glm | 12 | 100.0% | 0.1440 | 0.0120 | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+# Ladder report baseline
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| minimax | 12 | 25.0% | 1.2000 | 0.4000 | 0 |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 0.0% |
+| feature | 6 | 50.0% |
+
+{
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "min_cpd_ratio": 1.5,
+    "max_pass_drop": 0.0,
+    "consecutive_reports": 2
+  },
+  "verdicts": {
+    "glm": {
+      "reports": [
+        {
+          "run_id": "r1",
+          "wins_clearly": false,
+          "reason": "the baseline got nothing correct on the non-held-out tasks"
+        },
+        {
+          "run_id": "r2",
+          "wins_clearly": false,
+          "reason": "the baseline got nothing correct on the non-held-out tasks"
+        }
+      ],
+      "promote": false
+    }
+  },
+  "promoted": []
+}
+PASS  i a baseline with no correct training answers writes no proposal: the baseline got nothing correct on the non-held-out tasks
+# Ladder report r1
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| deepseek | 12 | 100.0% | UNVERIFIED | UNVERIFIED | 0 |
+
+## deepseek
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+# Ladder report r2
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| deepseek | 12 | 100.0% | UNVERIFIED | UNVERIFIED | 0 |
+
+## deepseek
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+# Ladder report baseline
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| minimax | 12 | 100.0% | 1.2000 | 0.1000 | 0 |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+{
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "min_cpd_ratio": 1.5,
+    "max_pass_drop": 0.0,
+    "consecutive_reports": 2
+  },
+  "verdicts": {
+    "deepseek": {
+      "reports": [
+        {
+          "run_id": "r1",
+          "wins_clearly": false,
+          "reason": "cost UNVERIFIED on the compared tasks"
+        },
+        {
+          "run_id": "r2",
+          "wins_clearly": false,
+          "reason": "cost UNVERIFIED on the compared tasks"
+        }
+      ],
+      "promote": false
+    }
+  },
+  "promoted": []
+}
+PASS  j a win with UNVERIFIED held-out cost writes no proposal: cost UNVERIFIED on the compared tasks
+# Ladder report r1
+
+| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |
+| --- | --- | --- | --- | --- | --- |
+| glm | 12 | 100.0% | 0.1440 | 0.0120 | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+| feature | 6 | 100.0% |
+
+PASS  k a run short of its scheduled trials is not scored: score: the run does not match its schedule; do not score it: glm/beta-3: 2 of 3 trials

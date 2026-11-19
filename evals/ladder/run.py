@@ -112,10 +112,16 @@ def main(argv=None):
         "tasks": tasks,
     }
     (run_dir / "run.json").write_text(json.dumps(record, indent=2) + "\n")
+    short = []
     for m, t in plan:
         out_dir = run_dir / m["id"] / t["id"]
         out_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(harbor_command(m, t["id"], args.repeats, out_dir), check=False)
+        code = subprocess.run(harbor_command(m, t["id"], args.repeats, out_dir), check=False).returncode
+        trials = len(list(out_dir.glob("*/*/result.json")))
+        if code or trials != args.repeats:
+            short.append(f"{m['id']}/{t['id']}: exit {code}, {trials} of {args.repeats} trials")
+    if short:
+        sys.exit("run: these jobs did not complete their trials; do not score this run: " + "; ".join(short))
     return 0
 
 
