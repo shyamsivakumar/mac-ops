@@ -100,8 +100,8 @@ baseline again after the known findings are fixed. When Ruff or `uvx` is not on
 the machine, the proof file records `not run` and the run is incomplete, so it
 is not a pass.
 
-The check runs mypy the same way, through `uvx mypy@1.18.2`, over the modules
-listed in `MYPY_TARGETS` (today `board_resources.py`). Both versions live in
+The check runs mypy the same way, through `uvx mypy@1.18.2 --strict`, over the
+modules listed in `MYPY_TARGETS` (today `board_resources.py`). Both versions live in
 `TOOL_VERSIONS` in `scripts/mac_ops_fast_check.py`; change a version there and
 nowhere else. A missing `uvx` or mypy is `not run`, never `passed`.
 
