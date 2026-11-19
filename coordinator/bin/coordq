@@ -192,17 +192,21 @@ def with_model(args):
         entry = model_list.first_available(task_list(task_type), task_type=task_type)
         if entry is None:
             return None, f"refused: every model for taskType {task_type!r} is blocked"
-        resolved["modelSelection"] = entry["selection"]
+        resolved["modelSelection"] = model_list.selection_for(entry, task_type)
     else:
         list_name = task_list(task_type)
         allowed = model_list.find(resolved["modelSelection"], (list_name,))
         if allowed is None:
+            # A caller that still names a direct `pi` Morph model goes through
+            # the router entry, so its launch keeps the in-thread fallback.
+            allowed = model_list.router_covers(list_name, resolved["modelSelection"])
+        if allowed is None:
             return None, (f"refused: taskType {task_type!r} runs on a model from the {list_name} list, "
                           f"but the payload names {resolved['modelSelection']!r}")
-        if model_list.is_blocked(allowed["selection"]):
+        if model_list.entry_blocked(allowed):
             return None, (f"refused: {model_list.identity(allowed['selection'])} is blocked, "
                           f"so taskType {task_type!r} cannot run on it")
-        resolved["modelSelection"] = allowed["selection"]
+        resolved["modelSelection"] = model_list.selection_for(allowed, task_type)
     return resolved, None
 
 
@@ -221,7 +225,8 @@ def queued_launch_args(tool, args):
         return {**{k: v for k, v in args.items() if k != "modelSelection"},
                 "taskType": LEGACY_ROUTE_TASK_TYPES[selection["model"]]}
     for list_name, task_type in (("review", "review"), ("build", "worker"), ("fix", "fix")):
-        if model_list.find(args["modelSelection"], (list_name,)):
+        if (model_list.find(args["modelSelection"], (list_name,))
+                or model_list.router_covers(list_name, args["modelSelection"])):
             return {**args, "taskType": task_type}
     return args
 
