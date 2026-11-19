@@ -990,6 +990,9 @@ print("EMPTYSEARCH", gh_gateway.argv_host(
     ["gh", "pr", "list", "-S=", "-R", "ent.example/team/repo"]))
 print("PRDIFFPATCH", gh_gateway.argv_host(
     ["gh", "pr", "diff", "42", "-p", "-R", "ent.example/team/repo"]))
+print("ADDLABEL", gh_gateway.argv_host(
+    ["gh", "pr", "edit", "42", "-R", "actual.example/o/r",
+     "--add-label", "-Rother.example/o/r"]))
 print("REVIEWBODY", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-R", "actual.example/o/r", "--body",
      "-Rother.example/o/r"]))
@@ -1018,7 +1021,7 @@ check("a host in -R is the effective host",
                   "ISSUEEDITOR", "ent.example", "CHECKOUTFORCE", "ent.example",
                   "COMMENTEDITOR", "ent.example", "ISSUECOMMENT", "ent.example", "LIMITATTACHED", "ent.example", "LABELVALUE", "ent.example", "VIEWCOMMENTS", "ent.example", "ISSUEVIEW", "ent.example", "ISSUELISTWEB", "ent.example", "ISSUELISTASSIGNEE", "actual.example",
                   "RUNVIEWVERBOSE", "ent.example", "RUNVIEWWEB", "ent.example", "RUNLISTATTACHEDW", "actual.example", "MENTIONVALUE", "actual.example", "EMPTYSEARCH", "ent.example",
-                  "PRDIFFPATCH", "ent.example",
+                  "PRDIFFPATCH", "ent.example", "ADDLABEL", "actual.example",
                   "REVIEWBODY", "actual.example"],
       str(selector))
 

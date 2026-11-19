@@ -126,6 +126,12 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                # repository selector.
                "--body", "--body-file", "--title", "--subject", "--notes",
                "--mention", "--involves", "--participant", "--no-mention",
+               # The `--add-*`/`--remove-*` family all take a value: labels,
+               # assignees, reviewers, projects, teams.
+               "--add-label", "--remove-label", "--add-assignee",
+               "--remove-assignee", "--add-reviewer", "--remove-reviewer",
+               "--add-project", "--remove-project", "--add-team",
+               "--remove-team",
                "--message", "--reason", "--comment", "--description")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags this code understands. A cluster it does not know, such as
