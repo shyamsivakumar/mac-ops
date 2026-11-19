@@ -76,13 +76,9 @@ STUCK_COUNT = 3
 # driver, gatekeep and the shift share this one floor.
 FLOOR = gh_gateway.floor()
 STUCK_FILE = "gatekeep-stuck.txt"
-# A gate that dies without a verdict is queued again, but a reviewer that
-# cannot run at all fails the same way, so a retry with no end relaunches it
-# on every run. A head is retried at most GATE_RETRY_LIMIT times, with
-# GATE_RETRY_BACKOFF seconds between retries after the first, and then given
-# up until its head changes.
-GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
-GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
+# A gate that dies without a verdict moves once to the next reviewer, and a
+# head whose moved gate dies too is given up until its head changes.
+GATE_RETRY_LIMIT = 1
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
 # every action the queue has taken, with the item that took it and what
@@ -133,17 +129,38 @@ def gate_state(value):
 
     gatedHeads maps a head to its queue item, and to the record
     `{id, retries, at, givenUp}` once a gate for the head has died without
-    a verdict. A value written before that record is the bare queue item
-    id, which is a head with no retry behind it.
+    a verdict, plus `retryOf`, the dead gate thread a queued retry replaces
+    until the retry's launch overwrites that thread's receipt. A value
+    written before that record is the bare queue item id, which is a head
+    with no retry behind it.
     """
     if isinstance(value, dict):
         retries = value.get("retries")
         at = value.get("at")
-        return {"id": value.get("id"),
-                "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
-                "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
-                "givenUp": bool(value.get("givenUp"))}
+        state = {"id": value.get("id"),
+                 "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
+                 "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
+                 "givenUp": bool(value.get("givenUp"))}
+        if isinstance(value.get("retryOf"), str) and value["retryOf"]:
+            state["retryOf"] = value["retryOf"]
+        return state
     return {"id": value, "retries": 0, "at": None, "givenUp": False}
+
+
+def has_verdict(report):
+    lines = [line.rstrip() for line in report.splitlines() if line.strip()]
+    return bool(lines) and lines[-1] in ("VERDICT: PASS", "VERDICT: FAIL")
+
+
+def read_dead_gate(queue, key):
+    """The recorded gate of a head and its thread read, or None when the head
+    has no gate thread to judge. Read before any lock is taken."""
+    state = gate_state(queue.get("gatedHeads", {}).get(key))
+    thread_id = load_receipts().get(key)
+    if state["givenUp"] or not thread_id or thread_id == state.get("retryOf"):
+        return None
+    code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
+    return None if code else (thread_id, json.loads(out))
 
 
 def gate_label(state):
@@ -1728,34 +1745,34 @@ def cmd_gatekeep(a):
                 continue
             counts.pop(event["pr"], None)
             key, args = event["key"], event["args"]
-            with Lock(True):
+            if key in attempted:
+                continue
+            observed = load()
+            dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) else None
+            with model_list.blocked_lock(), Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
                 if key in attempted:
                     continue
                 state = gate_state(heads.get(key))
                 retries = 0
+                retry_of = None
                 if key in heads:
                     # A head whose retries ran out is left alone until its
                     # head changes, so a reviewer that cannot run is not
                     # relaunched on every run.
-                    if state["givenUp"]:
+                    if dead is None or state != gate_state(observed["gatedHeads"][key]):
                         continue
-                    receipts = load_receipts()
-                    thread_id = receipts.get(key)
-                    if not thread_id:
+                    thread_id, data = dead
+                    if load_receipts().get(key) != thread_id:
                         continue
-                    code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
-                    if code:
-                        continue
-                    data = json.loads(out)
                     thread = data.get("thread") or {}
                     texts = [i.get("text") or "" for i in (data.get("items") or [])
                              if i.get("type") == "assistant_message"]
                     report = texts[-1].rstrip() if texts else ""
                     if thread.get("status") not in {"failed", "interrupted", "completed"}:
                         continue
-                    if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
+                    if has_verdict(report):
                         continue
                     retries = state["retries"] + 1
                     if retries > GATE_RETRY_LIMIT:
@@ -1764,8 +1781,6 @@ def cmd_gatekeep(a):
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
                             save(queue)
-                        continue
-                    if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
@@ -1777,15 +1792,14 @@ def cmd_gatekeep(a):
                         continue
                     args["modelSelection"] = model
                     args["clientRequestId"] = key + ":" + model["model"] + ":retry"
+                    retry_of = thread_id
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
-                    if not a.dry_run:
-                        del heads[key]
-                        save(queue)
-                        del receipts[key]
-                        receipt_path = path("dispatch-receipts.json")
-                        with open(receipt_path + ".tmp", "w") as f:
-                            json.dump(receipts, f)
-                        os.replace(receipt_path + ".tmp", receipt_path)
+                if model_list.is_blocked(args["modelSelection"]):
+                    chosen = reviewer_model(event.get("builderModels", []))
+                    if chosen is None:
+                        print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
+                        continue
+                    args["modelSelection"] = chosen
                 attempted.add(key)
                 print(("would queue " if a.dry_run else "queued ") + key
                       + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
@@ -1798,6 +1812,8 @@ def cmd_gatekeep(a):
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
                               "at": time.time() if retries else None, "givenUp": False}
+                if retry_of:
+                    heads[key]["retryOf"] = retry_of
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
