@@ -1596,6 +1596,7 @@ def gate_round_cap():
     repo = "shyamsivakumar/mac-ops"
     heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
     sent = []
+    current = [""]
     with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions:
         board = decisions.with_name("mac-ops-owner.json")
 
@@ -1612,6 +1613,10 @@ def gate_round_cap():
                     return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]})
                 if "/git/trees/" in endpoint:
                     return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]})
+            if cmd[:2] == ["ticket", "close"]:
+                return "closed"
+            if cmd[:2] == ["ticket", "gate"]:
+                return json.dumps([{"selection": {"model": "m"}}]) if "--print-model" in cmd else f"brief {current[0]}"
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
@@ -1627,6 +1632,7 @@ def gate_round_cap():
 
         def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")):
             """Run the lane over one pull request at one head."""
+            current[0] = head
             pr = dict(number=number, state="OPEN", headRefOid=head,
                       body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
             snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
@@ -1701,6 +1707,59 @@ def gate_round_cap():
         exact(lane.clear_gate_round_decision(repo, 20, ledger), True)
         exact(f"rounds-decision:{repo}#20" in ledger, False)
         exact(len(json.loads(board.read_text())["items"]), 3)
+
+        none_line = f"finding\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
+        merged, briefs = [], []
+
+        def merge(repo_, number_, head_, base_):
+            merged.append((number_, head_))
+            return True, f"merged #{number_}"
+
+        def at_cap(number, report):
+            ledger = {f"fix:{repo}#{number}:{heads[0]}": "sent", f"fix:{repo}#{number}:{heads[1]}": "sent"}
+            with patch.object(lane, "merge_on_reviewed_base", merge), \
+                 patch.object(lane, "fast_forward_main", lambda r: None):
+                result = act(number, heads[2], ledger, verdict=("FAIL", {"threadId": "gate"}, report))
+            return result, ledger
+
+        def round_item(number):
+            return f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" in [
+                item["id"] for item in json.loads(board.read_text())["items"]]
+
+        # (a) round 3 FAIL with the none line merges, pinned at its head.
+        result, _ = at_cap(30, none_line)
+        exact(merged, [(30, heads[2])])
+        exact(round_item(30), False)
+        # (b) open findings stop at the round item.
+        result, _ = at_cap(31, none_line.replace("none", "1"))
+        exact(merged, [(30, heads[2])])
+        exact(round_item(31), True)
+        # (c) no such line stops at the round item.
+        result, _ = at_cap(32, "finding\nMajor: x\nVERDICT: FAIL")
+        exact(merged, [(30, heads[2])])
+        exact(round_item(32), True)
+        # The line must sit right before the final VERDICT line.
+        at_cap(33, f"{lane.OPEN_FINDINGS_NONE}\nfinding\nVERDICT: FAIL")
+        exact(merged, [(30, heads[2])])
+        # (d) round 1 FAIL with the none line is a normal fix round.
+        sent.clear()
+        with patch.object(lane, "merge_on_reviewed_base", merge):
+            act(34, heads[0], {}, verdict=("FAIL", {"threadId": "gate"}, none_line))
+        exact(sent, [f"fix:{repo}#34:{heads[0]}"])
+        exact(merged, [(30, heads[2])])
+        # (e) a prompt PR with the none line waits for Shyam.
+        with patch.object(lane, "prompt_pull", return_value=lane.prompt_paths.HOLD):
+            result, _ = at_cap(35, none_line)
+        exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
+        exact(merged, [(30, heads[2])])
+        # (f) the brief asks for the line from round 3 on, not at round 1.
+        def brief_for(ledger):
+            with patch.object(lane, "start", lambda args, prio, led, lkey: briefs.append(args["message"]) or "started"):
+                act(36, heads[3], ledger, verdict=("absent", None, ""))
+            return briefs[-1]
+        two_rounds = {f"fix:{repo}#36:{heads[0]}": "sent", f"fix:{repo}#36:{heads[1]}": "sent"}
+        exact(lane.OPEN_FINDINGS_NONE in brief_for(two_rounds), True)
+        exact(lane.OPEN_FINDINGS_NONE in brief_for({}), False)
 
 
 def decisions_board_guard():
