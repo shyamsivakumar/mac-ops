@@ -1472,6 +1472,8 @@ def consolidation_guard():
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
     def run(command, **kwargs):
+        if "symbolic-ref" in command:
+            return "refs/heads/main"
         calls.append(command)
         return "fixture-receipt"
     with patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
@@ -1602,6 +1604,8 @@ def root_workspace():
             if cmd[0] == "git":
                 if "rev-parse" in cmd:
                     return git
+                if "symbolic-ref" in cmd:
+                    return "refs/heads/builder/fixture"
                 exact(cmd[1:4], ["-C", root, "ls-remote"])
                 exact(cmd[4:], ["--heads", "origin", "builder/fixture"])
                 return listing
