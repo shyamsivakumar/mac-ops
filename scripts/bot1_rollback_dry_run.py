@@ -4,16 +4,18 @@
 Railway deploys the ``paper-live`` branch of strategy-replay-workbench, so the
 Bot 1 production service keeps a deployment history. The newest successful
 deployment is production. The rollback SHA is the commit of the newest earlier
-deployment that ran a different commit. The command that moves Bot 1 back is
-the break-glass rollback of the promotion script, which is printed and never
-run. The only external call is one ``railway deployment list``.
+deployment that ran a different commit. If an earlier deployment in between has
+no usable commit, the run stops: that deployment could be the real rollback
+target. The command that moves Bot 1 back is the break-glass rollback of the
+promotion script, which is printed and never run. The only external call is one
+``railway deployment list``.
 """
 
 import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 PROJECT = "7eee29d1-22a7-42a4-aec0-8e8552c864c5"
@@ -29,9 +31,18 @@ class RollbackRecordError(Exception):
 
 def list_deployments():
     command = [
-        "railway", "deployment", "list", "--project", PROJECT,
-        "--environment", ENVIRONMENT, "--service", SERVICE,
-        "--limit", str(DEPLOYMENT_LIMIT), "--json",
+        "railway",
+        "deployment",
+        "list",
+        "--project",
+        PROJECT,
+        "--environment",
+        ENVIRONMENT,
+        "--service",
+        SERVICE,
+        "--limit",
+        str(DEPLOYMENT_LIMIT),
+        "--json",
     ]
     unreadable = RollbackRecordError(
         "the Bot 1 deployment history cannot be read from Railway"
@@ -42,70 +53,62 @@ def list_deployments():
         )
         if result.returncode != 0:
             raise unreadable
-        deployments = json.loads(result.stdout)
+        return json.loads(result.stdout)
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         raise unreadable from exc
-    if not isinstance(deployments, list):
-        raise unreadable
-    return deployments
 
 
-def deployment_sha(deployment):
-    return (deployment.get("meta") or {}).get("commitHash")
+def read_record(deployment):
+    """Return (created, status, id, sha) for one deployment; sha is None when unusable."""
+    invalid = RollbackRecordError(
+        "the Bot 1 deployment history contains an invalid record"
+    )
+    if not isinstance(deployment, dict) or not isinstance(deployment.get("meta"), dict):
+        raise invalid
+    try:
+        created = datetime.fromisoformat(deployment["createdAt"].replace("Z", "+00:00"))
+    except (KeyError, AttributeError, ValueError):
+        raise invalid from None
+    if created.tzinfo is None:
+        raise invalid
+    sha = deployment["meta"].get("commitHash")
+    if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
+        sha = None
+    return created, deployment.get("status"), deployment.get("id"), sha
 
 
 def plan(deployments):
-    """Return (production deployment, rollback SHA) from the deployment history."""
-    if not isinstance(deployments, list) or any(
-        not isinstance(d, dict)
-        or not isinstance(d.get("meta", {}), dict)
-        or not isinstance(d.get("createdAt", ""), str)
-        for d in deployments
-    ):
-        raise RollbackRecordError("the Bot 1 deployment history contains an invalid record")
-    try:
-        timestamps = [datetime.fromisoformat(d["createdAt"].replace("Z", "+00:00")) for d in deployments]
-        if any(timestamp.tzinfo is None for timestamp in timestamps):
-            raise ValueError("timestamp lacks timezone")
-    except (KeyError, ValueError, TypeError):
-        raise RollbackRecordError("the Bot 1 deployment history contains an invalid timestamp") from None
-    deployments = [d for _, d in sorted(
-        zip((timestamp.astimezone(timezone.utc) for timestamp in timestamps), deployments, strict=True),
-        key=lambda pair: pair[0], reverse=True,
-    )]
-    production = next(
-        (d for d in deployments if d.get("status") == "SUCCESS"),
-        None,
-    )
+    """Return (production deployment id, production SHA, rollback SHA), newest first."""
+    if not isinstance(deployments, list):
+        raise RollbackRecordError("the Bot 1 deployment history is not a list")
+    records = sorted(map(read_record, deployments), key=lambda r: r[0], reverse=True)
+    production = next((i for i, r in enumerate(records) if r[1] == "SUCCESS"), None)
     if production is None:
         raise RollbackRecordError(
             "no successful Bot 1 production deployment is in the history"
         )
-    if not isinstance(production.get("id"), str) or not production["id"].strip():
-        raise RollbackRecordError("the production deployment has no ID")
-    current_sha = deployment_sha(production)
-    if not isinstance(current_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", current_sha):
-        raise RollbackRecordError("the production deployment has no valid commit SHA")
-    rollback = None
-    for deployment in deployments[deployments.index(production) + 1 :]:
-        if deployment.get("status") not in ("SUCCESS", "REMOVED"):
-            continue
-        sha = deployment_sha(deployment)
-        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
-            raise RollbackRecordError("the rollback deployment has no valid commit SHA")
-        if sha.lower() != current_sha.lower():
-            rollback = sha
-            break
-    if rollback is None:
+    _, _, deployment_id, current_sha = records[production]
+    if not isinstance(deployment_id, str) or not deployment_id or current_sha is None:
         raise RollbackRecordError(
-            "no earlier Bot 1 deployment ran a different commit, so no rollback SHA is recorded"
+            "the production deployment has no ID or no valid commit SHA"
         )
-    return production, rollback
+    for _, status, _, sha in records[production + 1 :]:
+        if status not in ("SUCCESS", "REMOVED"):
+            continue
+        if sha is None:
+            raise RollbackRecordError(
+                "an earlier Bot 1 deployment has no valid commit SHA, so the rollback SHA cannot be trusted"
+            )
+        if sha != current_sha:
+            return deployment_id, current_sha, sha
+    raise RollbackRecordError(
+        "no earlier Bot 1 deployment ran a different commit, so no rollback SHA is recorded"
+    )
 
 
 def main(load=list_deployments):
     try:
-        production, rollback = plan(load())
+        deployment_id, current_sha, rollback = plan(load())
     except RollbackRecordError as exc:
         print(f"bot1-rollback-dry-run: {exc}", file=sys.stderr)
         return 1
@@ -117,7 +120,7 @@ def main(load=list_deployments):
     ]
     print("bot1-rollback-dry-run: nothing was deployed and no state was written")
     print(f"recorded rollback SHA: {rollback}")
-    print(f"production deployment: {production['id']} at {deployment_sha(production)}")
+    print(f"production deployment: {deployment_id} at {current_sha}")
     print(f"would run in {SRW_REPO}: {' '.join(command)}")
     return 0
 
