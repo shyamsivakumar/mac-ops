@@ -3189,6 +3189,16 @@ def _launch_job(
                     os.close(project_fd)
 
 
+def _job_directory_absent(registry: Registry, job_id: str) -> bool:
+    try:
+        os.lstat(str(registry.directory / job_id))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def watchdog_loop(
     job_id: str,
     registry: Registry,
@@ -3208,7 +3218,7 @@ def watchdog_loop(
         except Exception:
             if cached is None:
                 return 1
-            if os.path.isdir(str(registry.directory / job_id)):
+            if not _job_directory_absent(registry, job_id):
                 sleep(WATCHDOG_INTERVAL)
                 continue
             try:
