@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -38,6 +39,16 @@ def load_runner():
 def load_ticket():
     path = ROOT / "ticket" if (ROOT / "ticket").is_file() else ROOT.parent / "bin" / "ticket"
     loader = importlib.machinery.SourceFileLoader("fixture_ticket", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_coordq():
+    """Return coordq as a module, so an eval runs the real dispatch path."""
+    path = ROOT / "coordq" if (ROOT / "coordq").is_file() else ROOT.parent / "bin" / "coordq"
+    loader = importlib.machinery.SourceFileLoader("fixture_coordq", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
@@ -124,8 +135,8 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    for kind, label, expected in [("standard", None, "morph/morph-dsv41flash"), ("risky", None, "morph/morph-kimik31"),
-                                  ("chore", "kimi", "morph/morph-kimik31"), ("chore", None, "morph/morph-dsv41flash")]:
+    for kind, label, expected in [("standard", None, "task/standard"), ("risky", None, "task/risky"),
+                                  ("chore", "router", "task/standard"), ("chore", None, "task/standard")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
         item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
@@ -153,7 +164,7 @@ def start_routing():
         for expected_id in walk:
             exact(lane.model_list.first_available("build", None, blocked, kind)["id"], expected_id)
             blocked.add(lane.model_list.identity(lane.model_list.first_available("build", None, blocked, kind)["selection"]))
-    exact(lane.model_list.first_available("fix")["selection"]["model"], "morph/morph-dsv41flash")
+    exact(lane.model_list.first_available("fix")["selection"]["model"], "task/standard")
     exact(lane.model_list.entries("fix")[-1]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
@@ -3395,7 +3406,78 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+def router_build():
+    """A build or fix launch runs on the router, so a Morph rate limit falls back in-thread.
+
+    The router entry names the route its task type runs, and a payload that
+    still names a direct `pi` Morph model is mapped to the router entry
+    instead of refused.
+    """
+    import lane_driver as lane
+    queue = load_coordq()
+    for task_type, expected in [("standard", "task/standard"), ("rca", "task/rca"),
+                                ("risky", "task/risky"), ("design", "task/design"),
+                                ("chore", "task/standard"), ("fix", "task/standard")]:
+        resolved, refusal = queue.with_model({"taskType": task_type})
+        exact(refusal, None)
+        exact(resolved["modelSelection"], {"instanceId": "router", "model": expected})
+    # A payload that still names a direct `pi` Morph model is mapped, not refused.
+    for task_type, model, expected in [("standard", "morph/morph-dsv41flash", "task/standard"),
+                                       ("rca", "morph/morph-kimik31", "task/rca"),
+                                       ("fix", "morph/morph-dsv41flash", "task/standard")]:
+        resolved, refusal = queue.with_model({"taskType": task_type,
+                                              "modelSelection": {"instanceId": "pi", "model": model}})
+        exact(refusal, None)
+        exact(resolved["modelSelection"], {"instanceId": "router", "model": expected})
+    # A router selection is accepted and resolved for the task type.
+    resolved, refusal = queue.with_model({"taskType": "rca",
+                                          "modelSelection": {"instanceId": "router", "model": "task/standard"}})
+    exact(refusal, None)
+    exact(resolved["modelSelection"], {"instanceId": "router", "model": "task/rca"})
+    # The router entry is blocked only when every Morph identity it covers is.
+    router = lane.model_list.router_entry("build")
+    exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash"}), False)
+    exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash", "pi:morph-kimik31"}), True)
+    # A review launch still refuses a builder model.
+    _, refusal = queue.with_model({"taskType": "review",
+                                   "modelSelection": {"instanceId": "pi", "model": "morph/morph-dsv41flash"}})
+    exact(refusal is not None, True)
+
+
+def router_blocked():
+    """A router entry with every Morph identity blocked falls to the next entry.
+
+    The shared provider store blocks one identity per Morph model, so the
+    router is out only when both are blocked; then the build list continues
+    on Cursor and a quick task still ends on Terra.
+    """
+    import lane_driver as lane
+    queue = load_coordq()
+    both = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
+    for list_name, task_type in [("build", "standard"), ("build", "rca"), ("fix", "fix")]:
+        exact(lane.model_list.first_available(list_name, None, both, task_type)["id"], "cursor")
+    # One blocked Morph model leaves the router in place.
+    exact(lane.model_list.first_available("build", None, {"pi:morph-dsv41flash"}, "standard")["id"], "router")
+    # A quick task still ends on Terra once Cursor is out too.
+    exact(lane.model_list.first_available("build", None, both | {"cursor:default"}, "quick")["id"], "terra")
+    # The same payload resolves to Cursor from a temp providers-blocked.json.
+    with tempfile.TemporaryDirectory() as scratch:
+        store = Path(scratch) / lane.model_list.BLOCKED_FILE
+        store.write_text(json.dumps({"blocked": {key: {"expires_at": 4102444800} for key in both}}))
+
+        def from_store():
+            return {key for key, entry in lane.model_list.read_blocked_file(str(store))["blocked"].items()
+                    if lane.model_list.expiry(entry) > time.time()}
+
+        with patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(lane.model_list, "blocked_identities", side_effect=from_store):
+            exact(from_store(), both)
+            resolved, refusal = queue.with_model({"taskType": "standard"})
+    exact(refusal, None)
+    exact(resolved["modelSelection"], {"instanceId": "cursor", "model": "default"})
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked}
 
 
 def main():

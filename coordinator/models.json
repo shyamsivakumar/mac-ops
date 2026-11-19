@@ -1,26 +1,43 @@
 {
   "build": [
     {
-      "id": "deepseek",
+      "id": "router",
       "selection": {
-        "instanceId": "pi",
-        "model": "morph/morph-dsv41flash"
+        "instanceId": "router",
+        "model": "task/standard"
       },
-      "vendor": "deepseek"
-    },
-    {
-      "id": "kimi",
-      "selection": {
-        "instanceId": "pi",
-        "model": "morph/morph-kimik31"
+      "vendor": "morph",
+      "routes": {
+        "quick": "standard",
+        "chore": "standard",
+        "standard": "standard",
+        "ui": "standard",
+        "research": "standard",
+        "large": "standard",
+        "worker": "standard",
+        "fix": "standard",
+        "rca": "rca",
+        "risky": "risky",
+        "design": "design"
       },
-      "vendor": "moonshot",
-      "leads": [
-        "rca",
-        "risky",
-        "design",
-        "hard"
-      ]
+      "chains": {
+        "standard": [
+          "morph/morph-dsv41flash",
+          "morph/morph-kimik31"
+        ],
+        "rca": [
+          "morph/morph-kimik31",
+          "morph/morph-dsv41flash"
+        ],
+        "risky": [
+          "morph/morph-kimik31",
+          "morph/morph-dsv41flash"
+        ],
+        "design": [
+          "morph/morph-kimik31",
+          "morph/morph-dsv41flash"
+        ]
+      }
     },
     {
       "id": "cursor",
@@ -62,20 +79,43 @@
   ],
   "fix": [
     {
-      "id": "deepseek",
+      "id": "router",
       "selection": {
-        "instanceId": "pi",
-        "model": "morph/morph-dsv41flash"
+        "instanceId": "router",
+        "model": "task/standard"
       },
-      "vendor": "deepseek"
-    },
-    {
-      "id": "kimi",
-      "selection": {
-        "instanceId": "pi",
-        "model": "morph/morph-kimik31"
+      "vendor": "morph",
+      "routes": {
+        "quick": "standard",
+        "chore": "standard",
+        "standard": "standard",
+        "ui": "standard",
+        "research": "standard",
+        "large": "standard",
+        "worker": "standard",
+        "fix": "standard",
+        "rca": "rca",
+        "risky": "risky",
+        "design": "design"
       },
-      "vendor": "moonshot"
+      "chains": {
+        "standard": [
+          "morph/morph-dsv41flash",
+          "morph/morph-kimik31"
+        ],
+        "rca": [
+          "morph/morph-kimik31",
+          "morph/morph-dsv41flash"
+        ],
+        "risky": [
+          "morph/morph-kimik31",
+          "morph/morph-dsv41flash"
+        ],
+        "design": [
+          "morph/morph-kimik31",
+          "morph/morph-dsv41flash"
+        ]
+      }
     },
     {
       "id": "cursor",
@@ -169,8 +209,8 @@
     }
   ],
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: quick, chore, standard, ui, research run DeepSeek V4.1 Flash, Kimi K3.1, Cursor auto, Terra; rca, risky, design, hard run Kimi K3.1, DeepSeek V4.1 Flash, Cursor auto, Sol",
-    "fix and finish rounds": "use the fix list in order: DeepSeek V4.1 Flash, Kimi K3.1, Cursor auto, Sol at max reasoning",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: the `router` entry runs the Morph chain its `routes` table names for the type (standard, chore, ui, research, large, worker and fix run DeepSeek V4.1 Flash then Kimi K3.1; rca, risky and design run Kimi K3.1 then DeepSeek V4.1 Flash), then Cursor auto, then Terra for quick, chore, standard, ui and research or Sol for rca, risky, design and hard",
+    "fix and finish rounds": "use the fix list in order: the `router` entry on its standard chain, Cursor auto, Sol at max reasoning",
     "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor; reviews are Astra then Opus",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
     "builder:<id> label": "tries that entry first, then the list",
