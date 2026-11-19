@@ -46,5 +46,17 @@ User-level rules for pi board workers, linked by mac-ops from
   the real path and record evidence in the closing note. Static checks
   alone are not proof.
 
+<!-- BEGIN mac-ops deny-rules -->
+## Machine-enforced deny rules (mac-ops #530)
+
+A machine guard enforces this list before tools run; prose cannot override it.
+The list lives in `mac-ops runtime/agents/deny-rules.json` and `scripts/install_deny_rules.py` installs it.
+
+- No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).
+- No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.
+- No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.
+- No `gh pr merge` for a builder. Only a gate thread merges, and only with the pinned `--match-head-commit` head given as a merge argument.
+<!-- mac-ops deny-rules END -->
+
 For omp conventions, see `llmwiki/runtime/omp/AGENTS.md`. Pi board workers
 follow this file instead.

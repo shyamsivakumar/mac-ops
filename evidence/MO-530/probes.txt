@@ -1,0 +1,52 @@
+PASS installer status: every pi guard installed and current: {"/private/tmp/claude-501/deny-home2.cy5Gry/.pi/agent/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/deny-home2.cy5Gry/.pi/agent-minimax/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/deny-home2.cy5Gry/.pi/agent-glm/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/deny-home2.cy5Gry/.pi/agent-deepseek/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/deny-home2.cy5Gry/.pi/agent-openai-api/extensions/deny-guard.ts": "installed", "/private/tmp/claude-501/deny-home2.cy5Gry/.pi/agent-anthropic-api/extensions/deny-guard.ts": "installed"}
+PASS installer status: claude deny list complete: missing=[]
+PASS installer status: merge hook file present: /private/tmp/claude-501/deny-home2.cy5Gry/.claude/hooks/deny-merge-guard.py
+PASS pi guard agent: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-minimax: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-glm: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-deepseek: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-openai-api: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-anthropic-api: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /private/tmp/claude-...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+not run claude permissions.deny: read under slash-eureka: Read(~/Code/slash-eureka/**) is installed; Claude evaluates it in-session, so run `claude -p 'read under slash-eureka'` in a scratch folder to record the decision
+not run claude permissions.deny: edit under slash-eureka: Edit(~/Code/slash-eureka/**) is installed; Claude evaluates it in-session, so run `claude -p 'edit under slash-eureka'` in a scratch folder to record the decision
+not run claude permissions.deny: read an env file: Read(**/.env) is installed; Claude evaluates it in-session, so run `claude -p 'read an env file'` in a scratch folder to record the decision
+not run claude permissions.deny: edit an env file: Edit(**/.env) is installed; Claude evaluates it in-session, so run `claude -p 'edit an env file'` in a scratch folder to record the decision
+not run claude permissions.deny: read the auth file: Read(**/auth.json) is installed; Claude evaluates it in-session, so run `claude -p 'read the auth file'` in a scratch folder to record the decision
+not run claude permissions.deny: read the ssh directory: Read(~/.ssh/**) is installed; Claude evaluates it in-session, so run `claude -p 'read the ssh directory'` in a scratch folder to record the decision
+PASS claude PreToolUse hook registered in settings.json: python3 /private/tmp/claude-501/deny-home2.cy5Gry/.claude/hooks/deny-merge-guard.py
+PASS claude hook: unpinned gh pr merge: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
+PASS claude hook: pinned gh pr merge as a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
+PASS claude hook: pinned gh pr merge from a gate role (not executed): allow (no decision)
+PASS claude hook: pin that is not a merge argument: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
+PASS claude hook: a pin quoted inside a multiword PR subject: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
+PASS claude hook: push to master on a second remote: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: force-push on a second remote: deny (mac-ops deny rules (#530): force-push in any form is denied)
+PASS claude hook: push a task branch: allow (no decision)
+PASS claude hook: push a branch named main.fix (a task branch, not main): allow (no decision)
+PASS claude hook: push a branch named main/fix (a task branch, not main): allow (no decision)
+PASS claude hook: push to main on a second remote: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: push a task branch from a protected source ref (main:task-530): allow (no decision)
+PASS claude hook: push to main as a refspec destination (feature:main): deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: task-branch push in the same command as PR text naming main: allow (no decision)
+PASS claude hook: task-branch push, then a PR body heredoc that names a main push: allow (no decision)
+PASS claude hook: task-branch push, then a PR body in a command substitution heredoc: allow (no decision)
+PASS claude hook: hc send whose text mentions the push rule and the branch name: allow (no decision)
+PASS claude hook: hc send with an unquoted push command spelled out: allow (no decision)
+PASS claude hook: hc send whose text names the merge command: allow (no decision)
+PASS claude hook: task-branch push, then a PR body heredoc that names a merge: allow (no decision)
+PASS claude hook: commit message that names the merge command: allow (no decision)
+PASS claude hook: real merge after a message that names it: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a )
+PASS claude hook: push HEAD to a protected branch: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: push HEAD to a full protected ref: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: push with a plus-prefixed protected destination: deny (mac-ops deny rules (#530): force-push in any form is denied)
+PASS claude hook: push that deletes a protected branch: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: push main after a task-branch push in one command: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: push main after a PR text mention in one command: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS claude hook: force-push of a task branch: deny (mac-ops deny rules (#530): force-push in any form is denied)
+PASS claude hook: short force flag: deny (mac-ops deny rules (#530): force-push in any form is denied)
+PASS claude hook: force with lease: deny (mac-ops deny rules (#530): force-push in any form is denied)
+PASS claude hook: plus-prefixed task-branch refspec: deny (mac-ops deny rules (#530): force-push in any form is denied)
+PASS pushing a task branch is still allowed (scratch remote): pushed to /private/tmp/claude-501/deny-rules-probe-gf4ky6f3/remote.git: ['refs/heads/t3/deny-probe']
+PASS scratch remote has no main branch (nothing was pushed to main): refs on scratch remote: ['refs/heads/t3/deny-probe']
+
+44 passed, 0 failed, 6 not run
