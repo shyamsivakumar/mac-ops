@@ -142,8 +142,8 @@ def local_repo(selection, key):
     return Path(os.path.expanduser(selection["repos"][key]["local"]))
 
 
-def heldout_for(task_id):
-    digest = hashlib.sha256(task_id.encode()).hexdigest()
+def heldout_for(group):
+    digest = hashlib.sha256(group.encode()).hexdigest()
     return int(digest, 16) % HELDOUT_MODULUS == 0
 
 
@@ -408,8 +408,8 @@ def check(selection):
         ids.add(task_id)
         if task_id != f"{task['repo']}-{task['pr']}":
             problems.append(f"{task_id}: id is not <repo>-<pr>")
-        if task["heldout"] != heldout_for(task_id):
-            problems.append(f"{task_id}: heldout does not match the stable hash")
+        if task["heldout"] != heldout_for(task["group"]):
+            problems.append(f"{task_id}: heldout does not match the hash of its group")
         local = local_repo(selection, task["repo"])
         parents = run(
             ["git", "rev-list", "--parents", "-n", "1", task["merge"]], cwd=local

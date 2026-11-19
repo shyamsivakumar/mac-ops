@@ -5,7 +5,7 @@ Harbor 0.26.0, each run through `heavy`, no model agent. Oracle applies the merg
 | Task | Type | Group | Held out | Oracle reward | Nop reward |
 | --- | --- | --- | --- | --- | --- |
 | mac-ops-619 | bugfix | test_prompt_paths | no | 1 | 0 |
-| mac-ops-618 | bugfix | test_prompt_paths | yes | 1 | 0 |
+| mac-ops-618 | bugfix | test_prompt_paths | no | 1 | 0 |
 | mac-ops-608 | feature | mac-ops-608 | no | 1 | 0 |
 | mac-ops-486 | bugfix | mac-ops-486 | yes | 1 | 0 |
 | mac-ops-340 | bugfix | mac-ops-340 | no | 1 | 0 |
@@ -15,7 +15,7 @@ Harbor 0.26.0, each run through `heavy`, no model agent. Oracle applies the merg
 | mac-ops-223 | feature | test_ticket_text_blockers | no | 1 | 0 |
 | srw-1324 | feature | srw-1324 | no | 1 | 0 |
 
-Tasks that share a test file carry one `group` (mac-ops-619 and mac-ops-618 share test_prompt_paths; mac-ops-315 and mac-ops-223 share test_ticket_text_blockers), so the scorer can treat them as one cluster.
+Tasks that share a test file carry one `group` (mac-ops-619 and mac-ops-618 share test_prompt_paths; mac-ops-315 and mac-ops-223 share test_ticket_text_blockers), so the scorer can treat them as one cluster. The held-out flag is `sha256(group) % 4 == 0`, so a cluster is held out or not as a whole; only mac-ops-486 is held out.
 
 ## Dropped in round 1 (oracle reward 0, tests need the Mac)
 

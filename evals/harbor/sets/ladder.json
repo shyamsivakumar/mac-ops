@@ -40,7 +40,7 @@
       "test_files": [
         "tests/test_prompt_paths.py"
       ],
-      "heldout": true,
+      "heldout": false,
       "group": "test_prompt_paths"
     },
     {
