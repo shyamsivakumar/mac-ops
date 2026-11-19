@@ -5,19 +5,43 @@ the lane driver and the pi route generator read it through this module.
 Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
 (the gate) and `panel` (only when Shyam asks for one).
 
-A provider that fails for a blocking reason is recorded by the provider
-health store, `providers-blocked.json` in the queue folder. This module
-only reads that file, so every caller skips the same blocked providers.
+A provider that fails for a blocking reason is recorded in one place,
+`providers-blocked.json` in the queue folder. This module reads that file
+and writes it, so every caller skips the same blocked providers, and a
+block ends at the reset the provider named.
 """
 
+import fcntl
 import json
 import os
+import re
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 LISTS = ("build", "fix", "review", "panel")
 INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
 BLOCKED_FILE = "providers-blocked.json"
+BLOCKED_LOCK = "providers-blocked.lock"
+BLOCK_SECONDS = 3600.0
+UNITS = {"d": 86400.0, "h": 3600.0, "m": 60.0, "s": 1.0}
+AMOUNT = r"(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b"
+RELATIVE = re.compile(rf"(?:resets?|retry|try again)\s+(?:in|after)\s+((?:{AMOUNT}[\s,]*(?:and\s+)?)+)", re.I)
+ABSOLUTE = re.compile(
+    r"reset(?:s| at|ting at)?\s+(?:at\s+)?(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{1,2}:\d{2}(?::\d{2})?)"
+    r"\s*((?:UTC|GMT)?[+-]\d{2}:?\d{2}|UTC|GMT|Z\b|[A-Za-z_]+(?:/[A-Za-z0-9_+-]+)+)?", re.I)
+PROVIDER_ERROR = re.compile(
+    r"\b(?:http|status|code|error)\b[\s:=]*(?:401|402|403|429)\b"
+    r"|^\s*(?:401|402|403|429)(?=\s*(?:$|[;:,.-]|unauthorized|forbidden|too many|payment))"
+    r"|usage limit|rate limit|too many requests|no credits|out of credits|credit balance"
+    r"|insufficient[_ ]quota|quota (?:exceeded|exhausted)|payment required|invalid api key"
+    r"|unauthorized|forbidden|authentication",
+    re.I,
+)
+LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full", re.I)
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
@@ -101,16 +125,86 @@ def same_selection(a, b):
             and a.get("instanceId") == b.get("instanceId") and a.get("model") == b.get("model"))
 
 
-def blocked_identities():
-    queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+def queue_dir():
+    return os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+
+
+def read_blocked():
     try:
-        data = read_json(os.path.join(queue, BLOCKED_FILE))
+        data = read_json(os.path.join(queue_dir(), BLOCKED_FILE))
     except FileNotFoundError:
-        return set()
+        return {}
     blocked = data.get("blocked") if isinstance(data, dict) else None
     if not isinstance(blocked, dict):
         raise ModelsError(f"{BLOCKED_FILE} must hold a blocked object")
-    return set(blocked)
+    return blocked
+
+
+def live(entry, now):
+    until = entry.get("until") if isinstance(entry, dict) else None
+    return not isinstance(until, (int, float)) or until > now
+
+
+def blocked_identities(now=None):
+    now = time.time() if now is None else now
+    return {name for name, entry in read_blocked().items() if live(entry, now)}
+
+
+def zone_of(text):
+    if not text or text.upper() in ("UTC", "GMT", "Z"):
+        return timezone.utc
+    if "/" in text:
+        return ZoneInfo(text)
+    sign, digits = ("-" if "-" in text else "+"), re.sub(r"\D", "", text)
+    offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:4]))
+    return timezone(-offset if sign == "-" else offset)
+
+
+def reset_at(message, failed):
+    """Epoch seconds of the reset a provider error names, else an hour after the failure."""
+    relative = RELATIVE.search(message)
+    if relative:
+        return failed + sum(float(n) * UNITS[u[0].lower()] for n, u in re.findall(AMOUNT, relative.group(1), re.I))
+    absolute = ABSOLUTE.search(message)
+    if absolute:
+        day, clock, zone_text = absolute.groups()
+        try:
+            zone = zone_of(zone_text)
+            hour, _, rest = clock.partition(":")
+            local_day = day or datetime.fromtimestamp(failed, zone).date().isoformat()
+            until = datetime.fromisoformat(f"{local_day}T{hour.zfill(2)}:{rest}").replace(tzinfo=zone).timestamp()
+        except (ValueError, KeyError):
+            return failed + BLOCK_SECONDS
+        if not day and until <= failed:
+            until += 86400.0
+        if until > failed:
+            return until
+    return failed + BLOCK_SECONDS
+
+
+@contextmanager
+def blocked_lock():
+    with open(os.path.join(queue_dir(), BLOCKED_LOCK), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def block_provider(selection, error, failed=None):
+    """Record a provider that refused a run, until the reset its error names.
+
+    Returns False and records nothing when the error is no provider refusal."""
+    name = identity(selection)
+    if not name or not PROVIDER_ERROR.search(error) or LOCAL_ERROR.search(error):
+        return False
+    failed = time.time() if failed is None else failed
+    with blocked_lock():
+        blocked = {n: e for n, e in read_blocked().items() if live(e, time.time())}
+        blocked[name] = {"failed": failed, "until": reset_at(error, failed)}
+        target = os.path.join(queue_dir(), BLOCKED_FILE)
+        with open(f"{target}.tmp", "w") as f:
+            json.dump({"blocked": blocked}, f, indent=2)
+        os.replace(f"{target}.tmp", target)
+    return True
 
 
 def is_blocked(selection, blocked=None):
