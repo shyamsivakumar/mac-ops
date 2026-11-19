@@ -463,7 +463,10 @@ export function card(t, e, v, input, cb) {
     : h_flex().flex_1().min_w(0).gap(5).items_center()
       .child(div().size(6).flex_none().rounded(3).bg(t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
-  const foot = selected
+  const answers = c.options?.length ? answerRow(t, e, v, armedHere, cb) : null;
+  const foot = answers
+    ? h_flex().h(H.foot).w_full().flex_none().gap(4).items_center().overflow_hidden().child(answers)
+    : selected
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(isPr ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
@@ -498,6 +501,23 @@ export function card(t, e, v, input, cb) {
       .when(Boolean(v.replyLabel), (el) => el.child(div().flex_none().pt(7).text_size(10.5).font_medium().text_color(t.accent).child(narrow ? "Note" : v.replyLabel)))
       .child(Input.new(input).flex_1().min_w(0).h(28).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(11.5).text_color(t.foreground)));
 }
+
+const CARD_GUTTER = 28;
+const OPTION_CHROME = 36;
+const CHAR_WIDTH = 5.6;
+
+function answerRow(t, e, v, armedHere, cb) {
+  const c = v.c;
+  const each = (v.colW - CARD_GUTTER - (c.options.length - 1) * 4) / c.options.length;
+  const fit = Math.max(3, Math.floor((each - OPTION_CHROME) / CHAR_WIDTH));
+  const decided = shared("co.decided")?.[c.askId];
+  if (decided) return div().min_w(0).truncate().text_size(10).text_color(t.muted).child(`Answered: ${decided.text}`);
+  if (shared("co.answer")?.[c.askId]) return div().text_size(10).text_color(t.muted).child("Sending…");
+  return h_flex().gap(4).min_w(0).overflow_hidden()
+    .children(c.options.map((o, i) => action(t, `an-${e.key}-${i}`, String(i + 1), armedHere === `choice:${i}` ? "Confirm" : clip(o.label, fit), (cx) => cb.answer(e.key, i, cx), `${o.rec ? "Recommended. " : ""}${o.label}${o.detail ? `: ${o.detail}` : ""}. Press ${i + 1} to arm, then again to send.`, false, armedHere === `choice:${i}` ? "blocked" : o.rec ? "accent" : undefined)));
+}
+
+export const optionsText = (options) => options.map((o, i) => `${i + 1}. **${o.label}**${o.rec ? " (recommended)" : ""}${o.detail ? `: ${o.detail}` : ""}`).join("\n\n");
 
 export function childRow(t, e, v, cb) {
   const { c, selected, mark, now, opening } = v;
@@ -629,6 +649,12 @@ function decisionBase(col, g, info, verdict, now, tab) {
     ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }, { id: "files", key: "c", label: "Changed files" }] : []),
   ];
   const age = ago(g.at, now);
+  if (c.kind === "ask" && c.options?.length) {
+    const best = Math.max(0, c.options.findIndex((o) => o.rec));
+    const pick = (i) => ({ id: `choice:${i}`, key: String(i + 1), label: clip(c.options[i].label, 60), armed: "Confirm" });
+    const rest = c.options.map((_, i) => i).filter((i) => i !== best).map(pick);
+    return { headline: name, primary: pick(best), why: [c.context, `Asked ${age} ago`], hint: "Press the number or click to arm, then press it again or Enter to send that answer to the Coordinator. Enter arms the recommended one.", other: [...rest, { id: "open", key: "o", label: "Open decisions" }], checks: null };
+  }
   if (c.kind === "ask") {
     return {
       headline: name,
@@ -897,7 +923,7 @@ export function decisionView(t, v, input, cb) {
               .child(Input.new(input).flex_1().min_w(0).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))
             .child(h_flex().gap(6).items_center().flex_wrap()
               .child(div().text_size(10.5).text_color(t.dim).child("Other"))
-              .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))))
+              .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, armedKind === x.id && x.armed ? x.armed : x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))))
         .child(div().id("dec-ticket").flex_1().min_h(0).w_full().px(16).py(12).text_size(12.5).line_height("19px").text_color(t.foreground).child(ticketBody(t, v.ticket))))
       .child(v.issue ? issuePanel(t, v, cb) : ticketPanel(t, v, cb)));
 }

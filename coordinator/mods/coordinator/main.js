@@ -1,7 +1,7 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { answerCause, isStale, restored } from "./answers.js";
+import { answerCause, boardAnswer, decisionsMessage, isStale, restored } from "./answers.js";
 import { boardGlance, FLOW_FILE, parseFlow } from "./board.js";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript, SESSION_NAME } from "./transcript.js";
 import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE, turnKey } from "./ui.js";
@@ -74,12 +74,15 @@ async function acknowledgeAlarm(id, cause) {
   }
 }
 
+const ANSWER_EXPIRY = 30000;
+const sending = new Set();
+
 const askOf = ({ id, group, title, why, cause, kind, options }) => ({
-  id,
+  id: String(id),
   group,
-  text: title,
+  text: String(title),
   why,
-  cause: cause ?? "",
+  cause: cause ? String(cause) : "",
   action: kind === "action",
   choices: kind === "action"
     ? [{ kind: "done", text: "Done", label: "Done", detail: "", rec: false }]
@@ -172,7 +175,10 @@ export default class Coordinator extends View {
     this.refreshing = false;
     this.shown = PAGE;
     this.drawn = Date.now();
-    cx.timer.every(EVERY, (cx) => this.watching() && this.refresh(cx));
+    cx.timer.every(EVERY, (cx) => {
+      this.takeAnswers(cx);
+      if (this.watching()) this.refresh(cx);
+    });
     cx.timer.every(TICK, (cx) => cx.notify());
     this.refresh(cx);
     cx.spawn(async (cx) => {
@@ -667,8 +673,86 @@ export default class Coordinator extends View {
   }
 
   message() {
-    const lines = this.answers(this.drafts()).map(({ id, q, text }) => `- ${id} (${q}): ${text.replace(/\s+/g, " ").trim()}`);
-    return [lines.length ? `Decisions:\n${lines.join("\n")}` : "", this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
+    const answered = this.answers(this.drafts());
+    return [answered.length ? decisionsMessage(answered) : "", this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
+  }
+
+  logSent(text) {
+    const kept = shared("co.sent") ?? { since: Date.now(), items: [] };
+    const items = [...kept.items, { at: Date.now(), text }];
+    const trimmed = items.length > SENT_KEEP;
+    const keep = items.slice(-SENT_KEEP);
+    setShared("co.sent", { since: trimmed ? keep[0].at : kept.since, items: keep });
+  }
+
+  async recordAnswers(answered) {
+    const decided = this.decided();
+    const drafts = this.drafts();
+    const typing = this.typing();
+    for (const a of answered) {
+      decided[a.id] = { text: a.text, at: Date.now() };
+      drafts.delete(a.id);
+      typing.delete(a.id);
+      this.editing.delete(a.id);
+      this.editors.get(a.id)?.set_value("");
+    }
+    setShared("co.decided", decided);
+    this.setDrafts(drafts);
+    this.setTyping(typing);
+    // The answer is the acknowledgement: the alarm stays quiet for
+    // four hours. The shift reads the record, so the alarm comes
+    // back on its own when the four hours are over.
+    for (const a of answered) await acknowledgeAlarm(a.id, a.cause);
+  }
+
+  takeAnswers(cx) {
+    for (const [id, request] of Object.entries(shared("co.answer") ?? {})) {
+      if (request.sending) continue;
+      const claimed = { ...request, sending: true, took: Date.now() };
+      setShared("co.answer", { ...shared("co.answer"), [id]: claimed });
+      cx.spawn(async (cx) => {
+        let result = { label: request.label, ok: false, reason: "Not confirmed. Check the Coordinator chat before answering again." };
+        try {
+          result = { label: request.label, ...(await this.sendBoardAnswer(id, request)) };
+        } finally {
+          if (shared("co.answer")?.[id]?.took === claimed.took) {
+            const pending = { ...shared("co.answer") };
+            delete pending[id];
+            setShared("co.answer", pending);
+          }
+          setShared("co.answered", { ...shared("co.answered"), [id]: result });
+          cx.notify();
+        }
+      });
+    }
+  }
+
+  async sendBoardAnswer(id, request) {
+    if (Date.now() - request.at > ANSWER_EXPIRY) return { ok: false, reason: "Expired before it was sent." };
+    if (sending.has(id)) return { ok: false, reason: "Already sending." };
+    sending.add(id);
+    try {
+      const file = await exec("cat", [DECISIONS_FILE]);
+      if (file.code !== 0) return { ok: false, reason: `decisions.json: ${file.stderr.trim()}` };
+      let items;
+      try {
+        items = JSON.parse(file.stdout).items.map(askOf);
+      } catch (error) {
+        return { ok: false, reason: `decisions.json: ${error.message}` };
+      }
+      const resolved = boardAnswer(id, request, items, this.decided());
+      if (resolved.dropped) return { ok: false, reason: resolved.dropped };
+      const info = this.info();
+      if (!info) return { ok: false, reason: "The Coordinator is not running." };
+      const text = decisionsMessage([resolved.answer]);
+      this.logSent(text);
+      const r = await hc(["send", info.address, text]);
+      if (r.code !== 0) return { ok: false, reason: r.stderr.trim() || `hc send exited ${r.code}` };
+      await this.recordAnswers([resolved.answer]);
+      return { ok: true };
+    } finally {
+      sending.delete(id);
+    }
   }
 
   send(cx) {
@@ -678,13 +762,11 @@ export default class Coordinator extends View {
     const typed = this.pop ? "" : draftText(this.input.content()).trim();
     const info = this.info();
     if (!text || !info || this.sent === "sending") return;
+    if (answered.some((a) => sending.has(a.id))) return notify({ title: "Already sending", body: "An answer for one of these decisions is on its way.", level: "warning" });
+    for (const a of answered) sending.add(a.id);
     this.sent = "sending";
     this.fromBottom = 0;
-    const kept = shared("co.sent") ?? { since: Date.now(), items: [] };
-    const items = [...kept.items, { at: Date.now(), text }];
-    const trimmed = items.length > SENT_KEEP;
-    const keep = items.slice(-SENT_KEEP);
-    setShared("co.sent", { since: trimmed ? keep[0].at : kept.since, items: keep });
+    this.logSent(text);
     const overlay = props()?.overlay;
     cx.notify();
     cx.spawn(async (cx) => {
@@ -692,28 +774,14 @@ export default class Coordinator extends View {
         const r = await hc(["send", info.address, text]);
         if (r.code !== 0) throw new Error(r.stderr.trim() || `hc send exited ${r.code}`);
         if (!this.pop && draftText(this.input.content()).trim() === typed) this.input.set_value("");
-        const decided = this.decided();
-        const drafts = this.drafts();
-        const typing = this.typing();
-        for (const a of answered) {
-          decided[a.id] = { text: a.text, at: Date.now() };
-          drafts.delete(a.id);
-          typing.delete(a.id);
-          this.editing.delete(a.id);
-          this.editors.get(a.id)?.set_value("");
-          // The answer is the acknowledgement: the alarm stays quiet for
-          // four hours. The shift reads the record, so the alarm comes
-          // back on its own when the four hours are over.
-          await acknowledgeAlarm(a.id, a.cause);
-        }
-        setShared("co.decided", decided);
-        this.setDrafts(drafts);
-        this.setTyping(typing);
+        await this.recordAnswers(answered);
         this.sent = "sent";
         if (this.pop) closeOverlay(overlay);
       } catch (error) {
         this.sent = "";
         notify({ title: "Send failed", body: error.message, level: "error" });
+      } finally {
+        for (const a of answered) sending.delete(a.id);
       }
       cx.notify();
       cx.timer.after(2500, (cx) => {
