@@ -105,6 +105,9 @@ def main():
             def reap_dead_jobs(self):
                 return 0
 
+            def orphaned_ci_simulators(self):
+                return []
+
         helper = Helper()
 
         def command(argv):

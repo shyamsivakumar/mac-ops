@@ -24,7 +24,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 
 GIB = 1024**3
@@ -65,6 +65,13 @@ JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 HEARTBEAT_TEMP_PATTERN = re.compile(r"\.heartbeat-[0-9a-f]{32}\.tmp")
+SIMCTL = ["/usr/bin/xcrun", "simctl"]
+SIMULATOR_TIMEOUT = 20.0
+CI_SIMULATOR_NAME = "CI-iPhone"
+SIMULATOR_USER_COMMANDS = frozenset({"xcodebuild", "xctest"})
+SIMULATOR_RUNTIME_PATTERN = re.compile(
+    r"^\s*\d+\s+launchd_sim\s+\S*/Devices/([0-9A-Fa-f-]{36})/"
+)
 
 
 def monotonic_ns() -> int:
@@ -1792,6 +1799,146 @@ def reap_dead_jobs(registry: Optional[Registry] = None) -> int:
         )
 
 
+_SIMULATOR_NAMES: Dict[str, str] = {}
+
+
+def simulator_devices() -> List[Dict[str, str]]:
+    output = _run_native(SIMCTL + ["list", "devices", "-j"], SIMULATOR_TIMEOUT)
+    try:
+        groups = json.loads(output)["devices"].values()
+        return [
+            {"udid": device["udid"], "name": device["name"], "state": device["state"]}
+            for group in groups
+            for device in group
+        ]
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise TelemetryError("simulator list was malformed") from exc
+
+
+def shutdown_simulator(udid: str) -> None:
+    _run_native(SIMCTL + ["shutdown", udid], SIMULATOR_TIMEOUT)
+
+
+def _destination_simulators(
+    argv: Sequence[str], devices: List[Dict[str, str]]
+) -> Set[str]:
+    udids: Set[str] = set()
+    for index, arg in enumerate(argv):
+        if arg == "-destination" and index + 1 < len(argv):
+            spec = argv[index + 1]
+        elif arg.startswith("-destination="):
+            spec = arg.partition("=")[2]
+        else:
+            continue
+        fields = dict(part.partition("=")[::2] for part in spec.split(","))
+        for device in devices:
+            if fields.get("id"):
+                matches = device["udid"] == fields["id"]
+            else:
+                matches = (
+                    "Simulator" in fields.get("platform", "")
+                    and device["name"] == fields.get("name")
+                )
+            if matches:
+                udids.add(device["udid"])
+    return udids
+
+
+def _process_commands() -> List[str]:
+    output = _run_native(["/bin/ps", "-axo", "pid=,command="], SIMULATOR_TIMEOUT)
+    return output.splitlines()
+
+
+def _simulator_process_table() -> Dict[int, ProcessInfo]:
+    return process_table(
+        command_runner=lambda argv, _timeout: _run_native(argv, SIMULATOR_TIMEOUT)
+    )
+
+
+def _simulator_in_use(
+    device: Dict[str, str],
+    registry: Registry,
+    commands: List[str],
+    exclude_job: Optional[str] = None,
+) -> bool:
+    table = _simulator_process_table()
+    with registry.lock(exclusive=False):
+        records = registry.records()
+    for record in records:
+        if (
+            record.get("job_id") != exclude_job
+            and record.get("command_basename") == "xcodebuild"
+            and _record_live(record, table)[0]
+        ):
+            return True
+    needles = (device["udid"], "name=" + device["name"])
+    for line in commands:
+        words = line.split(None, 2)
+        if (
+            len(words) == 3
+            and os.path.basename(words[1]) in SIMULATOR_USER_COMMANDS
+            and any(needle in words[2] for needle in needles)
+        ):
+            return True
+    return False
+
+
+def simulators_booted_by(command_basename: str, argv: Sequence[str]) -> Set[str]:
+    if command_basename != "xcodebuild":
+        return set()
+    devices = simulator_devices()
+    targeted = _destination_simulators(argv, devices)
+    return {
+        device["udid"]
+        for device in devices
+        if device["udid"] in targeted and device["state"] == "Shutdown"
+    }
+
+
+def release_simulators(
+    registry: Registry, job_id: str, udids: Set[str]
+) -> List[str]:
+    commands = _process_commands()
+    shut_down = []
+    for device in simulator_devices():
+        if (
+            device["udid"] in udids
+            and device["state"] == "Booted"
+            and not _simulator_in_use(device, registry, commands, job_id)
+        ):
+            shutdown_simulator(device["udid"])
+            shut_down.append(device["udid"])
+    return shut_down
+
+
+def orphaned_ci_simulators(
+    registry: Optional[Registry] = None,
+) -> List[Dict[str, str]]:
+    if registry is None:
+        registry = Registry(state_directory())
+    commands = _process_commands()
+    booted = {
+        match.group(1).upper()
+        for match in map(SIMULATOR_RUNTIME_PATTERN.match, commands)
+        if match
+    }
+    if not booted:
+        return []
+    if not booted <= _SIMULATOR_NAMES.keys():
+        for device in simulator_devices():
+            _SIMULATOR_NAMES[device["udid"]] = device["name"]
+    ci_devices = [
+        {"udid": udid, "name": CI_SIMULATOR_NAME}
+        for udid in sorted(booted)
+        if _SIMULATOR_NAMES.get(udid) == CI_SIMULATOR_NAME
+    ]
+    return [
+        device
+        for device in ci_devices
+        if not _simulator_in_use(device, registry, commands)
+    ]
+
+
 @dataclass
 class SupervisorDeps:
     """Injectable collaborators for the supervisor, defaulting to live system calls."""
@@ -2846,6 +2993,28 @@ def _supervise_running(
         deps.sleep(max(0.0, deadline - deps.clock()))
 
 
+def _simulators_booted_by_job(
+    command_basename: str, argv: Sequence[str]
+) -> Set[str]:
+    try:
+        return simulators_booted_by(command_basename, argv)
+    except HeavyError as exc:
+        print("heavy: simulator list failed: " + str(exc), file=sys.stderr)
+        return set()
+
+
+def _release_job_simulators(
+    registry: Registry, job_id: str, record: Dict[str, Any], udids: Set[str]
+) -> None:
+    if not udids:
+        return
+    try:
+        for udid in release_simulators(registry, job_id, udids):
+            _log_event(registry.directory, "simulator-shutdown", record, detail=udid)
+    except (HeavyError, OSError) as exc:
+        print("heavy: simulator shutdown failed: " + str(exc), file=sys.stderr)
+
+
 def _launch_job(
     argv: Sequence[str],
     *,
@@ -2914,6 +3083,7 @@ def _launch_job(
             with registry.lock():
                 registry.remove_queue(queue_id)
     record: Dict[str, Any] = {}
+    owned_simulators: Set[str] = set()
     workload_process = None
     watchdog = None
     open_gate = None
@@ -2931,6 +3101,7 @@ def _launch_job(
             stop_event=stop_event,
             heartbeat=lambda: registry.write_heartbeat(job_id, deps.monotonic_ns()),
         )
+        owned_simulators = _simulators_booted_by_job(command_basename, argv)
         launch = deps.launch_gated_workload or _default_launch_gated_workload
         workload_process, open_gate, close_gate = launch(argv)
         table = deps.process_table_reader()
@@ -3019,6 +3190,7 @@ def _launch_job(
                         registry.remove(job_id)
                 except Exception:
                     pass
+                _release_job_simulators(registry, job_id, record, owned_simulators)
             elif record.get("workload") and (
                 watchdog is None or watchdog.poll() is not None
             ):
