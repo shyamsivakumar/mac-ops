@@ -6,6 +6,8 @@ simulations are history, not proof of the installed controller. Method:
 [outcome evaluation method](https://github.com/shyamsivakumar/sams-llm-wiki/blob/main/source/docs/explanation/outcome-evaluation-method.md)
 (llmwiki). Lifecycles: [governor](state-charts/governor.md),
 [controller](state-charts/controller.md).
+Changes to loop, prompt and skill text are judged by with-and-without trials,
+designed in [loop change trials](loop-change-trials.md).
 
 ## Ship and score (2026-10-28)
 
