@@ -1,20 +1,20 @@
 {
   "build": [
     {
-      "id": "kimi",
-      "selection": {
-        "instanceId": "pi",
-        "model": "morph/morph-kimik31"
-      },
-      "vendor": "moonshot"
-    },
-    {
       "id": "deepseek",
       "selection": {
         "instanceId": "pi",
         "model": "morph/morph-dsv41flash"
       },
       "vendor": "deepseek"
+    },
+    {
+      "id": "kimi",
+      "selection": {
+        "instanceId": "pi",
+        "model": "morph/morph-kimik31"
+      },
+      "vendor": "moonshot"
     },
     {
       "id": "terra",
@@ -120,8 +120,8 @@
     }
   ],
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order: the workhorses are Morph Kimi K3.1 and Morph DeepSeek V4.1 Flash, with Terra as the build fallback",
-    "fix and finish rounds": "use the fix list in order",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order: DeepSeek V4.1 Flash first for parallel capacity, then Kimi K3.1, then Terra",
+    "fix and finish rounds": "use the fix list in order: Kimi K3.1, DeepSeek V4.1 Flash, then Terra",
     "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor; reviews are Astra then Opus",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
     "builder:<id> label": "tries that entry first, then the list",

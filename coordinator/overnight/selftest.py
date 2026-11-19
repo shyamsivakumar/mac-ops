@@ -124,8 +124,8 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    for kind, label, expected in [("standard", None, "morph/morph-kimik31"), ("risky", None, "morph/morph-kimik31"),
-                                  ("chore", "deepseek", "morph/morph-dsv41flash")]:
+    for kind, label, expected in [("standard", None, "morph/morph-dsv41flash"), ("risky", None, "morph/morph-dsv41flash"),
+                                  ("chore", "kimi", "morph/morph-kimik31")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
         item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
