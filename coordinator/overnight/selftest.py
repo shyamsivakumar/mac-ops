@@ -448,6 +448,9 @@ def gate_pipeline():
                                                          "startFromOrigin": True})
                     exact("refs/pull/20/head" in payload["message"], fork)
                     exact(f"prints {head}" in payload["message"], fork)
+                    # The review brief says to check out nothing, so the
+                    # note for a reviewer must not ask for a checkout.
+                    exact("checkout FETCH_HEAD" in payload["message"], False)
                     actions.append(payload["modelSelection"]["instanceId"])
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
@@ -1870,6 +1873,8 @@ def root_workspace():
     exact(result, "fresh (old root workspace): receipt")
     exact(actions, ["fresh"])
     exact("refs/pull/512/head" in messages[-1], True)
+    # A builder checks the head out before it changes anything.
+    exact("checkout FETCH_HEAD" in messages[-1], True)
     # A pull request from a fork can use a branch name that origin has too,
     # at another commit: the name of the branch proves nothing, and the
     # note gives the head commit to check the fetch against.
