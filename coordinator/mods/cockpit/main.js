@@ -6,7 +6,7 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, 
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, optionsText, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { actRates, awayCounts, flushFlowLog, logAct, logLaneChange, markPass, readFlow } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
@@ -25,7 +25,7 @@ const POP_FOLLOW = 600000;
 const SAVED = "board";
 const PROJECT_KEY = "project";
 const SEEN_KEY = "seen";
-const SAVED_VERSION = 4;
+const SAVED_VERSION = 5;
 const ACT_GRACE = 20000;
 const ARM_FOR = 4000;
 const LOAD_STALE = 300000;
@@ -124,6 +124,9 @@ const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/
 const PLAN_BUCKET = "failed the merge check";
 
 const NOTICE_FOR = 8000;
+const ANSWER_WAIT = 30000;
+const ANSWER_POLL = 2000;
+const SENDING_WAIT = 60000;
 let noticeSeq = 0;
 
 const tally = (groups) => {
@@ -297,6 +300,10 @@ export default class Board extends View {
     this.search.on("focus", () => (this.searching = true));
     this.search.on("blur", () => (this.searching = false));
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
+    cx.timer.every(ANSWER_POLL, (cx) => {
+      this.noteAnswers();
+      cx.notify();
+    });
     cx.timer.every(TICK, (cx) => {
       this.logAnswers();
       cx.spawn(() => flushFlowLog(Date.now()));
@@ -680,6 +687,10 @@ export default class Board extends View {
       settleAll: (cx) => this.settleAll(cx),
       review: (cx) => this.openReview(cx),
       approve: (cx) => this.approve(this.current(), cx),
+      answer: (key, index, cx) => {
+        const entry = this.entryOf(key);
+        this.answerAsk(entry.group.primary, index, key, cx);
+      },
       approveAll: (cx) => this.approveAll(cx),
       retry: (cx) => this.openRetry(cx),
       rebase: (cx) => this.rebase(this.current(), cx),
@@ -1397,7 +1408,7 @@ export default class Board extends View {
 
   activate(e, cx) {
     if (e) this.glanceOpened(e.group.key);
-    if (e?.group.kind === "ask") return run("coordinator.asks");
+    if (e?.group.kind === "ask" && !e.group.primary.options?.length) return run("coordinator.asks");
     if (e && !e.thread) this.openDecision(e, cx);
     else this.openEntry(e, cx);
   }
@@ -1439,7 +1450,9 @@ export default class Board extends View {
     cx.spawn(async (cx) => {
       try {
         const group = this.groups()[0];
-        if (group.issue) {
+        if (group.primary.options?.length) {
+          this.ticket = { status: "ok", text: optionsText(group.primary.options) };
+        } else if (group.issue) {
           const [config, issue] = await Promise.all([loadConfig(), showIssue(issueRef(group.issue))]);
           this.ticket = { status: "ok", text: issue.body, issue, config };
         } else {
@@ -1536,7 +1549,7 @@ export default class Board extends View {
     if (this.outdated) return d.primary.id === "merge" || d.primary.id === "wait" ? this.recheck(cx) : closeOverlay(this.overlay);
     if (d.primary.id === "wait") return;
     if (d.primary.id === "answer") return this.openReply(entry, cx);
-    if (d.primary.id.startsWith("choice:")) return this.choose(entry, d.primary.id, cx);
+    if (d.primary.id.startsWith("choice:")) return this.choose(entry, viaEnter && this.armed?.key === entry.key && this.armed.kind.startsWith("choice:") ? this.armed.kind : d.primary.id, cx);
     if (viaEnter && this.armed) return;
     if (d.primary.id === "merge") return this.approve(entry, cx);
     if (this.guard(true)) return;
@@ -1679,8 +1692,10 @@ export default class Board extends View {
   }
 
   choose(entry, id, cx) {
+    const index = Number(id.slice("choice:".length));
+    if (entry.group.primary.options?.length) return this.answerAsk(entry.group.primary, index, entry.key, cx);
     const thread = this.threadOf(entry);
-    const text = thread.choices?.options[Number(id.slice("choice:".length))];
+    const text = thread.choices?.options[index];
     if (!text || this.choosing || this.outdated || this.guard(true)) return;
     const eligible = this.seen[entry.group.key]?.col === "needs";
     this.choosing = true;
@@ -1693,6 +1708,40 @@ export default class Board extends View {
         this.choosing = false;
       }
     }, cx);
+  }
+
+  answerAsk(card, index, key, cx) {
+    const option = card.options[index];
+    if (!option || this.guard(true)) return;
+    this.confirm(`choice:${index}`, key, () => this.requestAnswer(card, option), cx);
+  }
+
+  requestAnswer(card, option) {
+    if (shared("co.decided")?.[card.askId]) return say("info", "Already answered", card.askId);
+    if (shared("co.answer")?.[card.askId]) return say("info", "Answer already sending", card.askId);
+    setShared("co.answer", { ...shared("co.answer"), [card.askId]: { label: option.label, title: card.title, cause: card.cause, at: Date.now() } });
+    if (this.dec) closeOverlay(this.overlay);
+  }
+
+  noteAnswers() {
+    const done = shared("co.answered") ?? {};
+    const ids = Object.keys(done);
+    if (ids.length) {
+      setShared("co.answered", {});
+      for (const id of ids) {
+        if (done[id].ok) say("success", `Answered ${id}`, done[id].label);
+        else say("error", `Answer not sent for ${id}`, done[id].reason);
+      }
+    }
+    const waiting = shared("co.answer") ?? {};
+    const now = Date.now();
+    const unpicked = Object.keys(waiting).filter((id) => !waiting[id].sending && now - waiting[id].at > ANSWER_WAIT);
+    const unconfirmed = Object.keys(waiting).filter((id) => waiting[id].sending && now - waiting[id].took > SENDING_WAIT);
+    if (unpicked.length || unconfirmed.length) {
+      setShared("co.answer", Object.fromEntries(Object.entries(waiting).filter(([id]) => !unpicked.includes(id) && !unconfirmed.includes(id))));
+      for (const id of unpicked) say("error", `Answer not sent for ${id}`, "The Coordinator panel did not pick it up. Open the Coordinator chat and try again.");
+      for (const id of unconfirmed) say("error", `Answer not confirmed for ${id}`, "Not confirmed. Check the Coordinator chat before answering again.");
+    }
   }
 
   abandon(thread, cx) {
@@ -2172,6 +2221,7 @@ export default class Board extends View {
       this.moveTo(`g:${c.column}:${c.group.key}`);
     } else if (k === "enter" && c) this.activate(c, cx);
     else if (k === "o" && c) this.openEntry(c, cx);
+    else if (/^[1-4]$/.test(k) && c?.group.primary.options?.length) this.answerAsk(c.group.primary, Number(k) - 1, c.key, cx);
     else if (k === "r" && c) this.openReply(c, cx);
     else if (k === "d" && c && DECIDES.has(c.col)) this.openReply(c, cx, prCard(c.col, c.group.needs) ? NOTE_LABEL : "Reply");
     else if (k === "S") this.settleReviewed(cx);
