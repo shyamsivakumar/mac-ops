@@ -3208,6 +3208,9 @@ def watchdog_loop(
         except Exception:
             if cached is None:
                 return 1
+            if os.path.isdir(str(registry.directory / job_id)):
+                sleep(WATCHDOG_INTERVAL)
+                continue
             try:
                 if terminate(
                     cached["workload"],
@@ -3319,11 +3322,15 @@ def watchdog_loop(
                     claimed = None
             if claimed is None:
                 try:
-                    if _limit_claim_active(_record(registry, job_id), clock_ns()):
-                        sleep(WATCHDOG_INTERVAL)
-                        continue
+                    latest = _record(registry, job_id)
                 except Exception:
-                    pass
+                    sleep(WATCHDOG_INTERVAL)
+                    continue
+                if latest.get("termination") != (termination or None) or (
+                    _limit_claim_active(latest, clock_ns())
+                ):
+                    sleep(WATCHDOG_INTERVAL)
+                    continue
                 try:
                     success = terminate(
                         cached["workload"],
