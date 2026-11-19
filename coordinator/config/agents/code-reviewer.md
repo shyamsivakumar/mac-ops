@@ -55,9 +55,20 @@ Reply with plain text.
    wrong-layer special cases and shims are major. So is building on
    when the task should have stopped to recommend a refactor.
 7. One finding per line: `severity | file:line | problem | fix`.
-   Severity: critical, major or minor.
+   Severity: critical, major or minor. A finding is critical or major
+   only when it is likely to happen in this fleet's real use, or would
+   cause harm that is hard to undo: data loss, a merge or push that
+   should not happen, a lane or queue that stays stuck, a secret leak,
+   a wrong trade or exit. State in one sentence how it happens in
+   practice: who or what triggers it, and how often. A case that needs
+   an unlikely sequence of events, an attacker inside our own agents,
+   or input our own tools never produce is minor. List minors under
+   'Left for later'; they never fail a PR.
+   From the second round on, raise only findings in lines changed
+   since the previous reviewed head, plus any earlier critical or
+   major still open.
 8. End with exactly `VERDICT: PASS` if no critical or major
-   finding, else `VERDICT: FAIL`.
+   finding (a report with only minors passes), else `VERDICT: FAIL`.
 9. When a turn ends by asking Shyam a question, put the question on
    one line, then 2 to 4 options as lines `1. <option>`, `2. <option>`
    and so on, and end with the line
