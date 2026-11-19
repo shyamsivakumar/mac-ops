@@ -32,8 +32,10 @@ is blocked, the caller waits and says so.
 - `coordq` resolves a `taskType` to the first available entry of its list and
   chooses the gate reviewer in the gatekeep and the backstop.
 - The lane driver picks a fix model for every send and a build model for every
-  dead-run relaunch. A thread whose model is not the first available entry gets
-  a fresh thread in the same worktree.
+  dead-run relaunch. A send goes only to a thread whose model is an entry of
+  the build list or of the fix list and is not blocked. A thread on any other
+  model takes no send, and the work starts again on the first unblocked fix
+  model, in the thread's own worktree when it has one.
 - `install_coordinator.py` regenerates the `ROUTES` table of
   `~/.pi/agent/extensions/task-router.ts` from the pi-prefixed entries of the
   build list, so pi cannot drift from the file.

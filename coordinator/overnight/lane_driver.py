@@ -487,9 +487,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     if lkey in ledger:
         return f"already done {lkey}"
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
-    fixer = model_list.first_available("fix")
-    if fixer is None:
-        return f"skip {lkey}: every fix model is blocked"
+    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+    may_send = model_list.may_take_send(thread_model)
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
             _, skip = pr_action_skip(repo, attached["number"])
@@ -499,15 +498,14 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
-    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if not model_list.same_selection(thread_model, fixer["selection"]):
-        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
-            return (f"skip {lkey}: thread is {thread.get('status')} on "
-                    f"{model_list.identity(thread_model) or 'an unknown model'}, "
-                    f"not the first available fix model; held until it is idle")
-        if thread.get("status") in {"completed", "interrupted", "failed"}:
-            sendable = False
-            reroute = "model is not first available"
+    if not may_send:
+        # The thread runs a model that is blocked, or a model no list
+        # names (a legacy Sol thread). It takes no send, and the message
+        # is not held for it either: the work starts again on the first
+        # unblocked fix model, in the thread's own worktree when it has
+        # one, so no message is dropped without a thread to carry it.
+        sendable = False
+        reroute = "model may not take a send"
     if sendable and worktree_only and root_workspace(thread):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
@@ -522,7 +520,11 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute == "model is not first available" and not root_workspace(thread):
+        # The work starts on the first unblocked fix model.
+        fixer = model_list.first_available("fix")
+        if fixer is None:
+            return f"skip {lkey}: every fix model is blocked"
+        if reroute == "model may not take a send" and not root_workspace(thread):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
