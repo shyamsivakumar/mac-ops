@@ -470,18 +470,9 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-IDLE_STATUSES = {"completed", "interrupted", "failed"}
-
-
 def reusable_worktree(thread):
-    """Say whether a replacement may take over a thread's own worktree.
-
-    Only an idle thread hands its checkout over, so a pending edit of the
-    old thread cannot overwrite the replacement's. The worktree has to be
-    a linked worktree of its own, on a branch that can be read and is not
-    a herdr branch; a worktree that cannot be read is refused too.
-    """
-    if thread.get("status") not in IDLE_STATUSES or root_workspace(thread):
+    """An idle thread in a linked worktree on a readable, non-herdr branch hands its checkout over."""
+    if thread.get("status") not in {"completed", "interrupted", "failed"} or root_workspace(thread):
         return False
     try:
         branch = run(["git", "-C", thread["worktreePath"], "rev-parse", "--abbrev-ref", "HEAD"], timeout=60).strip()
@@ -495,9 +486,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     """Send work to a thread, or start a fresh one when it cannot take it.
 
     A thread on a blocked model takes no message: the work starts on the
-    first unblocked entry of the list for `task_type` (fix list for a fix, build list otherwise), in a worktree the
-    replacement can own (see `reusable_worktree`), on the pull request's
-    branch or on main when the work has no pull request yet.
+    first unblocked entry of the `task_type` list, in a worktree it can own.
 
     With `worktree_only` the work belongs in a worktree of its own: a
     thread that works in a shared checkout of a repository never takes
@@ -538,7 +527,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
                     f"not the first available fix model; held until it is idle")
-        if thread.get("status") in IDLE_STATUSES:
+        if thread.get("status") in {"completed", "interrupted", "failed"}:
             sendable = False
             reroute = "model is not first available"
     if sendable and worktree_only and root_workspace(thread):
@@ -1011,6 +1000,9 @@ def unstick(repo, ledger, excl=frozenset()):
                         if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
             if not best:
                 continue
+            key = f"continue:{repo}#{n}:{best[1]}"
+            if key in ledger:
+                continue
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
                 continue
@@ -1025,7 +1017,9 @@ def unstick(repo, ledger, excl=frozenset()):
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
-                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, task_type="standard")
+                       ledger, key, repo=repo, priority=900, task_type="standard")
+            if not out.startswith("fresh ("):
+                ledger.pop(key, None)
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:

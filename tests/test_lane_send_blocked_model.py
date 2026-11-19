@@ -1,164 +1,131 @@
-"""A lane send to a thread on a blocked model starts a fresh thread instead.
+"""A lane send to a thread on a blocked model starts one fresh thread instead."""
 
-The lane driver's `send` is replayed with the real models.json fix list and a
-real providers-blocked.json. The coordq command it builds is recorded, so each
-case reads what the queue would be handed.
-"""
-
-import importlib.util
 import json
 import os
 import sys
 import tempfile
 import unittest
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-LANE_DIR = ROOT / "coordinator" / "overnight"
+sys.path.insert(0, str(ROOT / "coordinator" / "overnight"))
+import lane_driver as lane
+
 REPO = "shyamsivakumar/mac-ops"
-WORKTREE = "/work/builder"
-MESSAGE = "fix the finding on head abc"
+WT = "/work/builder"
+KEY = f"fix:{REPO}#1"
+CONT = f"continue:{REPO}#9:t1"
+KEYS = ("modelSelection", "taskType", "message", "workspaceStrategy")
 SONNET = {"instanceId": "claudeAgent", "model": "claude-sonnet-5-5"}
 TERRA = {"instanceId": "codex", "model": "gpt-6.1-terra"}
 MINIMAX = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
-MAIN_WORKTREE = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
-
-
-def load_lane():
-    if str(LANE_DIR) not in sys.path:
-        sys.path.insert(0, str(LANE_DIR))
-    if "lane_driver" in sys.modules:
-        return sys.modules["lane_driver"]
-    loader = SourceFileLoader("lane_driver", str(LANE_DIR / "lane_driver.py"))
-    spec = importlib.util.spec_from_loader("lane_driver", loader)
-    lane = importlib.util.module_from_spec(spec)
-    loader.exec_module(lane)
-    sys.modules["lane_driver"] = lane
-    return lane
+OWN = {"type": "existing_worktree", "worktreePath": WT}
+MAIN = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
+PR = {**MAIN, "baseRef": "origin/builder/pr"}
+MODELS = str(ROOT / "coordinator" / "models.json")
+BASE = {"sendable": True, "worktreePath": WT}
+PR_OK = ({"headRefName": "builder/pr"}, None)
 
 
 class BlockedModelSendTests(unittest.TestCase):
     def setUp(self):
-        self.lane = load_lane()
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = patch.dict(
-            os.environ,
-            {
-                "COORDQ_DIR": tmp.name,
-                "COORDINATOR_MODELS": str(ROOT / "coordinator" / "models.json"),
-            },
-        )
-        env.start()
-        self.addCleanup(env.stop)
-        self.queue_dir = tmp.name
-        self.commands = []
+        self.dir, self.cmds, self.git, self.root = tmp.name, [], "builder/x", False
+        receipts = os.path.join(self.dir, "receipts.json")
+        Path(receipts).write_text(json.dumps({f"ticket:{REPO}#9:a1": "t1"}))
+        issues = {"repos": {REPO: {"issues": [{"number": 9, "labels": []}], "prs": []}}}
+        env = {"COORDQ_DIR": self.dir, "COORDINATOR_MODELS": MODELS}
 
-    def block(self, *identities):
-        blocked = {name: {"reason": "usage limit"} for name in identities}
-        with open(os.path.join(self.queue_dir, "providers-blocked.json"), "w") as f:
-            json.dump({"blocked": blocked}, f)
-
-    def send(self, thread_model, status, branch="builder/x", in_root=False, attached=False, **kwargs):
         def run(cmd, timeout=150):
-            self.commands.append(cmd)
-            return branch if cmd[0] == "git" else "queued"
+            self.cmds.append(cmd)
+            return self.git if cmd[0] == "git" else "queued"
 
-        thread = {
-            "providerInstanceId": thread_model["instanceId"],
-            "model": thread_model["model"],
-            "status": status,
-            "sendable": True,
-            "worktreePath": WORKTREE,
-            "pullRequests": [{"repository": REPO, "number": 7}] if attached else [],
-        }
-        ledger = {}
-        with (
-            patch.object(self.lane, "CFG", {REPO: {"key": "MO", "projectId": "fixture"}}),
-            patch.object(self.lane, "DRY", False),
-            patch.object(self.lane, "root_workspace", return_value=in_root),
-            patch.object(self.lane, "branch_on_origin", return_value=True),
-            patch.object(self.lane, "pr_action_skip", return_value=({"headRefName": "builder/pr"}, None)),
-            patch.object(self.lane, "run", run),
-            patch.object(self.lane, "t3", lambda tool, args: {"thread": thread}),
+        for patcher in (
+            patch.dict(os.environ, env),
+            patch.object(lane, "CFG", {REPO: {"key": "MO", "projectId": "p"}}),
+            patch.object(lane, "RECEIPTS", receipts),
+            patch.object(lane, "SNAPSHOT", issues),
+            patch.object(lane, "root_workspace", lambda thread: self.root),
+            patch.object(lane, "pr_action_skip", return_value=PR_OK),
+            patch.object(lane, "run", run),
+            patch.object(lane, "t3", lambda tool, args: {"thread": self.thread}),
         ):
-            result = self.lane.send("t1", MESSAGE, "MO#1 continue", ledger, f"fix:{REPO}#1", repo=REPO, **kwargs)
-        return result, ledger
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-    def launched(self):
-        starts = [c for c in self.commands if c[0] == self.lane.COORDQ]
-        self.assertEqual(len(starts), 1)
-        self.assertNotIn("--tool", starts[0])
-        return json.loads(starts[0][2])
+    def block(self, *models):
+        names = {lane.model_list.identity(m): {"reason": "limit"} for m in models}
+        blocked = json.dumps({"blocked": names})
+        Path(self.dir, "providers-blocked.json").write_text(blocked)
 
-    def assert_replacement(self, args, ledger, workspace, model=TERRA, task_type="fix"):
-        self.assertEqual(args["modelSelection"], model)
-        self.assertEqual(args["taskType"], task_type)
-        self.assertEqual(args["message"], MESSAGE)
-        self.assertEqual(args["workspaceStrategy"], workspace)
-        self.assertEqual(args["clientRequestId"], f"fix:{REPO}#1")
-        self.assertEqual(list(ledger), [f"fix:{REPO}#1"])
+    def thread_on(self, model, status, attached=False):
+        pulls = [{"repository": REPO, "number": 7}] * attached
+        thread = {**BASE, **model, "providerInstanceId": model["instanceId"]}
+        self.thread = {**thread, "status": status, "pullRequests": pulls}
 
-    def test_idle_blocked_thread_hands_its_worktree_to_the_next_entry(self):
-        self.block("claudeAgent:claude-sonnet-5-5")
-        _, ledger = self.send(SONNET, "completed")
-        self.assert_replacement(self.launched(), ledger, {"type": "existing_worktree", "worktreePath": WORKTREE})
+    def send(self, **kwargs):
+        ledger = {}
+        out = lane.send("t1", "fix it", "t", ledger, KEY, repo=REPO, **kwargs)
+        return out, ledger
 
-    def test_running_blocked_thread_keeps_its_checkout(self):
-        self.block("claudeAgent:claude-sonnet-5-5")
-        _, ledger = self.send(SONNET, "running")
-        self.assert_replacement(self.launched(), ledger, MAIN_WORKTREE)
+    def launches(self, key=KEY):
+        starts = [json.loads(c[2]) for c in self.cmds if c[0] == lane.COORDQ]
+        return [a for a in starts if a.get("clientRequestId") == key]
 
-    def test_blocked_thread_on_a_herdr_branch_does_not_hand_over_its_worktree(self):
-        self.block("claudeAgent:claude-sonnet-5-5")
-        _, ledger = self.send(SONNET, "completed", branch="herdr/example")
-        self.assert_replacement(self.launched(), ledger, MAIN_WORKTREE)
-
-    def test_blocked_thread_with_a_pull_request_continues_on_its_branch(self):
-        self.block("claudeAgent:claude-sonnet-5-5")
-        _, ledger = self.send(SONNET, "running", attached=True)
-        pr_worktree = {"type": "worktree", "baseRef": "origin/builder/pr", "startFromOrigin": True}
-        self.assert_replacement(self.launched(), ledger, pr_worktree)
-
-    def test_blocked_thread_on_a_detached_head_does_not_hand_over_its_worktree(self):
-        self.block("claudeAgent:claude-sonnet-5-5")
-        _, ledger = self.send(SONNET, "completed", branch="HEAD")
-        self.assert_replacement(self.launched(), ledger, MAIN_WORKTREE)
-
-    def test_blocked_thread_in_the_shared_checkout_still_gets_a_replacement(self):
-        self.block("claudeAgent:claude-sonnet-5-5")
-        _, ledger = self.send(SONNET, "completed", in_root=True)
-        self.assert_replacement(self.launched(), ledger, MAIN_WORKTREE)
-
-    def test_a_ticket_build_is_replaced_on_the_build_list(self):
-        self.block("minimax:MiniMax-M3.1-Flash")
-        _, ledger = self.send(MINIMAX, "completed", task_type="standard")
-        self.assert_replacement(
-            self.launched(), ledger, {"type": "existing_worktree", "worktreePath": WORKTREE}, GLM, "standard"
-        )
+    def test_blocked_thread_is_replaced_on_the_next_entry(self):
+        cases = [
+            ("idle", SONNET, "completed", {}, OWN, TERRA),
+            ("running", SONNET, "running", {}, MAIN, TERRA),
+            ("herdr", SONNET, "completed", {"git": "herdr/x"}, MAIN, TERRA),
+            ("detached", SONNET, "completed", {"git": "HEAD"}, MAIN, TERRA),
+            ("shared", SONNET, "completed", {"root": True}, MAIN, TERRA),
+            ("pr", SONNET, "running", {"pr": True}, PR, TERRA),
+            ("build", MINIMAX, "completed", {"type": "standard"}, OWN, GLM),
+        ]
+        for name, model, status, kw, workspace, expected in cases:
+            with self.subTest(name):
+                self.cmds = []
+                self.git = kw.get("git", "builder/x")
+                self.root = kw.get("root", False)
+                self.block(SONNET, MINIMAX)
+                self.thread_on(model, status, kw.get("pr", False))
+                kind = kw.get("type", "fix")
+                _, ledger = self.send(task_type=kind)
+                [args] = self.launches()
+                want = [expected, kind, "fix it", workspace]
+                self.assertEqual([args[k] for k in KEYS], want)
+                self.assertEqual(list(ledger), [KEY])
 
     def test_unblocked_thread_is_sent_to_as_before(self):
-        self.send(SONNET, "completed")
-        cmd = self.commands[-1]
+        self.thread_on(SONNET, "completed")
+        self.send()
+        cmd = self.cmds[-1]
         self.assertEqual(cmd[cmd.index("--tool") + 1], "t3_thread_send")
-        self.assertEqual(json.loads(cmd[2]), {"threadId": "t1", "message": MESSAGE})
+        self.assertEqual(json.loads(cmd[2]), {"threadId": "t1", "message": "fix it"})
 
-    def test_unblocked_running_thread_on_a_later_entry_is_still_held(self):
-        result, ledger = self.send(TERRA, "running")
-        self.assertIn("held until it is idle", result)
-        self.assertEqual(self.commands, [])
-        self.assertEqual(ledger, {})
+    def test_unblocked_running_thread_on_a_later_entry_is_held(self):
+        self.thread_on(TERRA, "running")
+        out, ledger = self.send()
+        self.assertIn("held until it is idle", out)
+        self.assertEqual((self.cmds, ledger), ([], {}))
 
     def test_every_fix_model_blocked_leaves_the_send_queued(self):
-        self.block("claudeAgent:claude-sonnet-5-5", "codex:gpt-6.1-terra")
-        result, ledger = self.send(SONNET, "running")
-        self.assertEqual(result, f"skip fix:{REPO}#1: every fix model is blocked")
-        self.assertEqual(self.commands, [])
-        self.assertEqual(ledger, {})
+        self.block(SONNET, TERRA)
+        self.thread_on(SONNET, "running")
+        out, ledger = self.send()
+        self.assertEqual(out, f"skip {KEY}: every fix model is blocked")
+        self.assertEqual((self.cmds, ledger), ([], {}))
 
+    def test_a_blocked_continuation_starts_one_replacement(self):
+        self.block(SONNET)
+        self.thread_on(SONNET, "running")
+        ledger = {}
+        for _ in range(2):
+            ledger.pop("cont:t1", None)
+            lane.unstick(REPO, ledger)
+        self.assertEqual(len(self.launches(CONT)), 1)
+        self.assertIn(CONT, ledger)
 
-if __name__ == "__main__":
-    unittest.main()
