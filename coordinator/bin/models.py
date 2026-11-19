@@ -85,14 +85,23 @@ def entries(list_name):
     return load()[list_name]
 
 
+def bare_model(model):
+    return str(model or "").split("/")[-1]
+
+
 def identity(selection):
     """`instanceId:model`, the model on its last segment, so a provider
     prefixed spelling names the same provider as the plain one."""
     if not isinstance(selection, dict):
         return ""
     instance = selection.get("instanceId")
-    model = str(selection.get("model") or "").split("/")[-1]
+    model = bare_model(selection.get("model"))
     return f"{instance}:{model}" if instance and model else ""
+
+
+def normalized_identity(key):
+    instance, colon, model = key.partition(":")
+    return f"{instance}:{bare_model(model)}" if colon else key
 
 
 def same_selection(a, b):
@@ -110,7 +119,7 @@ def blocked_identities():
     blocked = data.get("blocked") if isinstance(data, dict) else None
     if not isinstance(blocked, dict):
         raise ModelsError(f"{BLOCKED_FILE} must hold a blocked object")
-    return set(blocked)
+    return {normalized_identity(key) for key in blocked}
 
 
 def is_blocked(selection, blocked=None):
