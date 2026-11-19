@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `caea843f0dc8cdf2f7ae08a622699da8cb87850b`
+Checked commit: `a2b27975896e00eb7f9cf2446ebd5a5c81b67831`
 Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
@@ -13,7 +13,7 @@ Working tree clean when the checks ran: yes
 | python syntax: evidence/MO-495/simulator_cleanup_proof.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' evidence/MO-495/simulator_cleanup_proof.py` | passed |  |
 | python syntax: heavy.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' heavy.py` | passed |  |
 | python syntax: tests/test_heavy_dead_job_simulators.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_heavy_dead_job_simulators.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-m7_2ypv7 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-m7_2ypv7/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-0n7vntmf -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-0n7vntmf/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_agent_heavy_wait_pause | `python3 -m unittest tests.test_agent_heavy_wait_pause` | passed |  |
 | tests: tests.test_heavy_dead_job_simulators | `python3 -m unittest tests.test_heavy_dead_job_simulators` | passed |  |
