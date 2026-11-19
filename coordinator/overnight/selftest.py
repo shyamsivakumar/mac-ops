@@ -538,12 +538,14 @@ def gate_pipeline():
 
 def merged_restart():
     import lane_driver as lane
-    repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
-    merged = [dict(number=20, headRefOid=head, body="Refs #10")]
-    for receipts, reply, expected in [
-        ({f"gate:{repo}#20:{head}": "gate"}, "VERDICT: PASS", ["provides", "ff"]),
-        ({}, "", ["decisions"]),
+    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z"),
+              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z")]
+    for repo, key, receipts, reply, expected, board in [
+        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate"}, "VERDICT: PASS",
+         ["provides", "ff"], None),
+        ("shyamsivakumar/mac-ops", "MO", {}, "", [], "owner"),
+        ("shyamsivakumar/strategy-replay-workbench", "SRW", {}, "", [], "decisions"),
     ]:
         actions = []
 
@@ -551,6 +553,7 @@ def merged_restart():
             if cmd[:3] == ["gh", "pr", "list"]:
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:
+                exact(cmd[3:5], ["--pr", "20"])
                 actions.append("provides")
                 return "closed"
             if cmd[0] == "git" and "worktree" in cmd:
@@ -565,24 +568,24 @@ def merged_restart():
         def threads(tool, args, reply=reply):
             return {"thread": {"status": "completed"}, "items": [{"type": "assistant_message", "text": reply}]}
 
-        def decision(item, actions=actions):
-            exact(item["id"], "lane-merged-unreviewed-FIX-20")
-            actions.append("decisions")
-            return "wrote"
-
         ledger = {}
-        with tempfile.TemporaryDirectory() as scratch, \
+        with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions, \
+             patch.dict(os.environ, {"COORDINATOR_OWNER_BOARD": str(Path(scratch) / "owner.json")}), \
              patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
-             patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
+             patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
              patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": [dict(number=10, labels=[])]}}}), \
              patch.object(lane, "DRY", False), \
-             patch.object(lane, "publish_decision", decision), \
              patch.object(lane, "run", command), patch.object(lane, "t3", threads):
             Path(scratch, "receipts.json").write_text(json.dumps(receipts))
-            lane.settle_merged_prs(repo, ledger)
-            exact(actions, expected)
-            lane.settle_merged_prs(repo, ledger)
-            exact(actions, expected)
+            for _ in range(2):
+                lane.settle_merged_prs(repo, ledger)
+                exact(actions, expected)
+            item_id = f"lane-merged-unreviewed-{key}-20"
+            owner_path = Path(scratch, "owner.json")
+            owner = [i["id"] for i in json.loads(owner_path.read_text())["items"]] if owner_path.exists() else []
+            exact(owner, [item_id] if board == "owner" else [])
+            exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
+                  [item_id] if board == "decisions" else [])
 
 
 def main_update_boundary():

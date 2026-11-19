@@ -1105,8 +1105,11 @@ def merged_without_gate_item(repo, number, head):
 
 def settle_merged_prs(repo, ledger):
     merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "10",
-                             "--json", "number,headRefOid,body"]) or "[]")
+                             "--json", "number,headRefOid,body,mergedAt"]) or "[]")
+    since = ledger.setdefault("settle-since", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     for pr in merged:
+        if (pr.get("mergedAt") or "") < since:
+            continue
         number, head = pr["number"], pr["headRefOid"]
         lkey = f"after-merge:{repo}#{number}:{head}"
         found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")

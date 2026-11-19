@@ -252,7 +252,8 @@ def board_update(target, alarm_id, action, item=None, attempts=5, create=False):
 
 OWNER_IDS = re.compile(
     r"factory-zero-merge|factory-overnight-stall"
-    r"|prompt-merge-MO-\d+|lane-gate-rounds-shyamsivakumar-mac-ops-\d+")
+    r"|prompt-merge-MO-\d+|lane-gate-rounds-shyamsivakumar-mac-ops-\d+"
+    r"|lane-gate-split-MO-\d+|lane-merged-unreviewed-MO-\d+")
 
 
 def board_for(decisions, alarm_id):
