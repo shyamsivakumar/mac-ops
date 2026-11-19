@@ -1783,6 +1783,51 @@ def consolidation_guard():
     exact("never create a third ticket" in message, True)
 
 
+def worktree_base_ref():
+    """A worktree launch always names the ref it branches from.
+
+    T3 0.1.10 refuses a worktree launch with no baseRef, so a hand-built
+    payload that leaves it out is dropped after three attempts. coordq fills
+    the lane default at dispatch, keeps a caller's own baseRef and
+    startFromOrigin, and leaves every other strategy and tool alone.
+    """
+    import ast
+    queue_path = Path(__file__).resolve().parents[1] / "bin" / "coordq"
+    tree = ast.parse(queue_path.read_text())
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "worktree_base")
+    namespace = {"DEFAULT_BASE_REF": "origin/main"}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(queue_path), "exec"), namespace)
+    fill = namespace["worktree_base"]
+    launch = "t3_thread_launch"
+    default = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
+    # A worktree launch with no baseRef gets the lane default.
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree"}}),
+          {"workspaceStrategy": default})
+    # An empty baseRef is a missing one.
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "baseRef": ""}}),
+          {"workspaceStrategy": default})
+    # A caller's own baseRef and startFromOrigin are kept as given.
+    own = {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture",
+                                 "startFromOrigin": False}}
+    exact(fill(launch, own), own)
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture"}}),
+          {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture"}})
+    # A caller's own startFromOrigin is kept when only the baseRef is filled.
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "startFromOrigin": False}}),
+          {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/main",
+                                 "startFromOrigin": False}})
+    # A root or existing_worktree strategy is left alone.
+    for strategy in ({"type": "root"}, {"type": "existing_worktree", "worktreePath": "/fixture"}):
+        args = {"workspaceStrategy": strategy}
+        exact(fill(launch, args), args)
+    # No other tool gets a baseRef, and a launch with no strategy is left alone.
+    for tool in ("t3_thread_send", "t3_thread_list"):
+        args = {"workspaceStrategy": {"type": "worktree"}}
+        exact(fill(tool, args), args)
+    exact(fill(launch, {"message": "brief"}), {"message": "brief"})
+
+
 def gate_round_cap():
     """The convergence rule in the lane: three failed reviews, then one item.
 
@@ -3340,7 +3385,7 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():
