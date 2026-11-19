@@ -656,7 +656,7 @@ class HeldContinue(unittest.TestCase):
             if cmd[:2] == ["ticket", "start"]:
                 return "started"
             if cmd[:1] == ["git"]:
-                return "builder/fixture"
+                return head_ref("builder/fixture")
             queued.append(json.loads(cmd[2]))
             return "fixture-receipt"
 
