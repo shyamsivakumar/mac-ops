@@ -18,7 +18,8 @@
         "fix": "standard",
         "rca": "rca",
         "risky": "risky",
-        "design": "design"
+        "design": "design",
+        "hard": "rca"
       },
       "chains": {
         "standard": [
@@ -96,7 +97,8 @@
         "fix": "standard",
         "rca": "rca",
         "risky": "risky",
-        "design": "design"
+        "design": "design",
+        "hard": "rca"
       },
       "chains": {
         "standard": [

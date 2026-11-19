@@ -1805,7 +1805,7 @@ def dead_run_model(thread, limit_failure):
     blocked = model_list.blocked_identities()
     if limit_failure:
         own = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-        blocked = blocked | {model_list.identity(own)}
+        blocked = blocked | model_list.selection_identities(own)
     chosen = model_list.first_available("build", None, blocked)
     return chosen["selection"] if chosen else None
 

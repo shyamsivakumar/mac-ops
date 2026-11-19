@@ -116,6 +116,12 @@ def chain_of(entry, task_type=None):
     return routes.get(task_type) or DEFAULT_CHAIN
 
 
+def router_route(selection):
+    """The chain a router selection names, or None when it names none."""
+    model = str(selection.get("model") or "") if isinstance(selection, dict) else ""
+    return model[len(ROUTE_PREFIX):] if model.startswith(ROUTE_PREFIX) else None
+
+
 def route_of(entry, task_type=None):
     """The router route a task type runs, `task/<chain>`."""
     return f"{ROUTE_PREFIX}{chain_of(entry, task_type)}"
@@ -174,11 +180,22 @@ def router_covers(list_name, selection):
     """The router entry of a list when it runs the model a selection names.
 
     A caller that still sends a direct `pi` Morph model is mapped to the
-    router entry, so the launch goes through the router and its fallback."""
+    router entry, so the launch goes through the router and its fallback. The
+    match is on the blocked-store identity, so a model of another instance
+    never counts."""
     entry = router_entry(list_name)
     if entry is None or not isinstance(selection, dict):
         return None
-    return entry if str(selection.get("model") or "") in chain_models(entry) else None
+    return entry if identity(selection) in entry_identities(entry) else None
+
+
+def selection_identities(selection, list_name="build"):
+    """The identities to block so the entry a selection names is skipped.
+
+    A router selection names one entry that covers every Morph model, so
+    skipping it means blocking each of them."""
+    entry = find(selection, (list_name,))
+    return entry_identities(entry) if entry is not None else {identity(selection)}
 
 
 def read_json(file_path):
@@ -341,15 +358,15 @@ def first_available(list_name, preferred=None, blocked=None, task_type=None):
 def find(selection, list_names=LISTS):
     """The entry a selection names.
 
-    A router selection names the router entry of the list whatever route it
-    carries, because one entry owns every route."""
+    A router selection names the router entry of the list when it carries a
+    configured route, because one entry owns every route."""
     wanted = identity(selection)
-    router = isinstance(selection, dict) and selection.get("instanceId") == ROUTER_INSTANCE
+    chain = router_route(selection) if isinstance(selection, dict) else None
     for name in list_names:
         for entry in entries(name):
             if identity(entry["selection"]) == wanted:
                 return entry
-            if router and is_router(entry):
+            if chain is not None and is_router(entry) and chain in (entry.get("chains") or {}):
                 return entry
     return None
 
@@ -421,7 +438,7 @@ def first_other(list_name, own_model=None):
     own = str(own_model or "").split("/")[-1]
     blocked = blocked_identities()
     for entry in entries(list_name):
-        if entry["selection"]["model"].split("/")[-1] != own and identity(entry["selection"]) not in blocked:
+        if entry["selection"]["model"].split("/")[-1] != own and not entry_blocked(entry, blocked):
             return entry
     return None
 
