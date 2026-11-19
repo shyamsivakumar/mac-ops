@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import tempfile
 import time
 import types
@@ -387,6 +388,23 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn(self.key, self.read_queue().get("gateReviewers", {}))
 
+    def test_an_unreadable_block_store_after_the_write_leaves_no_item_queued(self):
+        chosen = coordq.save
+
+        def save_then_corrupt(queue):
+            chosen(queue)
+            with open(self.blocked_file, "w") as f:
+                json.dump({"blocked": []}, f)
+
+        coordq.save = save_then_corrupt
+        self.addCleanup(setattr, coordq, "save", chosen)
+        coordq.subprocess.TimeoutExpired = subprocess.TimeoutExpired
+        self.write_queue()
+        with self.assertRaises(SystemExit):
+            self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+        self.assertNotIn(self.key, self.read_queue().get("gatedHeads", {}))
+
     def test_a_head_taken_back_for_a_block_is_regated_when_the_reviewer_frees(self):
         chosen = coordq.save
         blocking = [True]
@@ -449,13 +467,37 @@ class ReviewerFallbackTest(RetryLimitBase):
         with open(os.path.join(QUEUE_DIR, "queue.json"), "w") as f:
             json.dump(launched, f)
         second = coordq.model_list.entries("review")[1]["selection"]
+        coordq.load_receipts = lambda: {RECEIPT["requestId"]: "builder-1", self.key: "gate-2"}
         coordq.call = lambda tool, args, rules=None: (0, json.dumps(
             {"thread": {"status": "failed", "providerInstanceId": second["instanceId"],
                         "model": second["model"]}, "items": [], "recentRuns": []}))
         out, _ = self.run_gatekeep()
+        self.assertIn("gave up " + self.key + " after one move", out)
         self.assertNotIn("regating", out)
         self.assertEqual(self.gate_items(), [])
-        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+
+    def test_a_launch_holds_the_block_lock_from_the_read_to_the_start(self):
+        launch = {"projectId": "P", "title": "t", "taskType": "review", "message": "m",
+                  "modelSelection": coordq.model_list.entries("review")[0]["selection"]}
+        coordq.call = self.saved["call"]
+        busy = []
+
+        def start(*a, **k):
+            try:
+                with coordq.model_list.blocked_lock(wait=False):
+                    busy.append(False)
+            except coordq.model_list.BlockStoreBusy:
+                busy.append(True)
+            return FakeRun(json.dumps({"thread": {"threadId": "t-1"}}))
+
+        coordq.subprocess = types.SimpleNamespace(run=start, TimeoutExpired=TimeoutError)
+        self.assertEqual(coordq.call("t3_thread_launch", launch)[0], 0)
+        self.assertEqual(busy, [True])
+        with coordq.model_list.blocked_lock():
+            with self.assertRaises(coordq.model_list.BlockStoreBusy):
+                coordq.call("t3_thread_launch", launch)
+        self.assertEqual(busy, [True])
 
 if __name__ == "__main__":
     unittest.main()

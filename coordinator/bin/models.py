@@ -22,7 +22,12 @@ INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
 BLOCKED_FILE = "providers-blocked.json"
 BLOCKED_LOCK_FILE = "providers-blocked.lock"
-VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
+VENDOR_PREFIXES = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+)
 
 
 class ModelsError(ValueError):
@@ -53,7 +58,10 @@ def validate(data):
             selection = entry.get("selection") if isinstance(entry, dict) else None
             if not (
                 isinstance(selection, dict)
-                and all(nonempty_string(selection.get(key)) for key in ("instanceId", "model"))
+                and all(
+                    nonempty_string(selection.get(key))
+                    for key in ("instanceId", "model")
+                )
                 and all(nonempty_string(entry.get(key)) for key in ("id", "vendor"))
             ):
                 raise ModelsError(
@@ -101,8 +109,14 @@ def identity(selection):
 
 def same_selection(a, b):
     """Whether two selections name the same provider and the exact same model string."""
-    return (isinstance(a, dict) and isinstance(b, dict) and bool(a.get("instanceId")) and bool(a.get("model"))
-            and a.get("instanceId") == b.get("instanceId") and a.get("model") == b.get("model"))
+    return (
+        isinstance(a, dict)
+        and isinstance(b, dict)
+        and bool(a.get("instanceId"))
+        and bool(a.get("model"))
+        and a.get("instanceId") == b.get("instanceId")
+        and a.get("model") == b.get("model")
+    )
 
 
 def queue_dir():
@@ -111,13 +125,18 @@ def queue_dir():
 
 
 @contextlib.contextmanager
-def blocked_lock():
+def blocked_lock(wait=True):
     """The lock on the provider block store, held while a caller reads the
-    blocked set and acts on the answer."""
+    blocked set and acts on the answer. A caller that already holds the queue
+    lock passes `wait=False` and gets `BlockStoreBusy` when a writer holds it,
+    so the lock order (block store, then queue) is never inverted."""
     directory = queue_dir()
     os.makedirs(directory, exist_ok=True)
     with open(os.path.join(directory, BLOCKED_LOCK_FILE), "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            raise BlockStoreBusy("the provider block store is being written") from None
         yield
 
 
