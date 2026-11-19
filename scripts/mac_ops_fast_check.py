@@ -185,8 +185,8 @@ def check_ruff():
 def mypy_command():
     """The pinned mypy command. Imports are followed silently, so only the
     target modules are reported on."""
-    return uvx_command("mypy", "--follow-imports=silent", "--ignore-missing-imports",
-                       *MYPY_TARGETS)
+    return uvx_command("mypy", "--strict", "--follow-imports=silent", "--ignore-missing-imports",
+                       "--python-version", "3.9", *MYPY_TARGETS)
 
 
 def check_mypy():

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import math
 import os
@@ -9,6 +11,7 @@ import time
 from collections import defaultdict, deque
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 
 
 BOARD_HOME = Path.home() / ".herdr-projects"
@@ -23,7 +26,7 @@ COMMAND_TIMEOUT = 4
 TASK_DIR = re.compile(r"^(\d+)([a-e])?$", re.IGNORECASE)
 
 
-def _command(args, label, timeout=COMMAND_TIMEOUT, env=None):
+def _command(args: list[str], label: str, timeout: float = COMMAND_TIMEOUT, env: dict[str, str] | None = None) -> tuple[Any, str | None]:
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env, check=False)
     except subprocess.TimeoutExpired:
@@ -37,7 +40,7 @@ def _command(args, label, timeout=COMMAND_TIMEOUT, env=None):
     return result.stdout, None
 
 
-def _uint(value, *, positive=False, maximum=(1 << 63) - 1):
+def _uint(value: Any, *, positive: bool = False, maximum: int = (1 << 63) - 1) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -51,7 +54,7 @@ def _uint(value, *, positive=False, maximum=(1 << 63) - 1):
     return number
 
 
-def _sysctl(key, errors):
+def _sysctl(key: str, errors: list[str]) -> int | None:
     output, error = _command([SYSCTL_CMD, "-n", key], f"sysctl {key}")
     if error:
         errors.append(error)
@@ -62,8 +65,8 @@ def _sysctl(key, errors):
     return value
 
 
-def _parse_vm_stat(text, errors):
-    parsed = {}
+def _parse_vm_stat(text: str, errors: list[str]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
     for name, pattern in {
         "page_size": r"page size of\s+(\d+)\s+bytes",
         "free": r"Pages free:\s*([\d,]+)\.?",
@@ -87,7 +90,7 @@ def _parse_vm_stat(text, errors):
     return parsed
 
 
-def _swap_used(text, errors):
+def _swap_used(text: str, errors: list[str]) -> int | None:
     matches = re.findall(r"\bused\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?)(?:i?B)?\b", text, re.IGNORECASE)
     if len(matches) != 1:
         errors.append("sysctl vm.swapusage returned an invalid used value")
@@ -105,7 +108,7 @@ def _swap_used(text, errors):
     return result
 
 
-def _admission():
+def _admission() -> dict[str, Any]:
     output, error = _command([BOARD_CMD, "admission", "--json"], "board admission snapshot")
     if error:
         raise RuntimeError(error)
@@ -117,7 +120,7 @@ def _admission():
         raise RuntimeError("board admission schema is unsupported")
     if _uint(data.get("limit")) is None:
         raise RuntimeError("board admission limit is invalid")
-    seen = set()
+    seen: set[str] = set()
     for group in ("active", "waiting"):
         rows = data.get(group)
         if not isinstance(rows, list):
@@ -136,12 +139,12 @@ def _admission():
             if group == "waiting" and row.get("state") not in ("yielded", "queued"):
                 raise RuntimeError("board admission waiting state is invalid")
             seen.add(task_id)
-    absent_sockets = {}
+    absent_sockets: dict[str, bool] = {}
     data["active"] = [row for row in data["active"] if not _agent_is_gone(row["id"], absent_sockets)]
     return data
 
 
-def _socket_absent(path, cache):
+def _socket_absent(path: str, cache: dict[str, bool]) -> bool:
     if path not in cache:
         with socket.socket(socket.AF_UNIX) as probe:
             probe.settimeout(1)
@@ -155,7 +158,7 @@ def _socket_absent(path, cache):
     return cache[path]
 
 
-def _agent_is_gone(task_id, absent_sockets):
+def _agent_is_gone(task_id: str, absent_sockets: dict[str, bool]) -> bool:
     try:
         task_file = BOARD_TASKS / task_id / "task.json"
         if task_file.stat().st_size > MAX_JSON_BYTES:
@@ -174,11 +177,11 @@ def _agent_is_gone(task_id, absent_sockets):
     return isinstance(socket_path, str) and bool(socket_path) and _socket_absent(socket_path, absent_sockets)
 
 
-def board_admission_snapshot():
+def board_admission_snapshot() -> dict[str, Any]:
     return _admission()
 
 
-def board_agent_rss_census(admission=None):
+def board_agent_rss_census(admission: dict[str, Any] | None = None) -> dict[str, Any]:
     if admission is not None and not isinstance(admission, dict):
         raise ValueError("board admission snapshot is invalid")
     admission = admission if admission is not None else board_admission_snapshot()
@@ -187,10 +190,10 @@ def board_agent_rss_census(admission=None):
         raise ValueError("board admission active list is missing")
     if not active:
         return {"schema": 1, "agents": [], "rss_bytes": [], "complete": True, "errors": []}
-    errors = []
+    errors: list[str] = []
     tasks = _read_slot_tasks(active)
     agents = _collect_agents(tasks, errors)
-    rss_bytes = []
+    rss_bytes: list[int] = []
     for row in agents:
         value = row.get("rss_bytes")
         if type(value) is int and value > 0:
@@ -199,11 +202,11 @@ def board_agent_rss_census(admission=None):
     return {"schema": 1, "agents": agents, "rss_bytes": rss_bytes, "complete": complete, "errors": errors}
 
 
-def compressor_snapshot():
+def compressor_snapshot() -> dict[str, float]:
     output, error = _command(["/usr/bin/vm_stat"], "vm_stat compressor counter")
     if error:
         raise RuntimeError(error)
-    errors = []
+    errors: list[str] = []
     vm = _parse_vm_stat(output, errors)
     page_size = vm.get("page_size")
     compressor_pages = vm.get("compressor")
@@ -215,14 +218,14 @@ def compressor_snapshot():
     }
 
 
-def _read_slot_tasks(active=None):
+def _read_slot_tasks(active: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     active = _admission()["active"] if active is None else active
     if not active:
         return []
     if not BOARD_TASKS.is_dir():
         raise RuntimeError("task directory is unavailable")
     root = BOARD_TASKS.resolve(strict=True)
-    slots = []
+    slots: list[dict[str, Any]] = []
     for row in active:
         task_id = row["id"]
         task_dir = BOARD_TASKS / task_id
@@ -243,7 +246,7 @@ def _read_slot_tasks(active=None):
     return slots
 
 
-def local_limit():
+def local_limit() -> int | None:
     path = BOARD_TASKS.parent.parent / "settings" / "config.json"
     try:
         if path.stat().st_size > MAX_JSON_BYTES:
@@ -258,12 +261,12 @@ def local_limit():
         return None
 
 
-def local_slot_tasks():
+def local_slot_tasks() -> list[dict[str, Any]]:
     no_slot = {"todo", "progress", "queued", "stopped", "nosummary", "asks", "approval",
                "reviewneeds", "plan", "failed", "done", "attempts", "pick", "tried", "after"}
     if not BOARD_TASKS.is_dir():
         raise RuntimeError("task directory is unavailable")
-    slots = []
+    slots: list[dict[str, Any]] = []
     try:
         for repo in BOARD_TASKS.iterdir():
             if not repo.is_dir() or repo.is_symlink():
@@ -286,7 +289,7 @@ def local_slot_tasks():
     return slots
 
 
-def running_count(warnings=None):
+def running_count(warnings: list[str] | None = None) -> int:
     try:
         return len(_admission()["active"])
     except RuntimeError as exc:
@@ -295,7 +298,7 @@ def running_count(warnings=None):
         return len(local_slot_tasks())
 
 
-def _heavy_module():
+def _heavy_module() -> Any:
     module_dir = str(Path(__file__).resolve().parent)
     if module_dir not in sys.path:
         sys.path.insert(0, module_dir)
@@ -306,7 +309,7 @@ def _heavy_module():
     return heavy
 
 
-def _validate_identity(identity, label, heavy):
+def _validate_identity(identity: Any, label: str, heavy: Any) -> str:
     if not isinstance(identity, dict):
         raise RuntimeError(f"heavy registry {label} identity is missing")
     pid = identity.get("pid")
@@ -332,7 +335,7 @@ class _HeavyCensusRace(RuntimeError):
     pass
 
 
-def _active_group_rss(heavy, processes, pgids):
+def _active_group_rss(heavy: Any, processes: dict[int, Any], pgids: set[int]) -> list[int]:
     if not pgids:
         return []
     output, error = _command([PS_CMD, "-axo", "pid=,pgid=,rss=,lstart="], "heavy RSS snapshot")
@@ -369,7 +372,7 @@ def _active_group_rss(heavy, processes, pgids):
     return sorted(totals.values())
 
 
-def _active_heavy_census():
+def _active_heavy_census() -> dict[str, Any]:
     heavy = _heavy_module()
     state_root = Path.home() / ".local" / "state" / "mac-ops"
     registry_path = state_root / heavy.REGISTRY_NAME
@@ -429,16 +432,17 @@ def _active_heavy_census():
     }
 
 
-def active_heavy_census():
+def active_heavy_census() -> dict[str, Any]:
     for attempt in range(3):
         try:
             return _active_heavy_census()
         except _HeavyCensusRace:
             if attempt == 2:
                 raise
+    raise AssertionError("heavy census retries exhausted")
 
 
-def _pane(task):
+def _pane(task: dict[str, Any]) -> tuple[Any, Any]:
     link = task.get("link")
     if not isinstance(link, dict):
         return None, None
@@ -452,12 +456,12 @@ def _pane(task):
     return link.get("pane"), link.get("socket")
 
 
-def _process_snapshot(errors):
+def _process_snapshot(errors: list[str]) -> dict[int, dict[str, Any]] | None:
     output, error = _command([PS_CMD, "-axo", "pid=,ppid=,pgid=,rss=,%cpu="], "ps process snapshot")
     if error:
         errors.append(error)
         return None
-    processes = {}
+    processes: dict[int, dict[str, Any]] = {}
     for line in output.splitlines():
         fields = line.split()
         if len(fields) != 5:
@@ -468,7 +472,7 @@ def _process_snapshot(errors):
             cpu = float(fields[4])
         except ValueError:
             cpu = float("nan")
-        if None in (pid, ppid, pgid, rss) or not math.isfinite(cpu) or cpu < 0:
+        if pid is None or ppid is None or pgid is None or rss is None or not math.isfinite(cpu) or cpu < 0:
             errors.append("ps returned an invalid process measurement")
             return None
         processes[pid] = {"ppid": ppid, "pgid": pgid, "rss": rss, "cpu": cpu}
@@ -478,7 +482,7 @@ def _process_snapshot(errors):
     return processes
 
 
-def _selected_processes(processes, process_info):
+def _selected_processes(processes: dict[int, dict[str, Any]], process_info: dict[str, Any]) -> tuple[set[int] | None, str | None]:
     children = defaultdict(list)
     groups = defaultdict(list)
     for pid, record in processes.items():
@@ -491,10 +495,10 @@ def _selected_processes(processes, process_info):
     for item in foreground:
         if not isinstance(item, dict):
             return None, "foreground process entry is invalid"
-        pid = _uint(item.get("pid"), positive=True, maximum=(1 << 31) - 1)
-        if pid is None:
+        foreground_pid = _uint(item.get("pid"), positive=True, maximum=(1 << 31) - 1)
+        if foreground_pid is None:
             return None, "foreground process pid is invalid"
-        foreground_pids.add(pid)
+        foreground_pids.add(foreground_pid)
     missing = foreground_pids.difference(processes)
     shell_pid = _uint(process_info.get("shell_pid"), positive=True, maximum=(1 << 31) - 1)
     if shell_pid is None or shell_pid not in processes:
@@ -526,14 +530,14 @@ def _selected_processes(processes, process_info):
     return selected, None
 
 
-def _collect_agents(tasks, errors):
+def _collect_agents(tasks: list[dict[str, Any]], errors: list[str]) -> list[dict[str, Any]]:
     if not tasks:
         return []
     processes = _process_snapshot(errors)
-    rows = []
-    seen = set()
+    rows: list[dict[str, Any]] = []
+    seen: set[int] = set()
     for task in tasks:
-        row = {"id": task["id"], "rss_bytes": None, "cpu_cores": None, "pids": [], "pgids": []}
+        row: dict[str, Any] = {"id": task["id"], "rss_bytes": None, "cpu_cores": None, "pids": [], "pgids": []}
         pane, socket_path = _pane(task)
         if not isinstance(pane, str) or not pane.strip() or not isinstance(socket_path, str) or not socket_path.strip():
             errors.append(f"task {task['id']} has no pane/socket link for stage {task['stage']}")
@@ -559,7 +563,7 @@ def _collect_agents(tasks, errors):
             rows.append(row)
             continue
         selected, reason = _selected_processes(processes, info)
-        if reason:
+        if reason or selected is None:
             errors.append(f"{task['id']}: {reason}")
             rows.append(row)
             continue
@@ -578,11 +582,11 @@ def _collect_agents(tasks, errors):
     return rows
 
 
-def collect(include_board=True):
+def collect(include_board: bool = True) -> dict[str, Any]:
     if type(include_board) is not bool:
         raise ValueError("include_board must be a boolean")
-    errors = []
-    result = {
+    errors: list[str] = []
+    result: dict[str, Any] = {
         "sampling_time": time.time(), "sampled_at": time.time(),
         "sample_duration_seconds": None, "board_response_seconds": None,
         "disk_wait_ratio": None, "disk_wait_processes": None, "total_bytes": None, "cores": None, "page_size": None,
@@ -611,7 +615,7 @@ def collect(include_board=True):
         else:
             errors.append("memory_pressure returned an invalid free percentage")
     vm_text, error = _command(["/usr/bin/vm_stat"], "vm_stat")
-    vm = None
+    vm: dict[str, Any] | None = None
     if error:
         errors.append(error)
     else:
@@ -662,7 +666,7 @@ def collect(include_board=True):
     return collect_board(result)
 
 
-def collect_board(result, include_agents=True):
+def collect_board(result: dict[str, Any], include_agents: bool = True) -> dict[str, Any]:
     if type(include_agents) is not bool:
         raise ValueError("include_agents must be a boolean")
     errors = result["errors"]

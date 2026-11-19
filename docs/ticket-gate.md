@@ -46,6 +46,40 @@ mergeCommit` gives. On a failed verdict, or when the merge did not happen,
 the brief closes nothing. An Ascend repository stops at the verdict and
 closes nothing either.
 
+## Prompt, skill and playbook changes
+
+A prompt change never auto-merges (Shyam, 2026-11-17). Before the brief is
+built, `ticket gate` reads the paths the pull request changed and compares
+them with the list in `coordinator/bin/prompt_paths.py`: `AGENT-RULES.md`,
+`answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
+`code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
+`prompts/` directory.
+
+When one path matches, the brief's heading says `review only`, the merge
+order becomes `do not merge ... Shyam merges a passing one himself`, the
+fast-forward is left out, and the brief closes no issue. A pull request that
+only changes code keeps the merge order. A renamed file counts under both
+names, so moving prompt text out of `prompts/` still holds it. A file list
+GitHub cannot give, or one shorter than the pull request's own changed-file
+count (the files endpoint stops at 3,000), is unknown: the read is retried
+and then the gate refuses, because a brief built without the list could
+order a merge of prompt text. The count is read from the pull request itself
+when the caller holds none. A list that can never be completed, because the
+pull request is bigger than the 3,000-entry cap, falls back to the complete
+diff: the merge base's tree and the head's tree are compared and every path
+that differs is read the same way, so a huge pull request of ordinary code
+still merges.
+
+A file list GitHub cannot give is not code: the read is retried, and a list
+still unknown defers the gate instead of building a brief. A brief written
+without the list could order a merge of prompt text, so an unreadable list
+never reads as clear.
+
+The lane driver reads the same list before it merges a passing pull request:
+on a prompt change it merges nothing and writes one item to the decisions
+board asking Shyam to merge it. A dry run writes no item, and an unreadable
+list defers the pull request to the next run.
+
 ## What it refuses
 
 - The pull request is not open, or is a draft.

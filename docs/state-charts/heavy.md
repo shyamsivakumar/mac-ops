@@ -31,10 +31,28 @@ stateDiagram-v2
     PauseRequested --> PauseRequested: verification or signal fails, retry
     Paused --> Running: 10 healthy seconds at the resume headroom, free active slot, positive fresh capacity, verified SIGCONT
     Paused --> Paused: capacity is zero or verification or signal fails, retry
-    Running --> Terminating: user interrupt, explicit curtail, or watchdog failure
-    PauseRequested --> Terminating: user interrupt, explicit curtail, or watchdog failure
-    Paused --> Terminating: user interrupt, explicit curtail, or watchdog failure
+    Running --> Terminating: user interrupt, explicit curtail, watchdog failure, or wall-clock limit
+    PauseRequested --> Terminating: user interrupt, explicit curtail, watchdog failure, or wall-clock limit
+    Paused --> Terminating: user interrupt, explicit curtail, watchdog failure, or wall-clock limit
     Terminating --> Complete: verified group exits and registry cleanup finishes
+```
+
+## Runtime limit
+
+Every job has a wall-clock ceiling of 45 minutes for every role, stored in its registry record when it is admitted. `HEAVY_MAX_RUNTIME_SECONDS` may lower the ceiling and never raises it. The ceiling counts from the moment the workload starts and includes time spent paused and time the Mac spends asleep, because it is measured on `CLOCK_MONOTONIC`, which keeps counting during sleep on Darwin. A record without a stored ceiling or start time uses 45 minutes from its creation. After install, any heavy call therefore ends builds already past the ceiling, and records created before the change get the 45-minute default counted from their creation. A job whose workload boot identity differs from the current boot is skipped.
+
+Two independent processes enforce the ceiling. Each job's own watchdog enforces its job, so a wedged supervisor cannot hold a slot. Every `heavy` command, including `status` and `request-curtail`, also enforces it for all records. A supervisor never terminates other jobs inline, because the SIGTERM grace period would stall its own heartbeat and the watchdog would then kill a healthy job. Enforcement is best effort: a bad or vanished record, a failed `ps`, or a lock timeout is skipped and never fails the heavy command.
+
+The enforcer claims the termination under the registry lock with `_claim_termination` (reason `wall-clock limit`), signals the verified process group with SIGTERM and then SIGKILL after the grace period, and marks the record complete only after the kill is confirmed, which frees the slot. A job left `terminating` by a failed kill is retried with takeover when its claim is older than 30 seconds or its claimant process is dead. A second enforcer that finds a fresh claim does nothing, and takeover is a compare-and-swap on the claimant and claim times it observed. The watchdog's stale-heartbeat recovery, and its fallback kill, also defer to a limit claim whose claimant is alive and younger than 30 seconds, and exit once the record is complete.
+
+The supervisor of a terminated job prints `heavy: terminated: wall-clock limit 45m` and exits with code 76. Other heavy codes are 75 (refused or timed out waiting), 74 (local state failure), 125 (curtailed) and 130 (interrupted).
+
+```mermaid
+stateDiagram-v2
+    Running --> Terminating: age at least the ceiling
+    Paused --> Terminating: age at least the ceiling
+    Terminating --> Terminating: kill failed, claim older than 30 s or claimant dead, retry with takeover
+    Terminating --> Complete: verified group exits, slot freed, caller exits 76
 ```
 
 Memory headroom (free, inactive and speculative pages) has a dead band so a job does not flip near one line. A running job counts headroom as low only below `max(host headroom, 12.5% RAM)`. A paused job resumes only at `max(host headroom, 15% RAM)` or more. The host headroom is 6 GiB unless the installed `board_governor.json` names this host in `min_headroom_bytes_by_host`: the 16 GB MacBook Pro uses 2 GiB, so it needs 2.4 GiB to start or resume and pauses below 2 GiB, while the 48 GB Mac keeps the 6 GiB floor. Host names in that map are matched without regard to case, and two names that differ only by case are ambiguous and rejected, so that host keeps the default floor. A short-name fallback is allowed only when either the configured name or the observed hostname is unqualified, so `builder.lab` never lowers the floor of `builder.office`. On this 48 GB Mac that is 6.0 GiB to pause and 7.2 GiB to resume; the previous single line was 9.6 GiB, and measured headroom at normal load was 7.8 to 9.8 GiB, so jobs flipped. Critical kernel pressure, swap growth and a level 2 reading at or below 30% free still count as pressure at either state, and critical pressure still pauses at once.

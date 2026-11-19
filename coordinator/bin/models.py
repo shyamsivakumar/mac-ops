@@ -5,13 +5,20 @@ the lane driver and the pi route generator read it through this module.
 Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
 (the gate) and `panel` (only when Shyam asks for one).
 
-A provider that fails for a blocking reason is recorded by the provider
-health store, `providers-blocked.json` in the queue folder. This module
-only reads that file, so every caller skips the same blocked providers.
+A provider that fails for a blocking reason is recorded in
+`providers-blocked.json` in the queue folder, so every caller skips the same
+blocked providers. `block_provider` writes an entry with an `expires_at`
+epoch time; the reader drops an entry once that time has passed. An entry
+without a numeric `expires_at` is a manual block and stays until removed.
 """
 
+import fcntl
 import json
+import math
 import os
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 LISTS = ("build", "fix", "review", "panel")
@@ -61,11 +68,15 @@ def validate(data):
     return data
 
 
+def reject_constant(token):
+    raise ValueError(f"{token} is not a JSON value")
+
+
 def read_json(file_path):
     """The parsed file. A missing file raises FileNotFoundError; any other failure to read it is a ModelsError."""
     try:
         with open(file_path) as f:
-            return json.load(f)
+            return json.load(f, parse_constant=reject_constant)
     except FileNotFoundError:
         raise
     except OSError as e:
@@ -101,16 +112,80 @@ def same_selection(a, b):
             and a.get("instanceId") == b.get("instanceId") and a.get("model") == b.get("model"))
 
 
-def blocked_identities():
+def blocked_path():
     queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+    return os.path.join(queue, BLOCKED_FILE)
+
+
+def read_blocked_file(file_path):
     try:
-        data = read_json(os.path.join(queue, BLOCKED_FILE))
+        data = read_json(file_path)
     except FileNotFoundError:
-        return set()
-    blocked = data.get("blocked") if isinstance(data, dict) else None
-    if not isinstance(blocked, dict):
+        return {"blocked": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("blocked"), dict):
         raise ModelsError(f"{BLOCKED_FILE} must hold a blocked object")
-    return set(blocked)
+    return data
+
+
+def expiry(entry):
+    """The entry's `expires_at` as a float, or infinity for a manual entry that never expires.
+
+    Anything that is not a finite number counts as manual, including an integer too
+    large for a float, which JavaScript's JSON.parse reads as an infinity.
+    """
+    value = entry.get("expires_at") if isinstance(entry, dict) else None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return math.inf
+    try:
+        seconds = float(value)
+    except OverflowError:
+        return math.inf
+    return seconds if math.isfinite(seconds) else math.inf
+
+
+def blocked_identities(now=None):
+    now = time.time() if now is None else now
+    blocked = read_blocked_file(blocked_path())["blocked"]
+    return {key for key, entry in blocked.items() if expiry(entry) > now}
+
+
+def block_provider(selection, expires_at, now=None):
+    """Block a provider until `expires_at` (epoch seconds), keeping every other entry.
+
+    A manual block or a longer block is kept, so a late refusal never releases
+    a provider early. A file that cannot be parsed is left alone and refused.
+    """
+    key = identity(selection)
+    if not key or expiry({"expires_at": expires_at}) == math.inf:
+        raise ModelsError(f"block_provider needs a selection and a finite expires_at: {selection!r}, {expires_at!r}")
+    now = time.time() if now is None else now
+    file_path = blocked_path()
+    with open(file_path + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            data = read_blocked_file(file_path)
+        except ModelsError as e:
+            print(f"models: refusing to write {file_path}: {e}", file=sys.stderr)
+            raise
+        blocked = {k: v for k, v in data["blocked"].items() if expiry(v) > now}
+        if expires_at <= now or (key in blocked and expiry(blocked[key]) >= expires_at):
+            return
+        data["blocked"] = {**blocked, key: {**blocked.get(key, {}), "expires_at": expires_at}}
+        try:
+            text = json.dumps(data, allow_nan=False)
+        except ValueError as e:
+            print(f"models: refusing to write {file_path}: {e}", file=sys.stderr)
+            raise ModelsError(f"{BLOCKED_FILE} holds a number JSON cannot store: {e}") from e
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(file_path), prefix=f".{BLOCKED_FILE}.")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, file_path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
 
 
 def is_blocked(selection, blocked=None):
