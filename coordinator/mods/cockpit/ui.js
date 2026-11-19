@@ -146,13 +146,8 @@ function projectItem(v) {
   return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
 }
 
-function alertsItem() {
-  const a = shared("cockpit.alerts");
-  if (a && !a.on) return { id: "alerts", prio: 3, label: "Alerts · off", tip: "Phone alerts are off. Click to turn them on." };
-  const last = a?.sent ? `Last sent ${ago(a.sent.at, Date.now())} ago: ${a.sent.text.replace(/^Mirror: /, "")}.` : "Nothing sent yet.";
-  if (a?.failed) return { id: "alerts", prio: -1, label: "Alerts · relay down", tone: "blocked", tip: `The last phone alert failed, so Herdr showed a desktop notification instead: ${a.failed}. ${last} Click to turn alerts off.` };
-  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming ready to merge is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
-}
+const sumRows = (a, r) => ({ acted: a.acted + r.acted, ignored: a.ignored + r.ignored });
+const actRate = (r) => (r.acted + r.ignored ? `${Math.round((100 * r.acted) / (r.acted + r.ignored))}%` : "–");
 
 function barItems(v) {
   const { worktrees: w, slots } = v;
@@ -169,9 +164,9 @@ function barItems(v) {
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
-    alertsItem(),
     { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Lane-wide bulk actions are off in this view; marked cards (x) can still be acted on." },
     ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
+    ...(v.acts ? [{ id: "acts", prio: 5, label: `Acts · ${actRate(v.acts.rows.reduce(sumRows, { acted: 0, ignored: 0 }))}`, tone: "muted", tip: "How many of the cards that needed you in the last 7 days you acted on. Click for the split by source." }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
@@ -206,18 +201,34 @@ export function fitBar(width, v) {
   return shown;
 }
 
+const AWAY_LEAD = { "": "  ", "·": " · ", "│": " │ " };
+
+export function awayNotice(a, pending) {
+  if (a.need.length && !pending.length) return null;
+  const n = pending.length;
+  const seg = (count, text, tone) => (count ? [[`${count} ${text}`, tone]] : []);
+  const tally = [...seg(a.done, "done", "muted"), ...seg(a.merged, "merged", "muted"), ...seg(a.inReview, "in review", "muted")];
+  const head = [[n ? `${n} need you` : "Nothing needs you", n ? "blocked" : "muted", ""], ...seg(a.stuck, "newly stuck", "working").map((x) => [...x, n ? "" : "·"])];
+  const rest = [...tally.map((x, i) => [...x, n && !i ? "│" : "·"]), [`away ${a.for}`, "dim", n ? "│" : "·"]];
+  const parts = [...head, ...rest];
+  return { id: "away", level: n ? "error" : "success", text: parts.map(([text, , lead], i) => (i ? AWAY_LEAD[lead] : "") + text).join(""), items: [], parts, show: n };
+}
+
 function noticeLine(t, notice, cb) {
   return h_flex().id("bar-notice").flex_1().min_w(0).gap(4).items_center().overflow_hidden()
-    .child(h_flex().id("bar-notice-text").flex_1().min_w(0).h(18).gap(6).items_center().cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => cb.notice(cx)).tooltip(notice.text)
+    .child(h_flex().id("bar-notice-text").flex_1().min_w(0).h(18).gap(6).items_center().cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => cb.notice(notice, cx)).tooltip(notice.text)
       .child(div().size(6).flex_none().rounded(3).bg(t[NOTICE_TONE[notice.level]]))
-      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(notice.text)))
+      .child(notice.parts
+        ? h_flex().flex_1().min_w(0).gap(5).items_center().overflow_hidden().children(notice.parts.flatMap(([text, tone, lead]) => [...(lead ? [div().flex_none().text_size(10.5).text_color(t.dim).child(lead)] : []), div().flex_none().text_size(10.5).text_color(t[tone]).child(text)]))
+        : div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(notice.text)))
+    .when(Boolean(notice.show), (el) => el.child(action(t, "bar-away-show", "b", `Show ${notice.show}`, (cx) => cb.glance(cx), "Select the next Needs you card from this list (b)")))
     .child(headButton(t, "bar-notice-x", "✕", "Dismiss", () => cb.dismiss()));
 }
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
     .when(v.marks > 0, (el) => el.child(markedBar(t, markedText(v, width), cb)))
-    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.id === "alerts" ? cb.alerts(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
     .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
@@ -991,6 +1002,7 @@ export const KEY_TABLE = [
   { keys: "s", group: "Card", all: "Settle the card's finished threads" },
   { keys: "p", group: "Card", all: "Open the pull request" },
   { keys: "w", group: "Card", all: "Open the Herdr tab whose terminal runs in the task's worktree (only when one exists)" },
+  { keys: "b", group: "Move", all: "While the away line is showing, select the next Needs you card it lists, in the order they started waiting" },
   { keys: "c", group: "Card", all: "Open the pull request's changed files on GitHub (the pop-up lists them and clicking a file opens them too)" },
   { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
   { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, Stuck and In review cards)" },
@@ -1122,6 +1134,35 @@ export function noticeSheet(t, notice, cb) {
             .child(div().size(6).flex_none().rounded(3).bg(t[x.ok ? "done" : "blocked"]))
             .child(div().text_size(11.5).font_semibold().text_color(t.foreground).child(x.name)))
           .child(div().w_full().pl(12).text_size(11.5).line_height("17px").text_color(t.muted).child(x.text))))));
+}
+
+const ACT_COL = 64;
+const ACT_ROW = 24;
+export const actsHeight = (rows) => Math.min(DEC_CAP, 34 + 24 + (rows + 2) * ACT_ROW + 76);
+
+export function actsSheet(t, acts, cb) {
+  const { rows } = acts;
+  const cell = (text, style) => div().w(ACT_COL).flex_none().flex().justify_end().text_size(11.5).text_color(style).child(text);
+  const line = (id, label, r, strong) => h_flex().id(id).w_full().h(ACT_ROW).gap(6).items_center()
+    .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(strong ? t.foreground : t.muted).child(label))
+    .child(cell(String(r.entered), t.foreground))
+    .child(cell(String(r.acted), t.foreground))
+    .child(cell(String(r.ignored), r.ignored ? t.working : t.foreground))
+    .child(cell(actRate(r), t.foreground));
+  const total = rows.reduce((a, r) => ({ entered: a.entered + r.entered, acted: a.acted + r.acted, ignored: a.ignored + r.ignored }), { entered: 0, acted: 0, ignored: 0 });
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Needs you, last 7 days"))
+      .child(headButton(t, "acts-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("acts-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().px(16).py(10).gap(2)
+        .when(!rows.length, (el) => el.child(div().w_full().text_size(11.5).text_color(t.muted).child(`Collecting since ${acts.since ? `${ago(acts.since, Date.now())} ago` : "now"}`)))
+        .when(rows.length > 0, (el) => el.child(h_flex().w_full().h(ACT_ROW).gap(6).items_center()
+          .child(div().flex_1().text_size(10.5).text_color(t.dim).child("Source"))
+          .children(["Entered", "Acted", "Ignored", "Rate"].map((x) => cell(x, t.dim)))))
+        .children(rows.map((r) => line(`acts-${r.src}`, r.src, r, false)))
+        .when(rows.length > 0, (el) => el.child(line("acts-total", "All", total, true)))
+        .child(div().w_full().pt(8).text_size(10.5).line_height("15px").text_color(t.dim).child(`Counts cards logged with a source since ${acts.since ? `${ago(acts.since, Date.now())} ago` : "now"}. Rate is acted divided by acted plus ignored. A card still waiting counts in Entered only.`))));
 }
 
 export function thumb(t, top, view, total) {
