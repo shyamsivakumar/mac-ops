@@ -500,14 +500,16 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+    thread_blocked = model_list.is_blocked(thread_model)
     if not model_list.same_selection(thread_model, fixer["selection"]):
-        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
+        live = thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}
+        if live and not thread_blocked:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
                     f"not the first available fix model; held until it is idle")
-        if thread.get("status") in {"completed", "interrupted", "failed"}:
+        if live or thread.get("status") in {"completed", "interrupted", "failed"}:
             sendable = False
-            reroute = "model is not first available"
+            reroute = "model is blocked" if thread_blocked else "model is not first available"
     if sendable and worktree_only and root_workspace(thread):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
@@ -522,7 +524,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute == "model is not first available" and not root_workspace(thread):
+        if reroute in {"model is blocked", "model is not first available"} and not root_workspace(thread):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
