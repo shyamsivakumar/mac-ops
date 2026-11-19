@@ -1022,12 +1022,15 @@ def resolve_models(cfg, ticket):
     """The builder entry and the reviewer entry a ticket starts with.
 
     A builder label puts that entry first in the build list. Blocked
-    providers are skipped. The reviewer is the first review entry of a
-    vendor other than the builder's."""
+    providers are skipped. The builder's selection is resolved for the
+    ticket's type, so a router entry names the route that type runs. The
+    reviewer is the first review entry of a vendor other than the
+    builder's."""
     blocked = model_list.blocked_identities()
     builder = model_list.first_available("build", ticket["builder"], blocked, ticket["type"])
     if builder is None:
         raise Refuse("every builder is blocked")
+    builder = {**builder, "selection": model_list.selection_for(builder, ticket["type"])}
     reviewers = model_list.reviewers([builder["selection"]], ticket["reviewer"], blocked)
     if not reviewers:
         raise Refuse(f"every reviewer of a vendor other than {builder['vendor']} is blocked")
