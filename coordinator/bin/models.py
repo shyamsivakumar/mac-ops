@@ -158,10 +158,15 @@ def block_provider(selection, expires_at, now=None):
         if expires_at <= now or (key in blocked and expiry(blocked[key]) >= expires_at):
             return
         data["blocked"] = {**blocked, key: {**blocked.get(key, {}), "expires_at": expires_at}}
+        try:
+            text = json.dumps(data, allow_nan=False)
+        except ValueError as e:
+            print(f"models: refusing to write {file_path}: {e}", file=sys.stderr)
+            raise ModelsError(f"{BLOCKED_FILE} holds a number JSON cannot store: {e}") from e
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(file_path), prefix=f".{BLOCKED_FILE}.")
         try:
             with os.fdopen(fd, "w") as f:
-                json.dump(data, f)
+                f.write(text)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, file_path)
