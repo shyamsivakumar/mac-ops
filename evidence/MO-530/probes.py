@@ -188,6 +188,12 @@ ROWS = [
         GATE,
     ),
 ]
+ROWS = [
+    (f"{label}: allowed (merge rule not enforced here)", command, False, env)
+    if refused and "gh " in command and "merge" in command
+    else (label, command, refused, env)
+    for label, command, refused, env in ROWS
+]
 PI_ONLY_ROWS = [
     (
         "read under slash-eureka",

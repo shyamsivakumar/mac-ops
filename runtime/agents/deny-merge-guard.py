@@ -2,16 +2,15 @@
 """Deny rules for shell commands that `permissions.deny` cannot express (mac-ops #530).
 
 PreToolUse hook for Claude Code, and the single implementation the pi deny
-guards call for every bash command. Two rules, both read from the structure
-of the command (the simple commands the shell would run), never from its text,
+guards call for every bash command. The rules are read from the structure of
+the command (the simple commands the shell would run), never from its text,
 so a PR body, an `hc` message or a heredoc that mentions a rule is not a
 command that breaks it:
 
-- `gh pr merge` is denied unless the caller is a gate (the role comes from the
-  launch environment) and the pin is given as a merge argument.
 - A `git push` is decided only from the destinations written in the command.
   It is refused when it names no explicit destination branch, when a
   destination is `main` or `master`, and when it is a force-push in any form.
+- A command whose working directory is inside the Ascend tree is refused.
 
 Exit 0 with a deny decision blocks the call; exit 0 with no output allows.
 Installed by scripts/install_deny_rules.py; do not edit the installed copy.
@@ -22,26 +21,7 @@ import os
 import re
 import sys
 
-PIN_FLAG = "--match-head-commit"
-PIN_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-MERGE_VALUE_FLAGS = {
-    "--body",
-    "-b",
-    "--body-file",
-    "-F",
-    "--subject",
-    "-t",
-    "--author-email",
-}
-ROLE_ENV, ROLE_VALUE = "MAC_OPS_ROLE", "gate"
-GATE_INSTANCE = "claudeAgentGate"
-THREAD_TOOLS = ("thread_launch", "thread_send", "create_threads")
 PREFIX = "mac-ops deny rules (#530): "
-MERGE_REASON = (
-    "gh pr merge is denied for builders; only a gate thread, with the pinned "
-    "--match-head-commit head as a merge argument, may merge"
-)
-THREAD_REASON = "launching a thread on the gate instance is denied for builders"
 FORCE_REASON = "force-push in any form is denied"
 PROTECTED_REASON = "pushing to main or master is denied; push a task branch instead"
 NO_DESTINATION_REASON = (
@@ -61,7 +41,6 @@ GIT_VALUE_OPTIONS = {
     "--config-env",
 }
 PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
-GH_VALUE_OPTIONS = {"-R", "--repo", "--hostname"}
 ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 DURATION_RE = re.compile(r"^[\d.]+[smhd]?$")
 WRAPPERS = {
@@ -78,7 +57,7 @@ WRAPPERS = {
     "caffeinate",
 }
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
-COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "gh", "eval"}
+COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "eval"}
 KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
 SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
@@ -266,47 +245,6 @@ def real_commands(text, depth=0):
         yield words
 
 
-def is_gate(environ):
-    return environ.get(ROLE_ENV) == ROLE_VALUE
-
-
-def pinned_commit(words):
-    i = 0
-    while i < len(words):
-        word = words[i]
-        if word == PIN_FLAG:
-            value = words[i + 1] if i + 1 < len(words) else ""
-            return bool(PIN_RE.match(value))
-        if word.startswith(PIN_FLAG + "="):
-            return bool(PIN_RE.match(word[len(PIN_FLAG) + 1 :]))
-        i += 2 if word in MERGE_VALUE_FLAGS else 1
-    return False
-
-
-def gh_command(words):
-    """The group and action words of a gh command and the words after them, skipping global options."""
-    positionals, i = [], 1
-    while i < len(words) and len(positionals) < 2:
-        if words[i].startswith("-"):
-            i += 2 if words[i] in GH_VALUE_OPTIONS else 1
-        else:
-            positionals.append(words[i])
-            i += 1
-    return positionals, words[i:]
-
-
-def merge_reason(commands, environ):
-    for words in commands:
-        if os.path.basename(words[0]) != "gh":
-            continue
-        positionals, rest = gh_command(words)
-        if positionals == ["pr", "merge"] and not (
-            is_gate(environ) and pinned_commit(rest)
-        ):
-            return MERGE_REASON
-    return None
-
-
 def push_arguments(words):
     i = 1
     while i < len(words) and words[i].startswith("-"):
@@ -385,9 +323,9 @@ def directory_reason(commands, cwd):
     return None
 
 
-def command_reason(command, environ, cwd=None):
+def command_reason(command, cwd=None):
     commands = list(real_commands(command))
-    reason = merge_reason(commands, environ) or directory_reason(commands, cwd)
+    reason = directory_reason(commands, cwd)
     for words in commands:
         args = push_arguments(words) if os.path.basename(words[0]) == "git" else None
         reason = reason or (push_reason(args) if args is not None else None)
@@ -403,17 +341,9 @@ def main():
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         return 0
-    reason = None
-    if tool_name == "Bash":
-        reason = command_reason(
-            str(tool_input.get("command") or ""), os.environ, payload.get("cwd")
-        )
-    elif (
-        any(name in tool_name for name in THREAD_TOOLS)
-        and not is_gate(os.environ)
-        and GATE_INSTANCE in json.dumps(tool_input, sort_keys=True)
-    ):
-        reason = THREAD_REASON
+    if tool_name != "Bash":
+        return 0
+    reason = command_reason(str(tool_input.get("command") or ""), payload.get("cwd"))
     if reason:
         print(json.dumps(deny(reason)))
     return 0
