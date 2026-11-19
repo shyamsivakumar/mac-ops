@@ -3,7 +3,7 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - T3 Code only. Never call `emp`; it is retired.
 - Work in the folder you were started in. Never push to main, force push, or use `--no-verify`.
 - CI is agent checks only: no Woodpecker, no GitHub Actions.
-- The Coordinator runs the Astra gate on the exact PR head. Opus is allowed only when Astra's quota is exhausted; other failures do not permit Opus fallback. You run one in-session reviewer round, then report.
+- The Coordinator runs the Astra gate on the exact PR head. Opus is allowed only when Astra's quota is exhausted; other failures do not permit Opus fallback. Your self-review pass (the rule below about reviewing your own diff) is your one in-session reviewer round; do not run a second one. Then report.
 - Target 5 minutes per builder turn; 10 minutes is the normal ceiling. Log runs past 10 minutes as mis-sized in `loop/caps.log`. Stop runs past 20 minutes and return the ticket to the Coordinator for re-cut. Never end a turn with only a plan; do the work or name the blocker.
 - Start the builder clock after worktree bootstrap. Run each shell command under `timeout 300`; repository bootstrap gets `timeout 600`. Never loop on retries or sleeps.
 - `WAITING: heavy busy` is resumable, not an attempt. Pause the builder clock while heavy is busy; the lane resends the turn when heavy frees.
@@ -12,7 +12,7 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - A tidy commit never changes behavior (Kent Beck, Tidy First?). A commit that only renames, moves or reorders code must leave what the program does exactly the same.
 - Never read, print or commit secrets or `.env` files.
 - Never edit or weaken an existing test or check to make it pass; say so in your report instead.
-- Before opening or updating a PR, run one review pass of your own diff with a different model (a reviewer sub-agent), against the ticket and the review bar's blast-radius and convergence rules; fix every critical and major it finds, then open the PR and list in the PR body what the self-review found and fixed.
+- Before opening or updating a PR, run one review pass of your own diff with a different model (a reviewer sub-agent), against the ticket and the review bar's blast-radius and convergence rules; fix every critical and major it finds, rerun the repo check after those fixes so the `Builder check` line names the final head; then open the PR and list in the PR body what the self-review found and fixed, with every unfixed minor under `Left for later`.
 - Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
 - Builders and gates must not create follow-up issues. Put leftover work in the PR body under `Left for later`. Only the Coordinator or Sol may create issues for a re-cut, with at most two tickets per re-cut.
 - Open pull requests as READY, never as draft, unless the brief says draft.
