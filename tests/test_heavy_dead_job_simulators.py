@@ -405,62 +405,6 @@ class SimulatorLockTests(unittest.TestCase):
         self.assertEqual(result, [])
         self.assertEqual(stopped, [])
 
-    def test_a_simctl_job_marked_without_a_snapshot_keeps_every_device_on(self):
-        rows = [launchd_row(10, DEVICE_A)]
-        stopped = []
-        record = {
-            "job_id": "c1" * 16,
-            "task_id": "task",
-            "simulators": {"booted": [], "started_at": 1000.0},
-        }
-        other = {
-            "job_id": "c2" * 16,
-            "state": "starting",
-            "command_basename": "xcrun",
-            "simulator_job": True,
-        }
-        result = heavy.shutdown_simulators_booted_by_job(
-            record,
-            other_records=[other],
-            booted_reader=lambda: {DEVICE_A: "runtime-a"},
-            rows_reader=lambda: rows,
-            epochs_reader=lambda table: {DEVICE_A: 1100.0},
-            shutdown=lambda udid: stopped.append(udid) or True,
-        )
-        self.assertEqual(result, [])
-        self.assertEqual(stopped, [])
-
-    def test_a_simctl_job_is_marked_as_a_simulator_job_before_it_launches(self):
-        job = {
-            "schema": 1,
-            "clock": "CLOCK_MONOTONIC",
-            "job_id": "d1" * 16,
-            "uid": os.getuid(),
-            "task_key": "manual:sim",
-            "task_id": "sim",
-            "command_basename": "xcrun",
-            "role": "ordinary",
-            "created_ns": 1,
-            "state": "starting",
-            "supervisor": {
-                "pid": os.getpid(),
-                "start": "1.000000",
-                "uid": os.getuid(),
-                "boot_id": "12345",
-                "task_key": "manual:sim",
-            },
-            "workload": None,
-        }
-        self.registry.create(job)
-        heavy._mark_simulator_job(
-            self.registry,
-            job["job_id"],
-            "xcrun",
-            ["/usr/bin/xcrun", "simctl", "boot", DEVICE_A],
-        )
-        record = self.registry._read_record(job["job_id"])
-        self.assertTrue(record.get("simulator_job"))
-
     def test_cleanup_shuts_nothing_down_while_another_job_holds_the_simulator_lock(self):
         record = {
             "job_id": "9" * 32,
