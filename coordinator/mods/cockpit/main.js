@@ -6,7 +6,7 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, 
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, optionsText, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, HIDDEN_PROJECTS, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, optionsText, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { actRates, awayCounts, flushFlowLog, logAct, logLaneChange, markPass, readFlow } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
@@ -570,15 +570,19 @@ export default class Board extends View {
     }, cx, force);
   }
 
-  groups() {
-    return (this.board?.groups ?? []).flatMap((g) => {
+  hides(g) {
+    return this.isBoard() && !this.project && HIDDEN_PROJECTS.includes(g.project);
+  }
+
+  groups(everything = false) {
+    return (this.board?.groups ?? []).filter((g) => everything || !this.hides(g)).flatMap((g) => {
       const threads = g.threads.filter((c) => !(this.settled.get(c.key) >= c.at));
       return threads.length ? [{ ...g, threads, primary: threads[0], lead: threads.find((c) => c.led) ?? threads[0], kind: threads[0].kind }] : [];
     });
   }
 
   prStamp() {
-    return [this.cap, this.groups().map((g) => [g.key, this.prInfo(g), this.verdictFor(g), g.threads.map(runModelOf)])];
+    return [this.cap, this.groups(true).map((g) => [g.key, this.prInfo(g), this.verdictFor(g), g.threads.map(runModelOf)])];
   }
 
   prInfo(g) {
@@ -629,23 +633,26 @@ export default class Board extends View {
 
   columns(t, now) {
     const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [], lanes: Object.fromEntries(Object.keys(COLUMN_OF).filter((lane) => COLUMN_OF[lane] === k).map((lane) => [lane, 0])) }]));
-    const live = this.groups();
+    const everyLive = this.groups(true);
+    const live = everyLive.filter((g) => !this.hides(g));
     const replaced = new Set(this.issueGroups.map((g) => g.key));
-    const liveKeys = new Set(live.map((g) => g.key));
-    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))].filter((g) => !liveKeys.has(g.key));
-    this.projects = tally([...live, ...queued]);
+    const liveKeys = new Set(everyLive.map((g) => g.key));
+    const everyQueued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))].filter((g) => !liveKeys.has(g.key));
+    const queued = everyQueued.filter((g) => !this.hides(g));
+    this.projects = tally([...everyLive, ...everyQueued]);
     const inProject = (g) => !this.project || g.project === this.project;
     const matches = this.filterOf();
     const searching = Boolean(this.query.trim());
     const keep = (g) => inProject(g) && matches(g) && (!g.asleep || searching);
-    const placed = this.place(live, now);
+    const everyPlaced = this.place(everyLive, now);
+    const placed = everyPlaced.filter(([g]) => !this.hides(g));
     this.asleepCount = live.filter((g) => g.asleep).length;
-    this.pruneSnoozed(live, now);
-    this.pruneSent(live);
-    this.pruneMarks([...live, ...queued]);
+    this.pruneSnoozed(everyLive, now);
+    this.pruneSent(everyLive);
+    this.pruneMarks([...everyLive, ...everyQueued]);
     for (const [, lane] of placed) cols[COLUMN_OF[lane]].total += 1;
     this.needKeys = new Set(placed.filter(([g, lane]) => COLUMN_OF[lane] === "needs" && !g.asleep).map(([g]) => g.key));
-    if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
+    if (!this.pop && !this.unsure()) this.trackColumns(everyPlaced, now);
     for (const [g, lane] of placed) if (keep(g)) cols[COLUMN_OF[lane]].groups.push(g);
     cols.run.groups.push(...queued.filter(keep).map((g) => Object.assign(g, { lane: "backlog" })));
     for (const key of COLUMN_KEYS) cols[key].groups = cols[key].groups.map((g) => [LANE_RANK[g.lane], g.lane === "needs" || g.lane === "stuck" ? this.enteredAt(g.lane, g) : 0, g]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , g]) => g);
@@ -1144,7 +1151,7 @@ export default class Board extends View {
 
   glance(from, now, cx) {
     cx.spawn(async (cx) => {
-      const events = await readFlow();
+      const events = (await readFlow()).filter((e) => !this.hides(e));
       const merged = new Set(this.groups().filter((g) => this.prInfo(g).status === "merged").map((g) => g.key));
       setShared("cockpit.away", { need: this.needGroups(Date.now()).map((g) => g.key), opened: [], for: ago(from, now), ...awayCounts(events, from, now, (key) => merged.has(key)) });
       cx.notify();
@@ -1828,7 +1835,7 @@ export default class Board extends View {
   pruneRefused() {
     const refused = shared("cockpit.refused");
     if (!refused) return;
-    const live = new Map(this.groups().map((g) => [g.key, g]));
+    const live = new Map(this.groups(true).map((g) => [g.key, g]));
     const kept = Object.entries(refused).filter(([key, r]) => live.has(key) && r.stamp === this.stamp(live.get(key)));
     if (kept.length !== Object.keys(refused).length) setShared("cockpit.refused", Object.fromEntries(kept));
   }
