@@ -329,20 +329,32 @@ repos/<owner>/<repo>/pulls/<n>/files --paginate`, which also returns
 `filename` and the `previous_filename` of each entry, and the pull request's
 tier is the highest tier over all of them. A list that has no
 `previous_filename` field on a file whose status is `renamed` is an unreadable
-list and fails closed to tier 1.
+list, and tier 1 is a floor for it, not a replacement: the tier is the higher
+of tier 1 and the highest tier found in the paths that could be read, so a
+pull request that also changes a tier-2 path stays tier 2.
+
+That endpoint returns at most 3,000 files even with `--paginate`. The shared
+function therefore also reads the pull request's own `changed_files` count
+(from `gh api repos/<owner>/<repo>/pulls/<n>`, on the same head) and compares
+it with the number of entries it received. If the two counts differ, or the
+received count reaches 3,000, the list is incomplete. The tier is then the
+higher of tier 1 and the highest tier found in the entries received, and the
+brief says the list was incomplete.
 
 ## When the tier cannot be computed, it fails closed
 
 The gate never treats an unknown situation as tier 0. Tier 0 is the only tier
-that merges by machine, so every unknown becomes at least tier 1. The one
-exception is a file that the config matches nothing in: an unmatched file
-is tier 0 by definition, and that is a known answer, not an unknown one.
+that merges by machine, so every unknown becomes at least tier 1. Tier 1 is
+always a floor for an unknown, never a replacement: when part of the answer is
+known and higher, the higher tier wins. The one exception is a file that the
+config matches nothing in: an unmatched file is tier 0 by definition, and that
+is a known answer, not an unknown one.
 
 | Situation | Tier | What the brief says |
 | --- | --- | --- |
 | The config file is missing | 1 | "the risk-tier config is missing, so this pull request is reviewed as protected" |
 | The config file does not parse | 1 | the same, with the parse error named |
-| The pull request's file list cannot be read, or a renamed file carries no old path | 1 | the read error named; the gate never merges on a pull request whose files it could not read |
+| The pull request's file list cannot be read, a renamed file carries no old path, or the list is incomplete (its entry count differs from `changed_files`, or reaches 3,000) | 1, or the highest tier found in the readable paths if that is higher | the read error or "file list incomplete" named; the gate never merges on a pull request whose files it could not fully read |
 | The repository is not in the config | 1 | "this repository is not in the risk-tier config, so this pull request is reviewed as protected"; the config must list every repository the gate runs on |
 | A path is listed in two tiers | the higher one | the tier named with both tiers' paths |
 
