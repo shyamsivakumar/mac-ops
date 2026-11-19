@@ -23,7 +23,7 @@ _BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
-from gate_policy import LANE_REPOS
+from gate_policy import LANE_REPOS, complete_pass
 import prompt_paths
 
 # The lane driver loads inside the overnight command, so it names itself on
@@ -410,7 +410,9 @@ def gate_verdict(repo, number, head, base):
     reply = last_reply(current)
     if reply.endswith("VERDICT: FAIL"):
         return "FAIL", gate, reply
-    if not reply.endswith("VERDICT: PASS"):
+    if not complete_pass(reply, head) and not (
+            complete_pass(reply, head, provides=False)
+            and prompt_pull(repo, number, None, base, head) == prompt_paths.HOLD):
         return "none", gate, reply
     if receipts.get(f"base:{current}") != base:
         return "absent", None, ""
@@ -1091,7 +1093,7 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     merged, note = merge_on_reviewed_base(repo, number, head, base)
     if not merged:
         return note
-    after_merge(repo, number, head, issue, gate)
+    close_after_merge(repo, number, head, issue, gate, ledger)
     return note
 
 
@@ -1103,6 +1105,25 @@ def after_merge(repo, number, head, issue, gate):
         if "is already closed" in output:
             print(f"already-closed:{ref}: {output}")
     fast_forward_main(repo)
+
+
+def close_failed_item(repo, number, head, issue):
+    key = CFG[repo]["key"]
+    return {"id": f"lane-close-failed-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} is merged at head {head[:8]} but closing {key}-{issue} failed: "
+                      "check why and close the ticket yourself."),
+            "why": "The lane tried the close once and does not retry it every pass."}
+
+
+def close_after_merge(repo, number, head, issue, gate, ledger):
+    lkey = f"after-merge:{repo}#{number}:{head}"
+    try:
+        after_merge(repo, number, head, issue, gate)
+    except subprocess.CalledProcessError:
+        ledger[lkey] = "close failed"
+        publish_decision(close_failed_item(repo, number, head, issue))
+        return
+    ledger[lkey] = "closed"
 
 
 def merged_without_gate_item(repo, number, head):
@@ -1130,8 +1151,7 @@ def settle_merged_prs(repo, ledger):
             continue
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
         if verdict == "PASS":
-            after_merge(repo, number, head, found.group(1), gate)
-            ledger[lkey] = "closed"
+            close_after_merge(repo, number, head, found.group(1), gate, ledger)
             print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
         else:
             publish_decision(merged_without_gate_item(repo, number, head))

@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
+from gate_policy import complete_pass
 import gh_gateway
 import prompt_paths
 
@@ -1743,9 +1744,7 @@ def cmd_close(a):
     replies = [item.get("text", "").rstrip() for item in report.get("items", [])
                if item.get("type") == "assistant_message"]
     reply = replies[-1] if replies else ""
-    if (f"PROVIDES: PASS {a.head}" not in reply.splitlines()
-            or f"CHECK: PASS {a.head}" not in reply.splitlines()
-            or not reply.endswith("VERDICT: PASS")):
+    if not complete_pass(reply, a.head):
         raise Refuse("completion requires exact-head gate verification of Provides, CHECK and VERDICT")
     merge = pull["mergeCommit"]["oid"]
     close_check = close_check_module()
