@@ -125,6 +125,7 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                # Text options whose value can look like anything, including a
                # repository selector.
                "--body", "--body-file", "--title", "--subject", "--notes",
+               "--mention", "--involves", "--participant", "--no-mention",
                "--message", "--reason", "--comment", "--description")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags this code understands. A cluster it does not know, such as
