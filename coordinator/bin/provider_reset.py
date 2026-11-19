@@ -94,6 +94,16 @@ def _epoch(date_text, time_text, zone, fold=0):
     return moment.replace(tzinfo=zone or timezone.utc, fold=fold).timestamp()
 
 
+def _occurrences(date_text, time_text, zone):
+    folds = [_epoch(date_text, time_text, zone, fold) for fold in (0, 1)]
+    return None if folds[0] is None else folds
+
+
+def _earliest_from(occurrences, base):
+    coming = [seconds for seconds in occurrences if seconds >= base]
+    return min(coming) if coming else None
+
+
 def _absolute(message, base):
     """The absolute reset a message names, or None when it names none."""
     for match in DATETIME.finditer(message):
@@ -103,18 +113,22 @@ def _absolute(message, base):
         if match.group(3):
             zone = timezone.utc if match.group(3) == "Z" else zone_of(match.group(3), 0)
         zone = zone or zone_of(message, match.end())
-        return _epoch(match.group(1), match.group(2), zone)
+        stated = _occurrences(match.group(1), match.group(2), zone)
+        if stated is None:
+            return None
+        coming = _earliest_from(stated, base)
+        return max(stated) if coming is None else coming
     for match in TIME_ONLY.finditer(message):
         if not RESET_WORD.search(message[max(0, match.start() - 60):match.start()]):
             continue
         zone = zone_of(message, match.end()) or timezone.utc
         when = datetime.fromtimestamp(base, timezone.utc).astimezone(zone)
-        today = [_epoch(when.date().isoformat(), match.group(1), zone, fold) for fold in (0, 1)]
-        if today[0] is None:
+        today = _occurrences(when.date().isoformat(), match.group(1), zone)
+        if today is None:
             return None
-        coming = [seconds for seconds in today if seconds >= base]
-        if coming:
-            return min(coming)
+        coming = _earliest_from(today, base)
+        if coming is not None:
+            return coming
         tomorrow = when.date() + timedelta(days=1)
         return _epoch(tomorrow.isoformat(), match.group(1), zone)
     return None
