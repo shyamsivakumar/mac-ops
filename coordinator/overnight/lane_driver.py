@@ -485,7 +485,7 @@ def barred_workspace(thread):
     return None
 
 
-def pull_base(repo, pr):
+def pull_base(repo, pr, reviewer=False):
     """Return the ref a worktree of pull request work starts at, and the note that goes with it.
 
     The branch of the pull request when the pull request is not from a
@@ -495,6 +495,9 @@ def pull_base(repo, pr):
     head only as `refs/pull/<number>/head` on the base repository: the
     work starts at the default branch and the note says how to get the
     code and how to check that it is the head commit.
+
+    A reviewer gets the note without the checkout: the review brief says
+    to check out nothing, and the head commit is enough to inspect.
     """
     if not pr:
         return "origin/main", ""
@@ -510,8 +513,11 @@ def pull_base(repo, pr):
         return "origin/main", (f"\n\nThe branch {branch} of pull request #{number} {where}. Fetch its code "
                                f"with `git fetch origin refs/pull/{number}/head`, then check that "
                                f"`git rev-parse FETCH_HEAD` prints {head}. If it prints another commit, stop "
-                               "and report that, and change nothing. Only when it matches, check it out with "
-                               "`git checkout FETCH_HEAD` before you change anything.")
+                               "and report that, and change nothing. "
+                               + ("The head commit is enough: inspect it where it is and check out nothing."
+                                  if reviewer else
+                                  "Only when it matches, check it out with `git checkout FETCH_HEAD` before you "
+                                  "change anything."))
     return "origin/main", ""
 
 
@@ -919,7 +925,7 @@ def act_on_pr(repo, number, ledger):
     brief += ("\nLane override: review only. Do not merge or close issues; the lane owns completion. "
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
-    base, note = pull_base(repo, pr)
+    base, note = pull_base(repo, pr, reviewer=True)
     brief += note
     key = CFG[repo]["key"]
     args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
