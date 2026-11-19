@@ -25,7 +25,8 @@
       "test_files": [
         "tests/test_prompt_paths.py"
       ],
-      "heldout": false
+      "heldout": false,
+      "group": "test_prompt_paths"
     },
     {
       "id": "mac-ops-618",
@@ -39,7 +40,8 @@
       "test_files": [
         "tests/test_prompt_paths.py"
       ],
-      "heldout": true
+      "heldout": true,
+      "group": "test_prompt_paths"
     },
     {
       "id": "mac-ops-608",
@@ -53,35 +55,8 @@
       "test_files": [
         "tests/test_heavy_review_slots.py"
       ],
-      "heldout": false
-    },
-    {
-      "id": "mac-ops-597",
-      "repo": "mac-ops",
-      "pr": 597,
-      "ticket": 593,
-      "merge": "02e4602029b386f71c2b837676a8522a6a78b931",
-      "parent": "4b322e6779055a56dc7cbe44f7be4720b2fc010d",
-      "type": "feature",
-      "test_command": "python3 -m pytest -q -x tests/test_models_block_provider.py",
-      "test_files": [
-        "tests/test_models_block_provider.py"
-      ],
-      "heldout": false
-    },
-    {
-      "id": "mac-ops-542",
-      "repo": "mac-ops",
-      "pr": 542,
-      "ticket": 539,
-      "merge": "5316a6b3bda2371a94eb61286895dc08f15ca534",
-      "parent": "def2918d6cb861016321adefb3bb402fd7536c78",
-      "type": "feature",
-      "test_command": "python3 -m pytest -q -x tests/test_answer_format.py",
-      "test_files": [
-        "tests/test_answer_format.py"
-      ],
-      "heldout": false
+      "heldout": false,
+      "group": "mac-ops-608"
     },
     {
       "id": "mac-ops-486",
@@ -95,7 +70,8 @@
       "test_files": [
         "tests/test_tick_external_call_bounds.py"
       ],
-      "heldout": true
+      "heldout": true,
+      "group": "mac-ops-486"
     },
     {
       "id": "mac-ops-340",
@@ -109,7 +85,8 @@
       "test_files": [
         "tests/test_gate_reviewer_quota.py"
       ],
-      "heldout": false
+      "heldout": false,
+      "group": "mac-ops-340"
     },
     {
       "id": "mac-ops-315",
@@ -123,7 +100,8 @@
       "test_files": [
         "tests/test_ticket_text_blockers.py"
       ],
-      "heldout": false
+      "heldout": false,
+      "group": "test_ticket_text_blockers"
     },
     {
       "id": "mac-ops-312",
@@ -137,7 +115,8 @@
       "test_files": [
         "tests/test_gatekeep_retry_limit.py"
       ],
-      "heldout": false
+      "heldout": false,
+      "group": "mac-ops-312"
     },
     {
       "id": "mac-ops-273",
@@ -151,7 +130,8 @@
       "test_files": [
         "tests/test_ticket_gate_live.py"
       ],
-      "heldout": false
+      "heldout": false,
+      "group": "mac-ops-273"
     },
     {
       "id": "mac-ops-223",
@@ -165,64 +145,8 @@
       "test_files": [
         "tests/test_ticket_text_blockers.py"
       ],
-      "heldout": false
-    },
-    {
-      "id": "mac-ops-569",
-      "repo": "mac-ops",
-      "pr": 569,
-      "ticket": 554,
-      "merge": "129f10bdd8de4983800595c20bbd6e7cc07913ab",
-      "parent": "a104c84e212fbdc86cdb9513af275613bde7bcbf",
-      "type": "feature",
-      "test_command": "python3 -m pytest -q -x tests/test_gate_bar_convergence.py tests/test_lane_decisions_board.py",
-      "test_files": [
-        "tests/test_gate_bar_convergence.py",
-        "tests/test_lane_decisions_board.py"
-      ],
-      "heldout": false
-    },
-    {
-      "id": "mac-ops-510",
-      "repo": "mac-ops",
-      "pr": 510,
-      "ticket": 501,
-      "merge": "c863ced04d60ed7da300eeb329e00a85f53e725b",
-      "parent": "490c864ada0aae9f4012bc927d4641a54f9cfc3b",
-      "type": "feature",
-      "test_command": "python3 -m pytest -q -x tests/test_check_proof.py",
-      "test_files": [
-        "tests/test_check_proof.py"
-      ],
-      "heldout": true
-    },
-    {
-      "id": "mac-ops-231",
-      "repo": "mac-ops",
-      "pr": 231,
-      "ticket": 207,
-      "merge": "df96438392929ac0a9a726a298b97314a3b15063",
-      "parent": "97d4d779be446b548b739985a3a37e38ecaecca0",
-      "type": "bugfix",
-      "test_command": "python3 -m pytest -q -x tests/test_ticket_text_blockers.py",
-      "test_files": [
-        "tests/test_ticket_text_blockers.py"
-      ],
-      "heldout": false
-    },
-    {
-      "id": "srw-1309",
-      "repo": "srw",
-      "pr": 1309,
-      "ticket": 1222,
-      "merge": "c6b38eb588d7d3e129f8a581e8aaeb7219be0faf",
-      "parent": "8af4fc816cdc6d843529df603ca772b7c2944cf3",
-      "type": "bugfix",
-      "test_command": "node test_srw1309_sell_recovery_scope.js",
-      "test_files": [
-        "test_srw1309_sell_recovery_scope.js"
-      ],
-      "heldout": false
+      "heldout": false,
+      "group": "test_ticket_text_blockers"
     },
     {
       "id": "srw-1324",
@@ -236,35 +160,8 @@
       "test_files": [
         "test_srw1322_exit_watchdog.js"
       ],
-      "heldout": false
-    },
-    {
-      "id": "srw-727",
-      "repo": "srw",
-      "pr": 727,
-      "ticket": 690,
-      "merge": "b4211145299d163aa151d08e0a85a36da3256cf9",
-      "parent": "52572629897a596c047a9a8f5ad01b19a8bb9585",
-      "type": "feature",
-      "test_command": "node test_bot2_daily_shadow.js",
-      "test_files": [
-        "test_bot2_daily_shadow.js"
-      ],
-      "heldout": true
-    },
-    {
-      "id": "srw-142",
-      "repo": "srw",
-      "pr": 142,
-      "ticket": 142,
-      "merge": "06a06ce89a15aa45c5bbab843f305e3a30c38e67",
-      "parent": "32f082ee80e2aec6110473a18c8f657048b5c772",
-      "type": "bugfix",
-      "test_command": "node test_srw228_recovery_guard.js",
-      "test_files": [
-        "test_srw228_recovery_guard.js"
-      ],
-      "heldout": true
+      "heldout": false,
+      "group": "srw-1324"
     }
   ]
 }

@@ -1,43 +1,42 @@
 # MO-633 oracle and nop results
 
-Harbor 0.26.0, each run through `heavy`, no model agent. Oracle applies the merged diff; nop changes nothing (the parent commit plus the PR's test files).
+Harbor 0.26.0, each run through `heavy`, no model agent. Oracle applies the merged diff; nop changes nothing (the parent commit plus the PR's test files). Round 2 regenerated every task folder (Interface section, cleaned instructions, groups) and re-ran oracle and nop on every kept task.
 
-| Task | Oracle reward | Nop reward | Kept |
-| --- | --- | --- | --- |
-| mac-ops-619 | 1 | 0 | yes |
-| mac-ops-618 | 1 | 0 | yes |
-| mac-ops-608 | 1 | 0 | yes |
-| mac-ops-597 | 1 | 0 | yes |
-| mac-ops-547 | 0 | not run | no |
-| mac-ops-542 | 1 | 0 | yes |
-| mac-ops-509 | 0 | not run | no |
-| mac-ops-486 | 1 | 0 | yes |
-| mac-ops-474 | 0 | not run | no |
-| mac-ops-471 | 0 | not run | no |
-| mac-ops-457 | 0 | not run | no |
-| mac-ops-340 | 1 | 0 | yes |
-| mac-ops-315 | 1 | 0 | yes |
-| mac-ops-312 | 1 | 0 | yes |
-| mac-ops-308 | 0 | not run | no |
-| mac-ops-273 | 1 | 0 | yes |
-| mac-ops-223 | 1 | 0 | yes |
-| mac-ops-569 | 1 | 0 | yes |
-| mac-ops-510 | 1 | 0 | yes |
-| mac-ops-231 | 1 | 0 | yes |
-| srw-1309 | 1 | 0 | yes |
-| srw-1324 | 1 | 0 | yes |
-| srw-727 | 1 | 0 | yes |
-| srw-142 | 1 | 0 | yes |
+| Task | Type | Group | Held out | Oracle reward | Nop reward |
+| --- | --- | --- | --- | --- | --- |
+| mac-ops-619 | bugfix | test_prompt_paths | no | 1 | 0 |
+| mac-ops-618 | bugfix | test_prompt_paths | yes | 1 | 0 |
+| mac-ops-608 | feature | mac-ops-608 | no | 1 | 0 |
+| mac-ops-486 | bugfix | mac-ops-486 | yes | 1 | 0 |
+| mac-ops-340 | bugfix | mac-ops-340 | no | 1 | 0 |
+| mac-ops-315 | bugfix | test_ticket_text_blockers | no | 1 | 0 |
+| mac-ops-312 | bugfix | mac-ops-312 | no | 1 | 0 |
+| mac-ops-273 | bugfix | mac-ops-273 | no | 1 | 0 |
+| mac-ops-223 | feature | test_ticket_text_blockers | no | 1 | 0 |
+| srw-1324 | feature | srw-1324 | no | 1 | 0 |
 
-## Dropped candidates (oracle reward 0, environment dependent)
+Tasks that share a test file carry one `group` (mac-ops-619 and mac-ops-618 share test_prompt_paths; mac-ops-315 and mac-ops-223 share test_ticket_text_blockers), so the scorer can treat them as one cluster.
 
-- mac-ops-547, mac-ops-457, mac-ops-308: the tests call `t3mcp`, which exists only on the Mac.
+## Dropped in round 1 (oracle reward 0, tests need the Mac)
+
+- mac-ops-547, 457, 308: the tests call `t3mcp`.
 - mac-ops-509: the test expects a RecursionError at the Mac's recursion depth.
 - mac-ops-474: the install smoke check runs `/opt/homebrew/bin/python3`.
 - mac-ops-471: the test needs an authenticated `gh`.
 
-herdr-projects and sams-llm-wiki were not built. herdr-projects is a Rust build with Linear (SHE-) tickets that have no GitHub text; the sams-llm-wiki PRs in the window are TypeScript skill and hook changes whose tests were not triaged in the time box.
+## Dropped in round 2 (design review)
 
-## Round 1 fix: a failed test copy gives reward 0
+- mac-ops-231: its ticket (#207) is a pull request, not an issue; the real ticket (#163) belongs to another task.
+- srw-142: its ticket is the PR itself (a closing note), and the test regex-matches the literal source of the fix.
+- srw-1309: the ticket points at a branch and evidence files that are not in the snapshot, and the facade method the test calls cannot be derived from the ticket.
+- srw-727: the test asserts the `x-bot2-secret` header and the fetch option names, which only the approval step named; that step tells the agent to copy `BOT2_WEBHOOK_SECRET` between production Railway services, so the step is removed and the task cannot be graded.
+- mac-ops-597: a re-cut ticket that carries earlier review rounds and refers to PR #585.
+- mac-ops-542: the test asserts the exact wording of the answer-format sentence, which the ticket does not give.
+- mac-ops-569: the tests assert exact rule sentences (the question rule for Shyam) in config files, which the ticket does not give.
+- mac-ops-510: one test asserts the literal source `run(selftest, timeout=60)` in `scripts/mac_ops_fast_check.py`.
 
-The generated `tests/test.sh` now writes 0 to the reward file first and exits when copying the PR's test files into `/app` fails, so the test command never runs against stale tests. Only `tests/test.sh` changed in the task folders (the template is the same for every task apart from the test command). After regenerating, oracle and nop were re-run on mac-ops-619, mac-ops-486, mac-ops-340, mac-ops-569, srw-1309 and srw-142: oracle 1 and nop 0 on all six. A forced copy failure (a task whose test command is `true` and whose test files cannot be copied over `/app`) gave reward 0 with `cp: cannot overwrite directory '/app/./tests' with non-directory`.
+## How instructions are cleaned
+
+`build_tasks.py` drops the Gate, Finish, CI, Rollback, Approval, Data/secrets, Addition, Left for later, Closing and similar sections, drops sentences that say "no new unit tests", "stop and report" or ask for pasted output or a PR body line, and refuses a ticket that is a pull request, that was updated after the merge and states the fix, or that names a production secret step. The Interface section lists the names and signatures the tests use that the parent commit lacks or has with a different signature (names and signatures only).
+
+herdr-projects and sams-llm-wiki are not covered: herdr-projects is a Rust build with Linear tickets, and sams-llm-wiki was not triaged.

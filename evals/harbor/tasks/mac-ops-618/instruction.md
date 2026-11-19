@@ -4,4 +4,10 @@ The lane driver and the stall rule write mac-ops tooling items to Shyam's board 
 
 Acceptance: those items are written to a mac-ops owner board file instead of decisions.json, any copy already on decisions.json is removed, and every other item still goes to decisions.json unchanged.
 
+## Interface
+
+The tests use these names and signatures, which the change must provide (names only, no behaviour implied):
+
+- `coordinator/overnight/alarms.py`: `def board_update(target, alarm_id, action, item=None, attempts=5, create=False)`
+
 The repository is at `/app`. Make the change there. Do not edit test files.

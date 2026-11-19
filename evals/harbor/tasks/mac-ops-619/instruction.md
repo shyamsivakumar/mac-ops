@@ -4,4 +4,12 @@ Gatekeep spends about 60 GitHub core calls on every 60-second pass: issue commen
 
 Acceptance: one gatekeep pass on an unchanged board makes at least 75% fewer core calls than today, and the same gates get queued (a dry run before and after shows the same candidates and skips).
 
+## Interface
+
+The tests use these names and signatures, which the change must provide (names only, no behaviour implied):
+
+- `coordinator/bin/coordq`: `constant _base_pins`
+- `coordinator/bin/coordq`: `def pinned_base(repo, base)`
+- `coordinator/bin/gh_gateway.py`: `def immutable(argv)`
+
 The repository is at `/app`. Make the change there. Do not edit test files.

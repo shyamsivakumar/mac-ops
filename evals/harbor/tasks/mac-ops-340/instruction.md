@@ -18,14 +18,10 @@ Existing coordinator/bin/coordq owns routing. Reuse existing model constants and
 
 ## Acceptance and proof
 
-Inspect both callers and refusal cases against the stated scope. External pass criterion: exact-head agent check and reviewer confirm the stated routing. Device, owner and live-service tests are waived by Shyam. No new unit tests.
+Inspect both callers and refusal cases against the stated scope. External pass criterion: exact-head agent check and reviewer confirm the stated routing. Device, owner and live-service tests are waived by Shyam.
 
 ## Must not cause
 
 No secret reads, test weakening, main pushes, force pushes, bypasses or unrelated changes.
-
-## Data/secrets and stop conditions
-
-Never read .env. Stop and report if scope cannot fit five minutes.
 
 The repository is at `/app`. Make the change there. Do not edit test files.

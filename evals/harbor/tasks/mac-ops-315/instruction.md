@@ -13,12 +13,16 @@ In: count a merged PR as delivering the ticket only when it changed at least one
 The ticket CLI owns start refusals; this narrows one rule in place.
 
 ## Acceptance and proof
-Dry run on SRW #472 no longer refuses with "already merged" (paste before/after). A ticket whose merged PR changed code is still refused. `python3 scripts/mac_ops_fast_check.py` passes.
+A ticket whose merged PR changed code is still refused.
 
 ## Must not cause
 A second start of a ticket that really merged.
 
-## Data/secrets and stop conditions
-No secrets. Ten-minute cap.
+## Interface
+
+The tests use these names and signatures, which the change must provide (names only, no behaviour implied):
+
+- `coordinator/bin/ticket`: `def pull_files(repo, number, changed_files=None)`
+- `coordinator/bin/ticket`: `def pull_guard_reasons(repo, issue, notices=None)`
 
 The repository is at `/app`. Make the change there. Do not edit test files.
