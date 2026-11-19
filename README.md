@@ -289,6 +289,8 @@ synthetic rollback evidence and the explicit live acceptance waiver.
 
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
+The coordinator's state, leases and event proposal is in
+[docs/coordinator-v2-design.md](docs/coordinator-v2-design.md) (proposal only).
 
 When live plus queued work is below the cap, `coordq dispatch` also refills
 from the board: at most once every five minutes it starts the oldest open
