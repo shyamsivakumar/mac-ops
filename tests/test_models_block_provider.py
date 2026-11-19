@@ -64,3 +64,12 @@ class BlockProviderTest(unittest.TestCase):
             with redirect_stderr(log), self.assertRaises(models.ModelsError):
                 models.block_provider(pick("a"), 160, now=100)
             self.assertEqual((self.file.read_text(), len(log.getvalue().splitlines())), (raw, 1))
+
+    def test_value_json_cannot_store_is_refused_before_replacing(self):
+        raw = '{"blocked": {"manual:m": {"reason": 1e400}}}'
+        self.file.write_text(raw)
+        log = StringIO()
+        with redirect_stderr(log), self.assertRaises(models.ModelsError):
+            models.block_provider(pick("a"), 160, now=100)
+        self.assertEqual((self.file.read_text(), len(log.getvalue().splitlines())), (raw, 1))
+        self.assertEqual([p.name for p in self.dir.glob(".*")], [])
