@@ -67,6 +67,30 @@ def local_day(ts: datetime) -> str:
     return ts.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
 
 
+def parse_instant(value: str | None) -> datetime | None:
+    """An ISO timestamp as an instant, or None when it is not one."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def existed_by(row: dict[str, Any], moment: str | None) -> bool:
+    """True when a pull request existed by a moment.
+
+    The two timestamps are compared as instants, not as text: a pull
+    request created at ``12:00:00Z`` existed when a session that started
+    at ``12:00:00.500000Z`` ran, even though the text sorts the other way.
+    """
+    created = parse_instant(str(row.get("createdAt") or ""))
+    when = parse_instant(moment)
+    if created is None or when is None:
+        return True
+    return created <= when
+
+
 @dataclass
 class DayUsage:
     """What the turns of one session that fell on one local day cost."""
@@ -407,7 +431,7 @@ class PrIndex:
         row = self.by_number(repo, number)
         if row is None:
             return None
-        if moment and str(row.get("createdAt") or "") > moment:
+        if not existed_by(row, moment):
             return None
         return row
 
@@ -418,7 +442,7 @@ class PrIndex:
         for row in self.prs(repo):
             if row.get("headRefName") != branch:
                 continue
-            if moment and str(row.get("createdAt") or "") > moment:
+            if not existed_by(row, moment):
                 continue
             return row
         return None
@@ -445,7 +469,7 @@ class PrIndex:
         rows = self.by_issue(repo, issue)
         if not moment:
             return rows
-        before = [row for row in rows if str(row.get("createdAt") or "") <= moment]
+        before = [row for row in rows if existed_by(row, moment)]
         return before or []
 
 
@@ -454,12 +478,33 @@ def _issue_number(ticket: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def resolve_named_repo(
+    named: str,
+    repo: str | None,
+    named_repos: dict[str, str] | None = None,
+) -> str | None:
+    """The repository a name like ``other-repo`` refers to.
+
+    The session's own repository is the first answer, then the repositories
+    the run has seen. A name that is not one of them names nothing, and the
+    number next to it is not a pull request number.
+    """
+    wanted = named.strip().lower()
+    if repo and repo.rsplit("/", 1)[-1].lower() == wanted:
+        return repo
+    for directory, slug in (named_repos or {}).items():
+        if directory.lower() == wanted:
+            return slug
+    return None
+
+
 def attribute(
     session: SessionCost,
     index: PrIndex,
     *,
     repo: str | None = None,
     branch: str | None = None,
+    named_repos: dict[str, str] | None = None,
 ) -> SessionAttribution:
     """Find the pull request a session belongs to.
 
@@ -478,6 +523,7 @@ def attribute(
 
     number = None
     kind = None
+    target = repo
     match = REVIEW_PR_RE.search(name)
     if match:
         number, kind = int(match.group(1)), "review"
@@ -488,14 +534,21 @@ def attribute(
     if number is None:
         match = REPO_PR_RE.search(name)
         if match:
-            number, kind = int(match.group(2)), "pr"
+            resolved = resolve_named_repo(match.group(1), repo, named_repos)
+            if resolved is None:
+                # The word before the number is not a repository, so the
+                # number is not a pull request number.
+                out.reason = f"{match.group(1)} is not a known repository"
+            else:
+                number, kind, target = int(match.group(2)), "pr", resolved
 
-    if number is not None and repo:
-        row = index.by_number_at(repo, number, session.started_at)
+    if number is not None and target:
+        row = index.by_number_at(target, number, session.started_at)
         if row is not None:
+            out.repo = target
             return _with_pr(out, row, kind)
-        if index.by_number(repo, number) is None:
-            out.reason = f"pull request #{number} is not in {repo}"
+        if index.by_number(target, number) is None:
+            out.reason = f"pull request #{number} is not in {target}"
         else:
             out.reason = (
                 f"pull request #{number} opened after the session ran"
@@ -701,6 +754,19 @@ def _window_summary(
     }
 
 
+def reconciles(
+    total: float, attributed: float, unattributed_rows: list[dict[str, Any]]
+) -> bool:
+    """True when the emitted rows add up to the day's total.
+
+    The unattributed amount is summed from the rows the report emits, not
+    derived from the total, so a row that is left out fails the check
+    instead of hiding inside the difference.
+    """
+    rows_total = sum(float(row.get("cost_usd") or 0.0) for row in unattributed_rows)
+    return abs(total - (attributed + rows_total)) < 1e-9
+
+
 def build_report(
     day: str,
     *,
@@ -729,7 +795,15 @@ def build_report(
         repo, branch = places[key]
         if repo is None:
             repo = learned.get(repo_dir_name(key) or "")
-        attributions.append(attribute(session, index, repo=repo, branch=branch))
+        attributions.append(
+            attribute(
+                session,
+                index,
+                repo=repo,
+                branch=branch,
+                named_repos=learned,
+            )
+        )
     if repos:
         attributions = [a for a in attributions if a.repo in repos]
     day_attributions = [a for a in attributions if a.session.day == day]
@@ -751,6 +825,10 @@ def build_report(
         (b for b in buckets.values() if b["number"]),
         key=lambda b: -b["cost_usd"],
     )
+    # The unattributed rows are summed on their own, so the reconciliation
+    # is a real check of the rows the report emits and not an identity.
+    unattributed_total = sum(row["cost_usd"] for row in unattributed)
+    reconciled = reconciles(total, attributed, unattributed)
     refactors = refactor_comparison(
         attributions,
         index,
@@ -787,8 +865,8 @@ def build_report(
         "session_count": len(day_attributions),
         "total_cost_usd": total,
         "attributed_cost_usd": attributed,
-        "unattributed_cost_usd": total - attributed,
-        "reconciled": abs(total - (attributed + (total - attributed))) < 1e-9,
+        "unattributed_cost_usd": unattributed_total,
+        "reconciled": reconciled,
         "pr_count": len(prs),
         "cost_per_pr_usd": (attributed / len(prs)) if prs else None,
         "prs": prs,

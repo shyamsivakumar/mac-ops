@@ -558,6 +558,105 @@ class CostReportTests(unittest.TestCase):
         self.assertAlmostEqual(unscoped["total_cost_usd"], 5.0)
         self.assertTrue(scoped["reconciled"])
 
+    def test_a_session_file_older_than_the_window_is_still_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = _two_turn_session_file(
+                root,
+                name="MO-482 review #487",
+                # The file starts on 2026-11-08 and the session resumes on
+                # 2026-11-17, so the $10 turn belongs to November 17.
+                first_stamp="2026-11-08T12:00:00.000Z",
+                second_stamp="2026-11-17T20:00:00.000Z",
+                cwd="/tmp/worktree",
+                first_cost=1.0,
+                second_cost=10.0,
+            )
+            days = cost_report.session_files(root, ["2026-11-17"])
+            self.assertIn(path, days)
+            slices = cost_report.collect_sessions(root, ["2026-11-17"])
+        self.assertEqual([part.day for part in slices], ["2026-11-17"])
+        self.assertAlmostEqual(slices[0].cost_usd, 10.0)
+
+    def test_the_reconciliation_sums_the_emitted_rows(self):
+        # A day of 10, 6 of it on pull requests, and a row of 4 that the
+        # report leaves out: the rows do not add up, so the report says so.
+        self.assertTrue(
+            cost_report.reconciles(10.0, 6.0, [{"cost_usd": 4.0}])
+        )
+        self.assertFalse(
+            cost_report.reconciles(10.0, 6.0, [{"cost_usd": 0.0}])
+        )
+        self.assertFalse(
+            cost_report.reconciles(10.0, 6.0, [])
+        )
+
+    def test_a_named_repository_is_resolved_before_the_number(self):
+        session = SessionCost(
+            session_id="s8",
+            path="/tmp/s8.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="other-repo#42",
+            started_at="2026-11-17T12:00:00Z",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 42,
+                "title": "a pull request in the session's own repository",
+                "body": "",
+                "headRefName": "t3/mac-ops-42",
+                "state": "OPEN",
+                "createdAt": "2026-11-16T00:00:00Z",
+                "mergedAt": None,
+            }
+        ]
+        index._by_repo[OTHER_REPO] = [
+            {
+                "number": 42,
+                "title": "a pull request in the named repository",
+                "body": "",
+                "headRefName": "t3/other-42",
+                "state": "OPEN",
+                "createdAt": "2026-11-16T00:00:00Z",
+                "mergedAt": None,
+            }
+        ]
+        out = attribute(
+            session,
+            index,
+            repo=REPO,
+            named_repos={"other-repo": OTHER_REPO},
+        )
+        self.assertEqual(out.pr_number, 42)
+        self.assertEqual(out.repo, OTHER_REPO)
+        self.assertEqual(out.pr_key, f"{OTHER_REPO}#42")
+
+    def test_a_pull_request_created_in_the_same_second_existed(self):
+        session = SessionCost(
+            session_id="s9",
+            path="/tmp/s9.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 review #42",
+            started_at="2026-11-13T12:00:00.500000Z",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 42,
+                "title": "created in the same second",
+                "body": "",
+                "headRefName": "t3/same-second",
+                "state": "OPEN",
+                "createdAt": "2026-11-13T12:00:00Z",
+                "mergedAt": None,
+            }
+        ]
+        out = attribute(session, index, repo=REPO)
+        self.assertEqual(out.pr_number, 42)
+
     def test_refactor_is_read_from_the_title(self):
         self.assertTrue(is_refactor("Rename the lane driver module"))
         self.assertFalse(is_refactor("Board: skip needs stays under a minute"))

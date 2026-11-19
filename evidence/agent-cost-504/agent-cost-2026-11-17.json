@@ -1,8 +1,8 @@
 {
-  "attributed_cost_usd": 168.93008611000002,
-  "cost_per_pr_usd": 2.0601230013414638,
+  "attributed_cost_usd": 168.81080861200002,
+  "cost_per_pr_usd": 2.0586683977073172,
   "day": "2026-11-17",
-  "generated_at": "2026-11-19T02:19:05.640759Z",
+  "generated_at": "2026-11-19T02:30:01.077665Z",
   "measured_days": [
     "2026-11-10",
     "2026-11-11",
@@ -142,30 +142,6 @@
       "url": "https://github.com/shyamsivakumar/openscan/pull/11"
     },
     {
-      "cost_usd": 4.874075450000001,
-      "kinds": {
-        "branch": 4,
-        "pr": 1,
-        "review": 1,
-        "ticket": 2
-      },
-      "merged_at": "2026-11-18T19:05:29Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "claude-opus-4-5",
-        "glm-5.3",
-        "gpt-6-astra"
-      ],
-      "number": 27,
-      "pr": "shyamsivakumar/tunerise#27",
-      "repo": "shyamsivakumar/tunerise",
-      "sessions": 8,
-      "state": "MERGED",
-      "title": "docs: reconcile release documentation with the merged M1 app [orb] (Refs #25)",
-      "tokens": 20917382,
-      "url": "https://github.com/shyamsivakumar/tunerise/pull/27"
-    },
-    {
       "cost_usd": 4.8475304800000005,
       "kinds": {
         "ticket": 5
@@ -183,6 +159,29 @@
       "title": "docs: correct SRW-1104 receipts after the in-session reviewer round (Refs #1092)",
       "tokens": 29157339,
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1191"
+    },
+    {
+      "cost_usd": 4.780234100000001,
+      "kinds": {
+        "branch": 4,
+        "review": 1,
+        "ticket": 2
+      },
+      "merged_at": "2026-11-18T19:05:29Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "claude-opus-4-5",
+        "glm-5.3",
+        "gpt-6-astra"
+      ],
+      "number": 27,
+      "pr": "shyamsivakumar/tunerise#27",
+      "repo": "shyamsivakumar/tunerise",
+      "sessions": 7,
+      "state": "MERGED",
+      "title": "docs: reconcile release documentation with the merged M1 app [orb] (Refs #25)",
+      "tokens": 16858585,
+      "url": "https://github.com/shyamsivakumar/tunerise/pull/27"
     },
     {
       "cost_usd": 4.61573073,
@@ -1437,25 +1436,6 @@
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1290"
     },
     {
-      "cost_usd": 0.05198188799999999,
-      "kinds": {
-        "pr": 2
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "deepseek-flash"
-      ],
-      "number": 220,
-      "pr": "shyamsivakumar/sams-llm-wiki#220",
-      "repo": "shyamsivakumar/sams-llm-wiki",
-      "sessions": 2,
-      "state": "OPEN",
-      "title": "wiki: session review 2026-11-17-1230",
-      "tokens": 1626976,
-      "url": "https://github.com/shyamsivakumar/sams-llm-wiki/pull/220"
-    },
-    {
       "cost_usd": 0.03708372,
       "kinds": {
         "branch": 1
@@ -1472,6 +1452,24 @@
       "title": "Recover agent instructions and ignore local tool state",
       "tokens": 1082388,
       "url": "https://github.com/shyamsivakumar/recoup/pull/23"
+    },
+    {
+      "cost_usd": 0.02654573999999999,
+      "kinds": {
+        "branch": 1
+      },
+      "merged_at": "2026-11-17T04:32:41Z",
+      "models": [
+        "MiniMax-M3.1-Flash"
+      ],
+      "number": 216,
+      "pr": "shyamsivakumar/sams-llm-wiki#216",
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "sessions": 1,
+      "state": "MERGED",
+      "title": "Document Pencil and Paper MCP design workflow",
+      "tokens": 1027852,
+      "url": "https://github.com/shyamsivakumar/sams-llm-wiki/pull/216"
     },
     {
       "cost_usd": 0.02576115,
@@ -1673,9 +1671,9 @@
           "2026-11-20"
         ],
         "days_with_sessions": 1,
-        "mean_cost_per_pr_usd": 1.1101528452307692,
+        "mean_cost_per_pr_usd": 1.1150491775384614,
         "prs": 13,
-        "total_cost_usd": 14.431986987999998
+        "total_cost_usd": 14.495639307999998
       },
       "after_days": 3,
       "before": {
@@ -1707,9 +1705,9 @@
           "2026-11-20"
         ],
         "days_with_sessions": 1,
-        "mean_cost_per_pr_usd": 1.1101528452307692,
+        "mean_cost_per_pr_usd": 1.1150491775384614,
         "prs": 13,
-        "total_cost_usd": 14.431986987999998
+        "total_cost_usd": 14.495639307999998
       },
       "after_days": 3,
       "before": {
@@ -1741,9 +1739,9 @@
           "2026-11-18"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 1.1751879320000003,
+        "mean_cost_per_pr_usd": 1.1799188801521745,
         "prs": 46,
-        "total_cost_usd": 54.058644872000016
+        "total_cost_usd": 54.276268487000024
       },
       "after_days": 3,
       "before": {
@@ -1786,8 +1784,8 @@
       "repo": "digitized/Concerning"
     },
     {
-      "cost_usd": 11.120739916,
-      "mean_cost_per_pr_usd": 1.5886771308571428,
+      "cost_usd": 11.026898566,
+      "mean_cost_per_pr_usd": 1.5752712237142856,
       "prs": 7,
       "repo": "shyamsivakumar/tunerise"
     },
@@ -1816,8 +1814,8 @@
       "repo": "shyamsivakumar/scripture-scroll"
     },
     {
-      "cost_usd": 0.5179548330000001,
-      "mean_cost_per_pr_usd": 0.25897741650000006,
+      "cost_usd": 0.49251868500000007,
+      "mean_cost_per_pr_usd": 0.24625934250000003,
       "prs": 2,
       "repo": "shyamsivakumar/sams-llm-wiki"
     }
@@ -1838,7 +1836,7 @@
     "pi_root": "/Users/shyamsivakumar/.pi"
   },
   "total_cost_usd": 314.6627311960003,
-  "unattributed_cost_usd": 145.7326450860003,
+  "unattributed_cost_usd": 145.85192258400008,
   "unattributed_sessions": [
     {
       "cost_usd": 97.00477380000004,
@@ -2268,6 +2266,13 @@
       "session_id": "01a1ed7d-6680-73ea-bdf1-6f6273d6be86"
     },
     {
+      "cost_usd": 0.09384135000000003,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-907ce842-64eed77d4d94211a",
+      "name": "TNR#27 builder check line e7b8cd6d",
+      "reason": "TNR is not a known repository",
+      "session_id": "01a1ed48-4974-74ef-8c9c-f41217dff40a"
+    },
+    {
       "cost_usd": 0.093374376,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-19e9d2e4-29a035675fe3579c",
       "name": "SRW-1189 \u00b7 Can Bot 2 Lane 3's retest gate silently block every entry?",
@@ -2411,7 +2416,7 @@
       "cost_usd": 0.05555204399999999,
       "cwd": "/Users/shyamsivakumar/Code/openscan",
       "name": "OPN design fit sections #6-#9",
-      "reason": "pull request #9 is not in shyamsivakumar/openscan",
+      "reason": "6- is not a known repository",
       "session_id": "01a1eb23-a367-7543-9336-d109b2d3fddd"
     },
     {
@@ -2546,6 +2551,13 @@
       "name": "Chore \u00b7 level local main (MO)",
       "reason": "session ran outside a git repository",
       "session_id": "01a1eab8-256f-730d-b295-67489ba3b9e8"
+    },
+    {
+      "cost_usd": 0.025436148,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-5843bb0b-ebd4df4f2753c9a2",
+      "name": "LMW#220 builder check line",
+      "reason": "LMW is not a known repository",
+      "session_id": "01a1ecee-f9c0-73e4-9bb4-e3ff4597e78d"
     },
     {
       "cost_usd": 0.024992175000000002,
