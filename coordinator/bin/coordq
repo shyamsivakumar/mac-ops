@@ -133,11 +133,9 @@ def gate_state(value):
     gatedHeads maps a head to its queue item, and to the record
     `{id, retries, at, givenUp, reviewer, moved, deadThread}` once a gate for
     the head has died without a verdict. `reviewer` is the reviewer the gate
-    was launched on, `moved` says the head already moved down the chain
-    (`None` for a record written before it, which the caller reads from the
-    head's `gateReviewers` history), and `deadThread` is the thread of the
-    dead gate that the queued retry replaces, written in the same save as the
-    retry item.
+    was launched on, `moved` says the head already moved down the chain, and
+    `deadThread` is the thread of the dead gate that the queued retry
+    replaces.
     """
     if isinstance(value, dict):
         retries = value.get("retries")
@@ -237,15 +235,24 @@ def with_rules(args, rules):
 
 def call(tool, args, rules=None):
     if tool == "t3_thread_launch":
-        task_type = args.get("taskType")
-        args, refusal = with_model(args)
-        if refusal:
-            return 1, refusal
-        if wants_rules(args, task_type):
-            if rules is None:
-                return 1, "agent rules were not loaded"
-            args = with_rules(args, rules)
-        args = {key: value for key, value in args.items() if key != "taskType"}
+        with model_list.blocked_lock(wait=False):
+            return call_resolved(tool, args, rules)
+    return run_t3(tool, args)
+
+
+def call_resolved(tool, args, rules):
+    task_type = args.get("taskType")
+    args, refusal = with_model(args)
+    if refusal:
+        return 1, refusal
+    if wants_rules(args, task_type):
+        if rules is None:
+            return 1, "agent rules were not loaded"
+        args = with_rules(args, rules)
+    return run_t3(tool, {key: value for key, value in args.items() if key != "taskType"})
+
+
+def run_t3(tool, args):
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
@@ -572,6 +579,27 @@ def undispatchable_tool(item):
     return None
 
 
+def gate_reviewer_blocked(item):
+    """Whether a queued gate names a reviewer the block store has blocked.
+
+    A gate is a launch whose request ID names a gate; a builder and an
+    ordinary review are never held back here. A store that cannot be read
+    defers the gate rather than the queue.
+    """
+    args = item.get("args") or {}
+    if item.get("tool") != "t3_thread_launch":
+        return False
+    if not str(args.get("clientRequestId") or "").startswith("gate:"):
+        return False
+    selection = args.get("modelSelection")
+    if not selection:
+        return False
+    try:
+        return model_list.is_blocked(selection)
+    except model_list.ModelsError:
+        return True
+
+
 def drain():
     statuses = {}
     while True:
@@ -614,7 +642,9 @@ def drain():
         if n + len(queue["reserved"]) >= cap():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
-        item = ready[0]
+        item = next((i for i in ready if not gate_reviewer_blocked(i)), None)
+        if item is None:
+            return
         try:
             steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
                      for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
@@ -1617,6 +1647,22 @@ def executed_models(value):
     return []
 
 
+def retract_gate_item(queue, heads, key, state, retried, selection):
+    # Runs while the queue lock is held, so the dispatcher cannot have taken
+    # the item and the head is left as it was.
+    queue["items"].pop()
+    queue["next"] -= 1
+    if retried:
+        heads[key] = state
+        tried = queue["gateReviewers"][key]
+        tried.remove(model_list.identity(selection))
+        if not tried:
+            del queue["gateReviewers"][key]
+    else:
+        heads.pop(key, None)
+    save(queue)
+
+
 def cmd_gatekeep(a):
     with open(a.config) as f:
         config = json.load(f)
@@ -1744,22 +1790,13 @@ def cmd_gatekeep(a):
                               "moved": retried or state["moved"],
                               "deadThread": thread_id if retried else None}
                 save(queue)
-                if model_list.is_blocked(args["modelSelection"]):
-                    # A block landed while the item was written, so the item
-                    # is taken back while the queue lock is held: the
-                    # dispatcher cannot have taken it, and the head is left
-                    # as it was.
-                    queue["items"].pop()
-                    queue["next"] -= 1
-                    if retried:
-                        heads[key] = state
-                        tried = queue["gateReviewers"][key]
-                        tried.remove(model_list.identity(args["modelSelection"]))
-                        if not tried:
-                            del queue["gateReviewers"][key]
-                    else:
-                        heads.pop(key, None)
-                    save(queue)
+                try:
+                    blocked = model_list.is_blocked(args["modelSelection"])
+                except BaseException:
+                    retract_gate_item(queue, heads, key, state, retried, args["modelSelection"])
+                    raise
+                if blocked:
+                    retract_gate_item(queue, heads, key, state, retried, args["modelSelection"])
                     print(f"waiting {event['pr']}: {args['modelSelection']['instanceId']} "
                           f"{args['modelSelection']['model']} is blocked", flush=True)
                     continue
