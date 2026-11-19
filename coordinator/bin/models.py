@@ -48,7 +48,8 @@ PROVIDER_ERROR = re.compile(
     r"|authentication_error)(?:ed|s)?(?!\w|\.\w)",
     re.I,
 )
-LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full|no such file|filenotfounderror|\bexit(?:ed|s)?\b|non-zero|return ?code", re.I)
+LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full|no such file|filenotfounderror", re.I)
+EXIT_CODE = re.compile(r"\b(?:exit(?:ed)?|return(?:ed)?)\b[\s\w-]{0,20}?\b(?:code|status)\s*[:=]?\s*\d+|\breturn ?code\s*[:=]?\s*\d+", re.I)
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
@@ -212,7 +213,7 @@ def block_provider(selection, error, failed=None):
 
     Returns False and records nothing when the error is no provider refusal."""
     name = identity(selection)
-    if not name or not PROVIDER_ERROR.search(error) or LOCAL_ERROR.search(error):
+    if not name or not PROVIDER_ERROR.search(EXIT_CODE.sub(" ", error)) or LOCAL_ERROR.search(error):
         return False
     failed = time.time() if failed is None else failed
     with blocked_lock():
