@@ -11,7 +11,9 @@
         ["node", "scripts/srw_promote_paper_live.cjs", "--break-glass-rollback", "{sha}"]
       ],
       "healthUrlEnv": "BOT1_HEALTH_URL",
-      "healthPath": "/health"
+      "healthPath": "/health",
+      "healthMustShowSha": true,
+      "healthTimeoutSeconds": 300
     },
     {
       "id": "bot2",
@@ -22,6 +24,8 @@
       "rollbackCommands": null,
       "healthUrlEnv": "BOT2_HEALTH_URL",
       "healthPath": "/health",
+      "healthMustShowSha": true,
+      "healthTimeoutSeconds": 300,
       "note": "Bot 2's live commit is not carried by a ref in this repository: the promotion path records it in the Railway deployment history, not in git. Name the ref and the rollback command here once that record is read, and the command will print Bot 2's steps the way it prints Bot 1's."
     }
   ]

@@ -32,6 +32,8 @@ def _entry(bot_id="bot1", **extra):
         "healthUrlEnv": "BOT1_HEALTH_URL",
         "healthPath": "/health",
         "healthCommand": None,
+        "healthMustShowSha": False,
+        "healthTimeoutSeconds": 0,
     }
     entry.update(extra)
     return entry
@@ -81,6 +83,14 @@ class ParseConfigTests(unittest.TestCase):
         bots = bot_rollback.parse_config(json.dumps(_config(_entry(rollbackCommands=None))))
         self.assertIsNone(bots[0].rollback_commands)
 
+    def test_rejects_a_health_timeout_that_is_not_a_whole_number(self):
+        with self.assertRaises(bot_rollback.ConfigError):
+            bot_rollback.parse_config(json.dumps(_config(_entry(healthTimeoutSeconds="soon"))))
+
+    def test_rejects_a_negative_health_timeout(self):
+        with self.assertRaises(bot_rollback.ConfigError):
+            bot_rollback.parse_config(json.dumps(_config(_entry(healthTimeoutSeconds=-1))))
+
 
 class ReadConfigTests(unittest.TestCase):
     def test_a_missing_config_is_reported(self):
@@ -127,6 +137,20 @@ class RepoFixture:
             ["git", "-C", str(self.path), "rev-parse", "--verify", f"{ref}^{{commit}}"],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
+
+    def commit_on_first(self, message):
+        """A commit whose parent is the first commit, not the live one."""
+        branch = subprocess.run(
+            ["git", "-C", str(self.path), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        self.git("checkout", "-q", "-b", "other", self.first)
+        readme = self.path / "README.md"
+        readme.write_text(message + "\n", encoding="utf-8")
+        self.git("commit", "-q", "-a", "-m", message)
+        sha = self.rev("HEAD")
+        self.git("checkout", "-q", branch)
+        return sha
 
 
 class DryRunTests(unittest.TestCase):
@@ -183,6 +207,13 @@ class DryRunTests(unittest.TestCase):
         code, output = self._run()
         self.assertEqual(code, 1)
         self.assertIn("problem: BOT1_HEALTH_URL is not set, so there is no health check", output)
+
+    def test_the_dry_run_reports_when_the_two_records_disagree(self):
+        other = self.repo.commit_on_first("other")
+        self.repo.git("update-ref", "refs/remotes/origin/paper-live", other)
+        code, output = self._run()
+        self.assertEqual(code, 1)
+        self.assertIn("the records disagree, so pin the rollback SHA in the config", output)
 
     def test_the_dry_run_reports_a_sha_the_checkout_does_not_hold(self):
         self._write(_entry(repository=str(self.repo.path), rollbackSha=OTHER_SHA))
@@ -274,6 +305,26 @@ class ExecuteTests(unittest.TestCase):
         code, _ = self._run()
         self.assertEqual(code, 1)
         self.assertFalse(self.order.exists())
+
+    def test_the_health_check_must_report_the_rollback_sha(self):
+        self._write(_entry(
+            repository=str(self.repo.path),
+            rollbackCommands=[["/bin/sh", "-c", f"echo rollback >> {self.order}"]],
+            healthCommand=["/bin/echo", "not ready yet"],
+            healthMustShowSha=True,
+        ))
+        code, _ = self._run()
+        self.assertEqual(code, 1)
+
+    def test_the_health_check_passes_when_it_reports_the_rollback_sha(self):
+        self._write(_entry(
+            repository=str(self.repo.path),
+            rollbackCommands=[["/bin/sh", "-c", f"echo {self.repo.first} >> {self.order}"]],
+            healthCommand=["/bin/cat", str(self.order)],
+            healthMustShowSha=True,
+        ))
+        code, _ = self._run()
+        self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":
