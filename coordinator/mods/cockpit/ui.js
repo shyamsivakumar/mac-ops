@@ -108,13 +108,16 @@ export function columnHead(t, key, col, state, cb) {
   const review = key === "review" && col.lanes.ready > 0 && !state.popup
     ? { id: "review-ready", hint: "m", label: `Review ${col.lanes.ready}`, run: (cx) => cb.review(cx), tip: `Go through the ${col.lanes.ready} ready cards one at a time: verdict, CI and changed files, then approve or send back (m)` }
     : null;
-  const retry = key === "needs" && state.failed > 0
+  const retry = key === "stuck" && state.failed > 0
     ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
+    : null;
+  const clear = key === "stuck" && state.clear.actions.length > 0
+    ? { id: "clear-stuck", hint: "C", label: state.armed?.kind === "clear-stuck" ? `Confirm ${state.clear.actions.length}` : `Clear ${state.clear.actions.length}`, run: (cx) => cb.clearStuck(cx), tip: state.clear.tip }
     : null;
   const rebase = state.conflicts[key] > 0
     ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every column)` }
     : null;
-  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, review, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
+  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, review, retry, rebase, clear, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
   const buttons = [settleReviewed, retry, rebase, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
@@ -132,7 +135,7 @@ export function columnHead(t, key, col, state, cb) {
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
       .when(Boolean(review), (el) => el.child(action(t, review.id, review.hint, review.label, review.run, review.tip, tight)))
-      .children([retry, rebase].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
+      .children([retry, rebase, clear].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
       .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5)))));
 }
 
@@ -1025,7 +1028,8 @@ export const KEY_TABLE = [
   { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
   { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (ready to merge cards in In review)" },
   { keys: "m", group: "Board", all: "Review the ready to merge cards one at a time, oldest first: verdict, CI and changed files. In it: a approves (press twice), d sends back with a note, j k or → ← move, s skips, Esc closes" },
-  { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Needs you)" },
+  { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Stuck)" },
+  { keys: "C", group: "Board", all: "Send every stuck card its standard fix, press twice: rebase for a conflict, retry for a failed run, send back for failing CI, requested changes or no fix round started. Questions, stalled and snoozed cards are skipped (Stuck)" },
   { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (every column with PRs; a column head button does one column)" },
   { keys: "Z", group: "Board", all: "List snoozed cards, wake one or all" },
   { keys: "f", group: "Board", all: "Fold or show this column" },
