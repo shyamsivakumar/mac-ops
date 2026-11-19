@@ -168,11 +168,16 @@ ROWS = [
     ("gh -R x/y pr view 1", "gh -R x/y pr view 1", False, {}),
     ("unpinned merge", "gh pr merge 531 -R shyamsivakumar/mac-ops --squash", True, {}),
     ("pinned merge as a builder", PINNED, True, {}),
-    ("pinned merge from a gate role (not executed)", PINNED, False, GATE),
+    ("pinned merge from a gate role (not executed)", PINNED, True, GATE),
+    ("gh pr merge 1", "gh pr merge 1", True, {}),
+    ("gh pr view 1", "gh pr view 1", False, {}),
+    ("gh pr create", "gh pr create --title T --body B", False, {}),
+    ("merge inside bash -c", "bash -c 'gh pr merge 1'", True, {}),
+    ("merge inside eval", "eval \"gh -R x/y pr merge 1\"", True, {}),
     (
         "pinned merge with -R before pr from a gate role",
         PINNED.replace("gh pr", "gh -R x/y pr"),
-        False,
+        True,
         GATE,
     ),
     (
@@ -187,12 +192,6 @@ ROWS = [
         True,
         GATE,
     ),
-]
-ROWS = [
-    (f"{label}: allowed (merge rule not enforced here)", command, False, env)
-    if refused and "gh " in command and "merge" in command
-    else (label, command, refused, env)
-    for label, command, refused, env in ROWS
 ]
 PI_ONLY_ROWS = [
     (

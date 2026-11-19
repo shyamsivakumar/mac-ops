@@ -7,6 +7,8 @@ the command (the simple commands the shell would run), never from its text,
 so a PR body, an `hc` message or a heredoc that mentions a rule is not a
 command that breaks it:
 
+- `gh pr merge` is refused for every agent, with any arguments. Merges belong
+  to the lane and the merge pass, which are processes, not agents.
 - A `git push` is decided only from the destinations written in the command.
   It is refused when it names no explicit destination branch, when a
   destination is `main` or `master`, and when it is a force-push in any form.
@@ -22,6 +24,7 @@ import re
 import sys
 
 PREFIX = "mac-ops deny rules (#530): "
+MERGE_REASON = "gh pr merge is denied for agents; merges belong to the lane and the merge pass"
 FORCE_REASON = "force-push in any form is denied"
 PROTECTED_REASON = "pushing to main or master is denied; push a task branch instead"
 NO_DESTINATION_REASON = (
@@ -40,6 +43,7 @@ GIT_VALUE_OPTIONS = {
     "--super-prefix",
     "--config-env",
 }
+GH_VALUE_OPTIONS = {"-R", "--repo", "--hostname"}
 PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
 ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 DURATION_RE = re.compile(r"^[\d.]+[smhd]?$")
@@ -57,7 +61,7 @@ WRAPPERS = {
     "caffeinate",
 }
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
-COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "eval"}
+COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "gh", "eval"}
 KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
 SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
@@ -245,6 +249,23 @@ def real_commands(text, depth=0):
         yield words
 
 
+def merge_reason(commands):
+    """A gh command whose group and action are `pr merge`, skipping global options such as `-R x/y`."""
+    for words in commands:
+        if os.path.basename(words[0]) != "gh":
+            continue
+        positionals, i = [], 1
+        while i < len(words) and len(positionals) < 2:
+            if words[i].startswith("-"):
+                i += 2 if words[i] in GH_VALUE_OPTIONS else 1
+            else:
+                positionals.append(words[i])
+                i += 1
+        if positionals == ["pr", "merge"]:
+            return MERGE_REASON
+    return None
+
+
 def push_arguments(words):
     i = 1
     while i < len(words) and words[i].startswith("-"):
@@ -325,7 +346,7 @@ def directory_reason(commands, cwd):
 
 def command_reason(command, cwd=None):
     commands = list(real_commands(command))
-    reason = directory_reason(commands, cwd)
+    reason = merge_reason(commands) or directory_reason(commands, cwd)
     for words in commands:
         args = push_arguments(words) if os.path.basename(words[0]) == "git" else None
         reason = reason or (push_reason(args) if args is not None else None)
