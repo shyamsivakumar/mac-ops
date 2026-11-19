@@ -566,7 +566,7 @@ def merged_restart():
     ]:
         actions = []
 
-        def command(cmd, timeout=150, actions=actions):
+        def command(cmd, timeout=150, actions=actions, board=board):
             if cmd[:3] == ["gh", "pr", "list"]:
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:
