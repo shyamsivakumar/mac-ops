@@ -18,6 +18,8 @@ Deploy jobs sort ahead of reviews, and reviews sort ahead of ordinary jobs. Afte
 
 Each queue entry stores the waiting process identity and is removed when that process exits or changes identity. Reservation and queue removal use the same registry lock. A new job cannot start while `legacy-registry.json` exists.
 
+The governor tick calls the registry reap on every sample, under the registry lock and only for records from the current boot. A running or starting job whose supervisor identity (pid, uid, start time) is gone, and whose workload group has no live members, is logged once as `job-dead` and its slot is freed in that tick. A live job or a reused pid is never reaped.
+
 Before submitting deploy gates after installation, drain all queued supervisors from the previous release. Older supervisors reject deploy queue records and can fail their own waiting commands if a deploy is queued.
 
 The slot limit is the minimum of fresh controller `heavy_slots`, physical CPU cores, and whole 6 GiB units of physical memory. The controller contract must have an integer `heavy_slots`, a current Unix `updated_at`, and the current kernel `boot_id`. Missing, malformed, stale, or cross-boot capacity holds admission. The project lock is acquired after the global reservation, and the supervisor refreshes the registry heartbeat while waiting for it.
