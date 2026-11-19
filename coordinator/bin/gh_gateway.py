@@ -640,6 +640,8 @@ SHORT_BOOLEAN = {
     ("issue", "list"): {"-d", "-w"},
     # `gh run view`: `-a` takes the attempt number and `-v` is verbose.
     ("run", "view"): {"-v"},
+    # `gh pr diff`: `-p` is the patch flag.
+    ("pr", "diff"): {"-p"},
 }
 LONG_BOOLEAN = {
     # `gh pr review --comment` is `-c`: a flag, with the text in `--body`.
@@ -749,8 +751,11 @@ def parse_options(argv):
                     continue
                 # The value form: `-RHOST/OWNER/REPO`, `-R=HOST/OWNER/REPO`,
                 # `-Sfoo`. A leading `=` is part of the syntax.
-                attached = rest[1:].lstrip("=")
-                if not attached and following:
+                raw_attached = rest[1:]
+                attached = raw_attached.lstrip("=")
+                # An explicit empty value (`-S=`) is a value, not an
+                # invitation to take the next argument.
+                if not raw_attached and following:
                     # A value option that ends the cluster takes the next
                     # argument: `-dR ent.example/team/repo`.
                     attached = following
