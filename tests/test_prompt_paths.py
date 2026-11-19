@@ -745,7 +745,7 @@ class LanePassTest(unittest.TestCase):
     def test_it_publishes_under_the_board_lock(self):
         calls = []
 
-        def board_update(path, alarm_id, action, item=None, attempts=5):
+        def board_update(path, alarm_id, action, item=None, attempts=5, create=False):
             calls.append((path, alarm_id, action, item))
             return "wrote"
 
