@@ -47,6 +47,10 @@ lock, so a device that someone else boots while the job waits for that lock is
 part of the baseline and never counts as booted by the job. A job with no
 baseline shuts no device down.
 
+A job names a device by its identifier, by a `-destination`, or by a device name
+given after `simctl`, so `xcrun simctl boot CI-iPhone` is credited with booting
+CI-iPhone and its cleanup shuts it down.
+
 ## Orphan sweep
 
 The governor tick stops the simulator processes that belong to no booted device.
@@ -60,6 +64,15 @@ Immediately before each signal the device state is read first and the process
 identity last, so no query sits between the identity check and the signal. A
 signal goes only to a process whose uid and start token match the ones read
 with its classification.
+
+A runtime process below a simulator launchd whose executable cannot be read has
+an unknown owner and is never signalled. A SIGTERM that raises an error is not
+counted as a stopped process, and a SIGKILL that raises an error is taken back
+out of the count.
+
+A person who boots the same named device during the job still satisfies the
+ownership check for that device. Heavy cannot tell that boot from the job's own,
+so that case stays open and is listed in the pull request under `Left for later`.
 
 ## M1 device and live testing
 
