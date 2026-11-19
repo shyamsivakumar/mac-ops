@@ -189,7 +189,7 @@ def with_model(args):
     if not resolved.get("modelSelection"):
         if task_type == "panel":
             return None, "refused: a panel launch names its model from the panel list"
-        entry = model_list.first_available(task_list(task_type))
+        entry = model_list.first_available(task_list(task_type), task_type=task_type)
         if entry is None:
             return None, f"refused: every model for taskType {task_type!r} is blocked"
         resolved["modelSelection"] = entry["selection"]
