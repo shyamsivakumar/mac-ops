@@ -18,7 +18,9 @@ installs it where each tool actually checks tools:
 
 The list only denies; nothing here allows anything. Every file edited is
 backed up first to ~/.local/state/mac-ops/deny-rules-backups/<timestamp>/.
-Uninstall removes exactly what install added.
+Uninstall removes exactly what install added and puts back what it replaced:
+the receipt records which deny entries and which hook registration install
+added, the backup of every file it overwrote, and the prior gate instance.
 """
 
 from __future__ import annotations
@@ -221,6 +223,12 @@ class Installer:
         atomic_write(path, json.dumps(settings, indent=2) + "\n")
         return {"deny_added": added, "hook_registered": hook_added}
 
+    def claim(self, path: Path, prior_files: dict) -> None:
+        prior_files[str(path)] = None
+        if path.is_file() or path.is_symlink():
+            self.backup(path)
+            prior_files[str(path)] = str(self.backups / path.relative_to(self.root))
+
     def unmerge_claude(self, saved: dict, spec: dict) -> dict:
         path = self.claude_settings()
         settings = load_json(path)
@@ -228,7 +236,7 @@ class Installer:
             return {"claude_settings": "absent"}
         self.backup(path)
         changed = False
-        managed = saved.get("managed_deny") or spec["claude_code"]["deny"]
+        managed = saved.get("managed_deny") or []
         permissions = settings.get("permissions")
         if isinstance(permissions, dict) and isinstance(permissions.get("deny"), list):
             kept = [e for e in permissions["deny"] if e not in managed]
@@ -237,7 +245,11 @@ class Installer:
                 changed = True
         command = self.hook_command(spec)
         hooks = settings.get("hooks")
-        if isinstance(hooks, dict) and isinstance(hooks.get("PreToolUse"), list):
+        if (
+            saved.get("hook_registered")
+            and isinstance(hooks, dict)
+            and isinstance(hooks.get("PreToolUse"), list)
+        ):
             pre = []
             for entry in hooks["PreToolUse"]:
                 inner = [
@@ -258,7 +270,7 @@ class Installer:
     def t3_settings(self) -> Path:
         return self.root / ".t3/userdata/settings.json"
 
-    def merge_t3_gate(self, spec: dict) -> str:
+    def merge_t3_gate(self, spec: dict) -> dict | None:
         conf = spec["t3_gate_instance"]
         path = self.t3_settings()
         current = load_json(path)
@@ -267,6 +279,7 @@ class Installer:
         self.backup(path)
         settings = dict(current or {})
         instances = dict(settings.get("providerInstances") or {})
+        prior = instances.get(conf["instanceId"])
         instances[conf["instanceId"]] = {
             "driver": conf["driver"],
             "displayName": conf["displayName"],
@@ -282,9 +295,9 @@ class Installer:
         settings["providerInstances"] = instances
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, json.dumps(settings, indent=2) + "\n")
-        return "installed"
+        return prior
 
-    def unmerge_t3_gate(self, spec: dict) -> str:
+    def unmerge_t3_gate(self, spec: dict, saved: dict) -> str:
         path = self.t3_settings()
         settings = load_json(path)
         if not isinstance(settings, dict):
@@ -292,13 +305,19 @@ class Installer:
         instances = settings.get("providerInstances")
         if not isinstance(instances, dict):
             return "absent"
-        if instances.pop(spec["t3_gate_instance"]["instanceId"], None) is None:
+        instance_id = spec["t3_gate_instance"]["instanceId"]
+        if instance_id not in instances:
             return "absent"
         self.backup(path)
+        prior = saved.get("t3_prior")
+        if prior is not None:
+            instances[instance_id] = prior
+        else:
+            del instances[instance_id]
         if not instances:
             settings.pop("providerInstances", None)
         atomic_write(path, json.dumps(settings, indent=2) + "\n")
-        return "removed"
+        return "restored" if prior is not None else "removed"
 
     def install(self, spec: dict) -> dict:
         repo_scope = ROOT_REPO / spec["scope_files"]["repo"]
@@ -314,6 +333,7 @@ class Installer:
             self.uninstall(spec, quiet=True)
         self.backups = self.state / "deny-rules-backups" / str(time.time_ns())
         report: dict = {"owner": OWNER, "actions": []}
+        prior_files: dict = {}
 
         merged = self.merge_claude(spec)
         report["actions"].append(f"claude settings: +{len(merged['deny_added'])} deny entries")
@@ -322,18 +342,19 @@ class Installer:
         )
         hook_target = Path(expand(spec["claude_code"]["hook"]["target"], self.root))
         hook_target.parent.mkdir(parents=True, exist_ok=True)
+        self.claim(hook_target, prior_files)
+        hook_target.unlink(missing_ok=True)
         shutil.copyfile(MERGE_HOOK_SOURCE, hook_target)
         os.chmod(hook_target, os.stat(MERGE_HOOK_SOURCE).st_mode | stat.S_IXUSR)
         report["actions"].append("claude merge hook file installed")
-        report["actions"].append(
-            "t3 gate instance: " + self.merge_t3_gate(spec)
-        )
+        t3_prior = self.merge_t3_gate(spec)
+        report["actions"].append("t3 gate instance: installed")
 
         guard = render_guard(spec, self.root)
         for entry in spec["pi_instances"]:
             agent_dir = Path(expand(entry, self.root))
             target = agent_dir / "extensions/deny-guard.ts"
-            self.backup(target)
+            self.claim(target, prior_files)
             atomic_write(target, guard)
             report["actions"].append(f"pi guard: {target}")
 
@@ -348,15 +369,13 @@ class Installer:
             "spec_sha256": digest(SPEC_PATH),
             "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "backups": str(self.backups),
-            "managed_deny": spec["claude_code"]["deny"],
-            "pi_guards": [
-                str(Path(expand(entry, self.root)) / "extensions/deny-guard.ts")
-                for entry in spec["pi_instances"]
-            ],
-            "merge_hook": str(hook_target),
+            "managed_deny": merged["deny_added"],
+            "hook_registered": merged["hook_registered"],
+            "prior_files": prior_files,
             "scope_copies": [expand(e, self.root) for e in spec["scope_files"]["copies"]],
             "scope_claude": str(claude_md),
             "t3_gate_instance": spec["t3_gate_instance"]["instanceId"],
+            "t3_prior": t3_prior,
         }
         atomic_write(self.receipt, json.dumps(receipt, indent=2) + "\n")
         report["backups"] = str(self.backups)
@@ -374,17 +393,15 @@ class Installer:
         self.backups = self.state / "deny-rules-backups" / ("uninstall-" + str(time.time_ns()))
         report = {"actions": []}
         report.update(self.unmerge_claude(saved, spec))
-        report["actions"].append("t3 gate instance: " + self.unmerge_t3_gate(spec))
-        for hook in [saved.get("merge_hook")] if saved.get("merge_hook") else []:
-            path = Path(hook)
-            if path.is_file():
+        report["actions"].append("t3 gate instance: " + self.unmerge_t3_gate(spec, saved))
+        for target, backup in (saved.get("prior_files") or {}).items():
+            path = Path(target)
+            if path.is_file() or path.is_symlink():
                 path.unlink()
                 report["actions"].append(f"removed {path}")
-        for guard in saved.get("pi_guards") or []:
-            path = Path(guard)
-            if path.is_file():
-                path.unlink()
-                report["actions"].append(f"removed {path}")
+            if backup:
+                shutil.copy2(backup, path, follow_symlinks=False)
+                report["actions"].append(f"restored {path}")
         for scope in (saved.get("scope_copies") or []) + (
             [saved["scope_claude"]] if saved.get("scope_claude") else []
         ):

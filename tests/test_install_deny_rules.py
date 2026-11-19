@@ -153,6 +153,30 @@ class InstallTest(FakeHome):
         self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
         self.assertTrue(report["uninstalled"])
 
+    def test_uninstall_restores_what_install_replaced(self):
+        settings_path = self.home / ".claude/settings.json"
+        settings = load(settings_path)
+        kept = SPEC["claude_code"]["deny"][0]
+        settings["permissions"]["deny"] = [kept]
+        settings_path.write_text(json.dumps(settings))
+        hook = self.home / ".claude/hooks/deny-merge-guard.py"
+        hook.parent.mkdir(parents=True)
+        hook.write_text("# user hook\n")
+        guard = self.home / SPEC["pi_instances"][0][2:] / "extensions/deny-guard.ts"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("// user guard\n")
+        conf = SPEC["t3_gate_instance"]
+        t3_path = self.home / conf["settings"][2:]
+        t3_path.parent.mkdir(parents=True)
+        prior = {"driver": "claudeAgent", "displayName": "mine", "enabled": False}
+        t3_path.write_text(json.dumps({"providerInstances": {conf["instanceId"]: prior}}))
+        self.installer.install(SPEC)
+        self.installer.uninstall(SPEC)
+        self.assertEqual(load(settings_path)["permissions"]["deny"], [kept])
+        self.assertEqual(hook.read_text(), "# user hook\n")
+        self.assertEqual(guard.read_text(), "// user guard\n")
+        self.assertEqual(load(t3_path)["providerInstances"][conf["instanceId"]], prior)
+
     def test_t3_gate_instance_is_installed_and_removed(self):
         conf = SPEC["t3_gate_instance"]
         settings_path = self.home / conf["settings"][2:]
@@ -199,6 +223,12 @@ class ListTest(unittest.TestCase):
             self.assertTrue(
                 entry.startswith(("Read(", "Edit(", "Bash(")), entry
             )
+        secret = re.compile(SPEC["secret_file_re"])
+        for name in ("tokens.json", "api-token.txt", "tokens.prod.yaml"):
+            self.assertTrue(secret.search("/h/" + name), name)
+            for tool in ("Read", "Edit"):
+                suffix = name.rsplit(".", 1)[1]
+                self.assertIn(f"{tool}(**/*token*.{suffix})", SPEC["claude_code"]["deny"])
 
     def test_regexes_compile_and_classify(self):
         secret = re.compile(SPEC["secret_file_re"])
@@ -335,10 +365,23 @@ class HookTest(unittest.TestCase):
         "--match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"
     )
 
-    def decided(self, command, role=None):
-        out = self.run_hook(
-            {"tool_name": "Bash", "tool_input": {"command": command}}, role=role
-        )
+    def scratch_repo(self, branch, upstream=None):
+        repo = Path(tempfile.mkdtemp(prefix="deny-rules-repo-", dir=TMP))
+        self.addCleanup(shutil.rmtree, repo, True)
+        subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True)
+        if upstream:
+            for key, value in (("remote", "origin"), ("merge", upstream)):
+                subprocess.run(
+                    ["git", "-C", str(repo), "config", f"branch.{branch}.{key}", value],
+                    check=True,
+                )
+        return repo
+
+    def decided(self, command, role=None, cwd=None):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        if cwd:
+            payload["cwd"] = str(cwd)
+        out = self.run_hook(payload, role=role)
         return json.loads(out)["hookSpecificOutput"] if out.strip() else None
 
     def test_denies_unpinned_merge(self):
@@ -347,6 +390,9 @@ class HookTest(unittest.TestCase):
                 "gh pr merge 531",
                 "gh pr merge 531 --squash",
                 "gh pr merge 531 -R shyamsivakumar/mac-ops --squash --delete-branch",
+                "gh -R shyamsivakumar/mac-ops pr merge 531 --squash",
+                "gh --repo=shyamsivakumar/mac-ops pr merge 531",
+                "gh pr -R shyamsivakumar/mac-ops merge 531",
             ):
                 decision = self.decided(command, role)
                 self.assertIsNotNone(decision, (role, command))
@@ -378,6 +424,9 @@ class HookTest(unittest.TestCase):
 
     def test_allows_pinned_merge(self):
         self.assertIsNone(self.decided(self.PINNED, "gate"))
+        pinned = self.PINNED.replace("gh pr merge", "gh -R x/y pr merge")
+        self.assertIsNone(self.decided(pinned, "gate"))
+        self.assertIsNotNone(self.decided(pinned, None))
 
     def test_denies_protected_branch_pushes_on_every_remote(self):
         for command in (
@@ -396,6 +445,45 @@ class HookTest(unittest.TestCase):
             decision = self.decided(command)
             self.assertIsNotNone(decision, command)
             self.assertEqual(decision["permissionDecision"], "deny", command)
+
+    def test_implicit_and_bulk_pushes_are_resolved_or_refused(self):
+        on_main = self.scratch_repo("main", "refs/heads/main")
+        on_task = self.scratch_repo("t3/x", "refs/heads/t3/x")
+        task_tracking_main = self.scratch_repo("t3/y", "refs/heads/main")
+        for repo in (on_main, task_tracking_main):
+            for command in (
+                "git push",
+                "git push origin",
+                "git push -u origin",
+                "git push origin HEAD",
+            ):
+                decision = self.decided(command, cwd=repo)
+                self.assertIsNotNone(decision, (repo, command))
+                self.assertEqual(decision["permissionDecision"], "deny", command)
+        for command in (
+            "git push --all origin",
+            "git push origin --all",
+            "git push --mirror origin",
+            "git push origin :",
+            "git push origin 'refs/heads/*:refs/heads/*'",
+            f"git -C {on_main} push",
+            f"cd {on_main} && git push",
+        ):
+            decision = self.decided(command, cwd=on_task)
+            self.assertIsNotNone(decision, command)
+            self.assertEqual(decision["permissionDecision"], "deny", command)
+        for command in (
+            "git push",
+            "git push origin",
+            "git push -u origin",
+            "git push origin HEAD",
+            "git push origin t3/x",
+            f"git -C {on_task} push",
+        ):
+            self.assertIsNone(self.decided(command, cwd=on_task), command)
+        self.assertIsNone(
+            self.decided(f"git -C {on_task} push", cwd=on_main), "git -C task repo"
+        )
 
     def test_allows_task_branches_that_start_with_a_protected_name(self):
         # `main.fix` is a task branch, not the protected ref `main`: the rule
@@ -503,6 +591,8 @@ class HookTest(unittest.TestCase):
             "",
         )
         self.assertEqual(self.run_hook({"tool_name": "Bash"}), "")
+        for command in ("gh -R x/y pr view 1", "gh pr view 1 -R x/y", "gh --repo x/y pr list"):
+            self.assertIsNone(self.decided(command), command)
 
 
 class GuardTest(unittest.TestCase):
@@ -541,6 +631,10 @@ console.log(JSON.stringify(out));
         ascend = str(Path.home() / "Code/slash-eureka/README.md")
         pinned = "gh pr merge 531 --squash --match-head-commit " + "a" * 40
         gate = {"MAC_OPS_ROLE": "gate"}
+        on_main = scratch / "on-main"
+        on_task = scratch / "on-task"
+        for repo, branch in ((on_main, "main"), (on_task, "t3/x")):
+            subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True)
         cases = [
             ({"toolName": "read", "input": {"path": ascend}}, True, {}),
             ({"toolName": "edit", "input": {"path": str(fake_env)}}, True, {}),
@@ -564,6 +658,17 @@ console.log(JSON.stringify(out));
                 {},
             ),
             ({"toolName": "bash", "input": {"command": "gh pr merge 531 --squash"}}, True, {}),
+            (
+                {"toolName": "bash", "input": {"command": "gh -R x/y pr merge 531 --squash"}},
+                True,
+                {},
+            ),
+            ({"toolName": "bash", "input": {"command": "gh -R x/y pr view 531"}}, False, {}),
+            ({"toolName": "bash", "input": {"command": f"git -C {on_main} push"}}, True, {}),
+            ({"toolName": "bash", "input": {"command": f"git -C {on_main} push origin"}}, True, {}),
+            ({"toolName": "bash", "input": {"command": "git push --all origin"}}, True, {}),
+            ({"toolName": "bash", "input": {"command": "git push --mirror origin"}}, True, {}),
+            ({"toolName": "bash", "input": {"command": f"git -C {on_task} push"}}, False, {}),
             # A pin in the command grants nothing without the gate role.
             ({"toolName": "bash", "input": {"command": pinned}}, True, {}),
             # A mentioned pin is not a merge argument.

@@ -28,6 +28,7 @@ copy by hand; reinstall from mac-ops instead.
 import json
 import os
 import re
+import subprocess
 import sys
 
 REQUIRED_FLAG = "--match-head-commit"
@@ -96,6 +97,18 @@ PROTECTED_REASON = (
     "mac-ops deny rules (#530): pushing to main or master is denied for any "
     "remote; push a task branch instead"
 )
+AMBIGUOUS_REASON = (
+    "mac-ops deny rules (#530): this push has no explicit destination branch "
+    "that can be resolved; name a task branch, for example "
+    "`git push -u origin <task-branch>`"
+)
+BULK_REASON = (
+    "mac-ops deny rules (#530): bulk pushes (--all, --mirror, matching or "
+    "wildcard refspecs) can write main or master; push a named task branch"
+)
+BULK_FLAGS = {"--all", "--branches", "--mirror"}
+GH_VALUE_OPTIONS = {"-R", "--repo", "--hostname"}
+DIRECTORY_CHANGERS = {"cd", "pushd"}
 MAX_NESTING = 4
 
 
@@ -352,11 +365,32 @@ def is_gate(environ=None):
     return (environ if environ is not None else os.environ).get(ROLE_ENV) == ROLE_VALUE
 
 
+def gh_command(words):
+    """The group and action words of a gh command, plus the words after them.
+
+    Options before the action, such as `-R owner/repo`, are skipped, so
+    `gh -R x/y pr <action> 1` is the same command as `gh pr <action> 1`.
+    """
+    positionals = []
+    index = 1
+    while index < len(words) and len(positionals) < 2:
+        word = words[index]
+        if word.startswith("-"):
+            index += 2 if word in GH_VALUE_OPTIONS else 1
+        else:
+            positionals.append(word)
+            index += 1
+    return positionals, words[index:]
+
+
 def merge_decision(commands, environ=None):
     for words in commands:
-        if os.path.basename(words[0]) != "gh" or words[1:3] != ["pr", "merge"]:
+        if os.path.basename(words[0]) != "gh":
             continue
-        if not is_gate(environ) or not pinned_commit(words[3:]):
+        positionals, rest = gh_command(words)
+        if positionals != ["pr", "merge"]:
+            continue
+        if not is_gate(environ) or not pinned_commit(rest):
             return deny(REASON)
     return None
 
@@ -370,29 +404,66 @@ def destination_ref(token):
     return ref
 
 
-def push_arguments(words):
+def push_arguments(words, directory):
+    """The words after `git ... push` and the directory git runs in.
+
+    The directory is None when `--git-dir` or `--work-tree` makes it unknown.
+    """
     index = 1
-    while index < len(words):
+    while index < len(words) and words[index].startswith("-"):
         word = words[index]
-        if not word.startswith("-"):
-            return words[index + 1 :] if word == "push" else None
+        if word == "-C" and index + 1 < len(words) and directory:
+            directory = os.path.join(directory, words[index + 1])
+        elif word.split("=", 1)[0] in {"--git-dir", "--work-tree"}:
+            directory = None
         index += 2 if word in GIT_VALUE_OPTIONS else 1
+    if index < len(words) and words[index] == "push":
+        return words[index + 1 :], directory
     return None
 
 
-def push_verdict(arguments):
-    """Deny a force-push, and a push whose destination ref is protected.
+def git_output(directory, *arguments):
+    proc = subprocess.run(
+        ["git", "-C", directory, *arguments],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def implicit_destinations(directory):
+    """The branch names a push without a refspec writes, or None when unknown.
+
+    That is the checked-out branch and the upstream branch it tracks.
+    """
+    if not directory:
+        return None
+    branch = git_output(directory, "symbolic-ref", "--short", "-q", "HEAD")
+    if not branch:
+        return None
+    upstream = git_output(directory, "config", "--get", f"branch.{branch}.merge")
+    return {branch, destination_ref(upstream)} if upstream else {branch}
+
+
+def push_verdict(arguments, directory, moved=False):
+    """Deny a force-push, a bulk push, and a push that can write a protected branch.
 
     The first bare word after `push` is the repository argument when another
     word follows it: it names a remote or a URL, never a destination branch,
     so a task-branch push to a remote called `main` is not a push to main.
-    A lone bare word is read as a refspec, so `git push main` stays refused:
-    it would write whatever branch is checked out.
+    A lone bare word is read both as a refspec, so `git push main` stays
+    refused, and as a remote, so `git push origin` is an implicit push.
+    An implicit push (no refspec, or `HEAD`) writes the current branch and
+    its upstream: it is refused when either is protected, and refused when
+    the branch cannot be resolved (detached HEAD, unknown directory, or a
+    `cd` earlier in the command).
     """
     bare = []
     has_repo_option = False
     options_done = False
     forced = False
+    bulk = False
     index = 0
     while index < len(arguments):
         argument = arguments[index]
@@ -407,6 +478,7 @@ def push_verdict(arguments):
                 and "f" in argument[1:]
             ):
                 forced = True
+            bulk = bulk or name in BULK_FLAGS
             if name in PUSH_VALUE_OPTIONS:
                 has_repo_option = has_repo_option or name == "--repo"
                 index += 0 if "=" in argument else 1
@@ -415,20 +487,32 @@ def push_verdict(arguments):
         index += 1
     if forced or any(token.startswith("+") and len(token) > 1 for token in bare):
         return deny(FORCE_REASON)
-    refspecs = bare if has_repo_option or len(bare) <= 1 else bare[1:]
+    lone = not has_repo_option and len(bare) == 1
+    refspecs = bare if has_repo_option or lone else bare[1:]
+    if bulk or any(token == ":" or "*" in token for token in refspecs):
+        return deny(BULK_REASON)
     if any(destination_ref(token) in PROTECTED for token in refspecs):
         return deny(PROTECTED_REASON)
+    if lone or not refspecs or any(token in {"HEAD", "@"} for token in refspecs):
+        destinations = None if moved else implicit_destinations(directory)
+        if destinations is None:
+            return deny(AMBIGUOUS_REASON)
+        if destinations & PROTECTED:
+            return deny(PROTECTED_REASON)
     return None
 
 
-def push_decision(commands):
+def push_decision(commands, directory):
+    moved = False
     for words in commands:
-        if os.path.basename(words[0]) != "git":
+        name = os.path.basename(words[0])
+        moved = moved or name in DIRECTORY_CHANGERS
+        if name != "git":
             continue
-        arguments = push_arguments(words)
-        if arguments is None:
+        parsed = push_arguments(words, directory)
+        if parsed is None:
             continue
-        verdict = push_verdict(arguments)
+        verdict = push_verdict(parsed[0], parsed[1], moved)
         if verdict:
             return verdict
     return None
@@ -442,9 +526,11 @@ def thread_decision(tool_input, environ=None):
     return None
 
 
-def decision(command, environ=None):
+def decision(command, environ=None, directory=None):
     commands = list(real_commands(command))
-    return merge_decision(commands, environ) or push_decision(commands)
+    return merge_decision(commands, environ) or push_decision(
+        commands, directory or os.getcwd()
+    )
 
 
 def main():
@@ -457,7 +543,9 @@ def main():
     if not isinstance(tool_input, dict):
         return 0
     if tool_name == "Bash":
-        result = decision(str(tool_input.get("command") or ""))
+        result = decision(
+            str(tool_input.get("command") or ""), directory=payload.get("cwd")
+        )
     elif any(name in tool_name for name in THREAD_TOOLS):
         result = thread_decision(tool_input)
     else:

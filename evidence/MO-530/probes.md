@@ -36,8 +36,8 @@ not write about the list itself.
 
 ## Probe results
 
-`python3 evidence/MO-530/probes.py` → `40 passed, 0 failed, 6 not run`, see
-`probes.txt`. The six `not run` rows are the Claude `permissions.deny`
+`python3 evidence/MO-530/probes.py` → `58 passed, 0 failed, 7 not run`, see
+`probes.txt`. The seven `not run` rows are the Claude `permissions.deny`
 entries: Claude Code evaluates them inside a session, so the probe names the
 live check instead of counting the file's text as a refusal. The rows that
 did run are decisions taken by the enforcement points on scratch inputs, for
@@ -70,6 +70,13 @@ all six pi instances and for Claude Code:
   - refused: `HEAD:main`, `HEAD:refs/heads/master`, `+HEAD:main`, `:main`, and a
     real push of `main` after a task-branch push or a PR text mention in one
     command
+  - bare push on main (upstream `origin/main`) refused, also `git push -u
+    origin` and `git push origin HEAD`; the same bare pushes on a task branch
+    allowed, and an explicit task-branch push allowed
+  - `--all`, `--mirror`, `:` and a wildcard refspec refused; a bare push on main
+    reached with `git -C` or `cd` refused
+  - `gh -R x/y pr merge 1` and `gh --repo=x/y pr merge 1` from a builder
+    refused; `gh -R x/y pr view 1` allowed
   - refused as before: `--force`, `-f`, `--force-with-lease`, and a
     plus-prefixed task-branch refspec
   The probes ran against a scratch home (`install --root`), so the live
