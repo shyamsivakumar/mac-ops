@@ -478,6 +478,14 @@ def worktree_branch(path):
     return ref[len(prefix):] if ref.startswith(prefix) else ""
 
 
+def worktree_top(path):
+    """The top-level folder of the Git worktree holding a path, or an empty string."""
+    try:
+        return run(["git", "-C", path, "rev-parse", "--show-toplevel"], timeout=60).strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return ""
+
+
 def barred_worktree(path):
     """Whether work may not go to the worktree at a path.
 
@@ -489,9 +497,11 @@ def barred_worktree(path):
     as well. A workspace folder that herdr made is barred whatever branch
     it sits on, since the branch can be renamed and the folder stays
     Shyam's. Both the supplied path and the folder it resolves to are
-    checked, so a symlink cannot route work into a herdr folder.
+    checked, so a symlink cannot route work into a herdr folder. The Git
+    top-level folder is checked too, so a subfolder of a herdr worktree
+    is barred.
     """
-    for spelling in (path, os.path.realpath(path)):
+    for spelling in (path, os.path.realpath(path), worktree_top(path)):
         if os.path.basename(os.path.normpath(spelling)).startswith("herdr-"):
             return True
         if any(part == ".herdr" for part in Path(spelling).parts):

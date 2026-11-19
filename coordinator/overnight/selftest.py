@@ -239,6 +239,8 @@ def dead_run_recovery():
         raise AssertionError(f"unexpected T3 call {tool}")
 
     def run(cmd, timeout=150):
+        if cmd[0] == "git" and "--show-toplevel" in cmd:
+            return cmd[2] + "\n"
         if cmd[0] == "git" and "symbolic-ref" in cmd:
             exact(cmd, ["git", "-C", "/tmp/fixture-worktree", "symbolic-ref", "--quiet", "HEAD"])
             return "refs/heads/builder/fixture\n"
@@ -390,6 +392,8 @@ def gate_pipeline():
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
                 return "merged"
+            if cmd[0] == "git" and "--show-toplevel" in cmd:
+                return cmd[2]
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
             if cmd[0] == "git" and "symbolic-ref" in cmd:
@@ -1472,6 +1476,8 @@ def consolidation_guard():
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
     def run(command, **kwargs):
+        if "--show-toplevel" in command:
+            return command[2]
         if "symbolic-ref" in command:
             return "refs/heads/main"
         calls.append(command)
@@ -1602,6 +1608,8 @@ def root_workspace():
             return {"thread": {**builder_identity(), **thread}}
         def command(cmd, timeout=150):
             if cmd[0] == "git":
+                if "--show-toplevel" in cmd:
+                    return cmd[2]
                 if "rev-parse" in cmd:
                     return git
                 if "symbolic-ref" in cmd:
