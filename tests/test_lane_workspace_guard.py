@@ -47,13 +47,15 @@ class WorkspaceGuardTests(unittest.TestCase):
     def setUp(self):
         self.lane = load_lane()
 
-    def send_to(self, thread, pr=None, git=WORKTREE_GIT, branch="refs/heads/builder/fixture"):
+    def send_to(self, thread, pr=None, git=WORKTREE_GIT, branch="refs/heads/builder/fixture",
+                on_origin=True, pull_requests=(), pr_number=512):
         """Send to one thread and report what the lane did with it."""
         actions, launches = [], []
 
         def read(tool, args):
             return {"thread": {"providerInstanceId": SELECTION["instanceId"],
-                               "model": SELECTION["model"], "status": "running", **thread}}
+                               "model": SELECTION["model"], "status": "running",
+                               "pullRequests": list(pull_requests), **thread}}
 
         def command(cmd, timeout=150):
             if cmd[0] == "git":
@@ -73,12 +75,12 @@ class WorkspaceGuardTests(unittest.TestCase):
         with patch.object(self.lane, "CFG", {REPO: {"projectId": "fixture", "key": "MO"}}), \
              patch.object(self.lane, "DRY", False), patch.object(self.lane, "t3", read), \
              patch.object(self.lane, "read_json", return_value=pull), \
-             patch.object(self.lane, "branch_on_origin", return_value=True), \
+             patch.object(self.lane, "branch_on_origin", return_value=on_origin), \
              patch.object(self.lane.model_list, "first_available",
                           return_value={"id": "fixture", "selection": SELECTION}), \
              patch.object(self.lane.model_list, "same_selection", return_value=True), \
              patch.object(self.lane, "run", command), redirect_stdout(output):
-            result = self.lane.send("old", "brief", "MO#512 fix", {}, KEY, repo=REPO, pr_number=512)
+            result = self.lane.send("old", "brief", "MO#512 fix", {}, KEY, repo=REPO, pr_number=pr_number)
         return result, actions, launches, output.getvalue()
 
     def test_a_send_to_a_root_workspace_thread_is_refused(self):
@@ -113,6 +115,24 @@ class WorkspaceGuardTests(unittest.TestCase):
         result, actions, launches, output = self.send_to({"worktreePath": WORKTREE})
         self.assertEqual((actions, launches, output), (["send"], [], ""))
         self.assertEqual(result, "receipt")
+
+    def test_a_refused_send_still_gets_a_replacement_thread(self):
+        """A branch that is not on origin is not a reason to drop the work."""
+        result, actions, launches, output = self.send_to(
+            {"worktreePath": ROOT_CHECKOUT}, git=ROOT_GIT, on_origin=False)
+        self.assertEqual(actions, ["fresh"])
+        self.assertEqual(launches[0]["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
+        self.assertEqual(output.splitlines(), ["SEND REFUSED old: root workspace"])
+
+    def test_the_replacement_starts_at_the_branch_of_the_pull_request(self):
+        """The thread's own pull request names the branch of the work."""
+        result, actions, launches, output = self.send_to(
+            {"worktreePath": ROOT_CHECKOUT}, git=ROOT_GIT, pr_number=None,
+            pull_requests=[{"repository": REPO, "number": 512}])
+        self.assertEqual(actions, ["fresh"])
+        self.assertEqual(launches[0]["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
 
 if __name__ == "__main__":
