@@ -602,10 +602,10 @@ def merged_restart():
             item_id = f"lane-merged-unreviewed-{key}-20"
             owner_path = Path(scratch, "owner.json")
             owner = [i["id"] for i in json.loads(owner_path.read_text())["items"]] if owner_path.exists() else []
-            exact(owner, [item_id] if board == "owner" else [])
-            exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
-                  [item_id] if board == "decisions" else
+            exact(owner, [item_id] if board == "owner" else
                   ["lane-close-failed-MO-20"] if board == "close-failed" else [])
+            exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
+                  [item_id] if board == "decisions" else [])
 
 
 def main_update_boundary():
@@ -657,7 +657,10 @@ def completion_boundary():
              (merged, proof.replace("PROVIDES: PASS", "PROVIDES: FAIL"), False),
              (merged, proof.replace("CHECK: PASS", "CHECK: FAIL"), False),
              (merged, proof.replace("VERDICT: PASS", "VERDICT: FAIL"), False)]
-    for pull, reply, allowed in cases:
+    bare = f"CHECK: PASS {head}\nVERDICT: PASS"
+    prompt_cases = [(bare, "hold", True), (bare, "clear", False), (bare, "unknown", False)]
+    for pull, reply, allowed, prompt in ([(*case, "clear") for case in cases]
+                                         + [(merged, r, a, s) for r, s, a in prompt_cases]):
         actions = []
         args = Namespace(ref="shyamsivakumar/mac-ops#10", pr=20, head=head, gate_thread="gate")
         def close(cmd):
@@ -679,6 +682,7 @@ def completion_boundary():
         with patch.object(ticket, "gh_json", return_value=pull), \
              patch.object(ticket, "t3_call", return_value={"items": [dict(type="assistant_message", text=reply)]}), \
              patch.object(ticket, "close_check_module", return_value=Checklist()), \
+             patch.object(ticket, "prompt_pull", return_value=prompt), \
              patch.object(ticket, "gh", side_effect=close):
             try:
                 ticket.cmd_close(args)
@@ -3210,6 +3214,10 @@ def alarm_mute():
             exact(alarms.clear_stale(decisions, "factory-zero-merge"), "failed")
         exact(decisions.read_bytes(), before)
         exact(alarms.board_for(decisions, "prompt-merge-SRW-4"), decisions)
+        for alarm in ("lane-close-failed", "lane-gate-split", "merge-pass-stuck", "manual-merge"):
+            exact(alarms.board_for(decisions, f"{alarm}-MO-654"), owner)
+            for key in ("SRW", "TNR"):
+                exact(alarms.board_for(decisions, f"{alarm}-{key}-654"), decisions)
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
