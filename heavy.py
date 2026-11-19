@@ -18,14 +18,14 @@ import socket
 import stat
 import subprocess
 import sys
-import time
 import threading
+import time
 import uuid
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-
+from typing import Any
 
 GIB = 1024**3
 MAX_CPU_PCT = 95.0
@@ -117,10 +117,10 @@ class Sample:
     physical_bytes: int
     load_per_core: float
     captured_monotonic: float
-    free_percent: Optional[float] = None
-    swap_growth_bytes_per_second: Optional[float] = None
-    swapout_bytes_per_second: Optional[float] = None
-    physical_cores: Optional[int] = None
+    free_percent: float | None = None
+    swap_growth_bytes_per_second: float | None = None
+    swapout_bytes_per_second: float | None = None
+    physical_cores: int | None = None
 
 
 def _finite_nonnegative(value: Any) -> bool:
@@ -139,16 +139,16 @@ def parse_pressure_level(output: str) -> int:
     return int(value)
 
 
-def parse_vm_stat(output: str) -> Tuple[int, int]:
+def parse_vm_stat(output: str) -> tuple[int, int]:
     """Return the page size and free, inactive, and speculative bytes from vm_stat."""
     page_match = re.search(r"page size of\s+(\d+)\s+bytes", output)
     if not page_match:
         raise TelemetryError("vm_stat omitted page size")
     page_size = int(page_match.group(1))
-    pages: Dict[str, int] = {}
+    pages: dict[str, int] = {}
     for name in ("free", "inactive", "speculative"):
         match = re.search(
-            r"^Pages " + re.escape(name) + r":\s*([0-9,]+)\.?\s*$", output, re.M
+            r"^Pages " + re.escape(name) + r":\s*([0-9,]+)\.?\s*$", output, re.MULTILINE
         )
         if not match:
             raise TelemetryError("vm_stat omitted required page count")
@@ -162,7 +162,9 @@ def parse_load(output: str, physical_cores: int) -> float:
     """Return the load average per physical core from uptime output."""
     if physical_cores <= 0:
         raise TelemetryError("invalid physical core count")
-    match = re.search(r"load averages?:\s*([0-9]+(?:\.[0-9]+)?)(?:,|\s)", output, re.I)
+    match = re.search(
+        r"load averages?:\s*([0-9]+(?:\.[0-9]+)?)(?:,|\s)", output, re.IGNORECASE
+    )
     if not match:
         raise TelemetryError("uptime omitted load average")
     load = float(match.group(1))
@@ -201,8 +203,7 @@ def _run_native(argv: Sequence[str], timeout: float = NATIVE_TIMEOUT) -> str:
     try:
         result = subprocess.run(
             list(argv),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
@@ -231,7 +232,7 @@ def sample_host(
         "cpu": ["/usr/sbin/iostat", "-n", "0", "-c", "2", "-w", "1"],
     }
     started = clock()
-    outputs: Dict[str, str] = {}
+    outputs: dict[str, str] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(commands)) as pool:
         futures = {
             key: pool.submit(command_runner, command, NATIVE_TIMEOUT)
@@ -258,7 +259,9 @@ def sample_host(
             r"System-wide memory free percentage:\s*(\d{1,3})%", outputs["free"]
         )
         swap_match = re.search(r"used = ([\d.]+)([KMGT])", outputs["swap"])
-        swapout_match = re.search(r"^Swapouts:\s*([0-9,]+)\.?\s*$", outputs["vm"], re.M)
+        swapout_match = re.search(
+            r"^Swapouts:\s*([0-9,]+)\.?\s*$", outputs["vm"], re.MULTILINE
+        )
         if not free_match or not swap_match or not swapout_match:
             raise TelemetryError("missing free memory or swap reading")
         free_percent = float(free_match[1])
@@ -306,7 +309,7 @@ def host_config_path() -> Path:
     return Path(__file__).resolve().parent / CONFIG_NAME
 
 
-def read_installed_config(path: Path) -> Optional[Dict[str, Any]]:
+def read_installed_config(path: Path) -> dict[str, Any] | None:
     """Return the installed configuration, or None when it cannot be trusted.
 
     The file is opened without following a final symlink and without waiting
@@ -354,7 +357,7 @@ def _usable_headroom(value: Any) -> bool:
     return 0 < value <= MAX_HOST_HEADROOM_BYTES
 
 
-def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
+def host_headroom_bytes(config_path: Path | None = None) -> int:
     """Return the headroom floor this host needs, or the default 6 GiB floor.
 
     The installed configuration names hosts and the headroom each one needs.
@@ -380,10 +383,10 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
         return MIN_HEADROOM_BYTES
     short_hostname = hostname.split(".")[0]
     host_is_short = "." not in hostname
-    exact: Dict[str, Any] = {}
-    short: Dict[str, Any] = {}
+    exact: dict[str, Any] = {}
+    short: dict[str, Any] = {}
 
-    def record(mapping: Dict[str, Any], key: str, headroom: Any) -> None:
+    def record(mapping: dict[str, Any], key: str, headroom: Any) -> None:
         if key in mapping:
             mapping[key] = None
         else:
@@ -411,8 +414,8 @@ def admission_block_reason(
     now: float,
     active_count: int,
     task_already_active: bool,
-    slot_limit: Optional[int] = None,
-) -> Optional[str]:
+    slot_limit: int | None = None,
+) -> str | None:
     """Return the reason a sample blocks admission, or None if it admits."""
     values = (
         sample.cpu_busy_pct,
@@ -501,9 +504,7 @@ def memory_load_block_reason(
     if not all(_finite_nonnegative(rate) for rate in rates):
         return "first swap sample; normal wait, a few seconds"
     floor = (
-        host_headroom_bytes()
-        if min_headroom_bytes is None
-        else int(min_headroom_bytes)
+        host_headroom_bytes() if min_headroom_bytes is None else int(min_headroom_bytes)
     )
     if headroom < max(floor, int(physical * headroom_fraction)):
         return "memory-headroom"
@@ -557,7 +558,7 @@ except OSError:
     _LIBPROC = None
 
 
-def _native_process_info(pid: int) -> Optional[ProcessInfo]:
+def _native_process_info(pid: int) -> ProcessInfo | None:
     if sys.platform != "darwin" or _LIBPROC is None:
         raise HeavyError("precise process identity requires macOS libproc")
     function = _LIBPROC.proc_pidinfo
@@ -576,7 +577,7 @@ def _native_process_info(pid: int) -> Optional[ProcessInfo]:
         return None
     if received != size or info.pid != pid:
         raise HeavyError("macOS process identity response was incomplete")
-    token = "{}.{:06d}".format(info.start_sec, info.start_usec)
+    token = f"{info.start_sec}.{info.start_usec:06d}"
     return ProcessInfo(
         pid=int(info.pid),
         ppid=int(info.ppid),
@@ -588,8 +589,8 @@ def _native_process_info(pid: int) -> Optional[ProcessInfo]:
     )
 
 
-def _parse_process_table(output: str) -> Dict[int, ProcessInfo]:
-    result: Dict[int, ProcessInfo] = {}
+def _parse_process_table(output: str) -> dict[int, ProcessInfo]:
+    result: dict[int, ProcessInfo] = {}
     for line in output.splitlines():
         if not line.strip():
             continue
@@ -609,7 +610,7 @@ def _parse_process_table(output: str) -> Dict[int, ProcessInfo]:
 
 def process_table(
     *, command_runner: Callable[[Sequence[str], float], str] = _run_native
-) -> Dict[int, ProcessInfo]:
+) -> dict[int, ProcessInfo]:
     """Return the process table keyed by pid with precise start tokens for own processes."""
     output = command_runner(
         ["/bin/ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart="],
@@ -661,7 +662,7 @@ def _secure_directory(path: Path, uid: int, *, create: bool, mode: int) -> None:
         raise HeavyError("private state directory permissions are unsafe")
 
 
-def state_directory(*, uid: Optional[int] = None) -> Path:
+def state_directory(*, uid: int | None = None) -> Path:
     """Return the secured per-user registry directory, creating it if needed."""
     user_id = os.getuid() if uid is None else uid
     try:
@@ -683,11 +684,11 @@ def state_directory(*, uid: Optional[int] = None) -> Path:
 
 
 def _read_capacity_config(
-    registry: "Registry",
+    registry: Registry,
     *,
-    now: Optional[float] = None,
-    boot_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    now: float | None = None,
+    boot_id: str | None = None,
+) -> dict[str, Any]:
     _secure_directory(registry.directory.parent, registry.uid, create=False, mode=0o700)
     path = registry.directory.parent / CAPACITY_NAME
     try:
@@ -753,11 +754,11 @@ def _read_capacity_config(
 
 
 def _effective_slot_limit(
-    registry: "Registry",
+    registry: Registry,
     sample: Sample,
     *,
-    now: Optional[float] = None,
-    boot_id: Optional[str] = None,
+    now: float | None = None,
+    boot_id: str | None = None,
 ) -> int:
     value = _read_capacity_config(registry, now=now, boot_id=boot_id)
     cores = sample.physical_cores
@@ -774,7 +775,7 @@ def _effective_slot_limit(
     return min(int(value["heavy_slots"]), cores, memory_limit)
 
 
-def _legacy_draining(registry: "Registry") -> bool:
+def _legacy_draining(registry: Registry) -> bool:
     marker = registry.directory.parent / LEGACY_MARKER_NAME
     try:
         info = os.lstat(str(marker))
@@ -827,7 +828,7 @@ def _legacy_draining(registry: "Registry") -> bool:
 class Registry:
     """Persist job, queue, and heartbeat records in one secured directory."""
 
-    def __init__(self, directory: Path, *, uid: Optional[int] = None):
+    def __init__(self, directory: Path, *, uid: int | None = None):
         """Bind the registry to a directory and the expected owner uid."""
         self.directory = Path(directory)
         self.uid = os.getuid() if uid is None else uid
@@ -872,7 +873,7 @@ class Registry:
         _secure_directory(path, self.uid, create=False, mode=0o700)
         return path
 
-    def _read_record(self, job_id: str) -> Dict[str, Any]:
+    def _read_record(self, job_id: str) -> dict[str, Any]:
         path = self._job_dir(job_id) / "record.json"
         info = os.lstat(str(path))
         if (
@@ -912,7 +913,7 @@ class Registry:
             raise HeavyError("registry record owner is invalid")
         return value
 
-    def _write_record(self, record: Dict[str, Any]) -> None:
+    def _write_record(self, record: dict[str, Any]) -> None:
         job_id = record.get("job_id")
         directory = self._job_dir(job_id)
         target = directory / "record.json"
@@ -958,14 +959,14 @@ class Registry:
         finally:
             os.close(dir_fd)
 
-    def _job_ids(self) -> List[str]:
+    def _job_ids(self) -> list[str]:
         return sorted(
             item
             for item in os.listdir(str(self.directory))
             if JOB_ID_PATTERN.fullmatch(item)
         )
 
-    def records(self) -> List[Dict[str, Any]]:
+    def records(self) -> list[dict[str, Any]]:
         """Return all job records except the protocol record."""
         rows = [self._read_record(job_id) for job_id in self._job_ids()]
         return [row for row in rows if row["job_id"] != PROTOCOL_RECORD_ID]
@@ -986,7 +987,7 @@ class Registry:
                     }
                 )
 
-    def create(self, record: Dict[str, Any]) -> None:
+    def create(self, record: dict[str, Any]) -> None:
         """Create a job directory and write its initial record."""
         job_id = record["job_id"]
         if not JOB_ID_PATTERN.fullmatch(job_id):
@@ -1003,8 +1004,8 @@ class Registry:
             raise
 
     def update(
-        self, job_id: str, mutator: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]
-    ) -> Optional[Dict[str, Any]]:
+        self, job_id: str, mutator: Callable[[dict[str, Any]], dict[str, Any] | None]
+    ) -> dict[str, Any] | None:
         """Apply mutator to a job record and persist the result if it returns one."""
         record = self._read_record(job_id)
         updated = mutator(dict(record))
@@ -1068,7 +1069,7 @@ class Registry:
         finally:
             os.close(dir_fd)
 
-    def read_heartbeat(self, job_id: str) -> Optional[int]:
+    def read_heartbeat(self, job_id: str) -> int | None:
         """Return the job's heartbeat timestamp, or None if it is missing or unsafe."""
         path = self._job_dir(job_id) / "heartbeat"
         try:
@@ -1098,7 +1099,7 @@ class Registry:
             raise HeavyError("invalid queue identity")
         return self.directory / ("queue-" + queue_id + ".json")
 
-    def queue_records(self) -> List[Dict[str, Any]]:
+    def queue_records(self) -> list[dict[str, Any]]:
         """Return validated queue records from the registry directory."""
         rows = []
         for name in os.listdir(str(self.directory)):
@@ -1155,7 +1156,7 @@ class Registry:
             rows.append(value)
         return rows
 
-    def create_queue(self, record: Dict[str, Any]) -> None:
+    def create_queue(self, record: dict[str, Any]) -> None:
         """Atomically write a queue record to the registry directory."""
         queue_id = record.get("queue_id")
         path = self._queue_path(queue_id)
@@ -1209,8 +1210,8 @@ class Registry:
     def update_queue(
         self,
         queue_id: str,
-        mutator: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
-    ) -> Optional[Dict[str, Any]]:
+        mutator: Callable[[dict[str, Any]], dict[str, Any] | None],
+    ) -> dict[str, Any] | None:
         """Apply mutator to a queue record and persist the result if it returns one."""
         path = self._queue_path(queue_id)
         try:
@@ -1242,7 +1243,7 @@ class Registry:
 
 
 def legacy_slot_count(
-    table: Dict[int, ProcessInfo], *, root: Path = LEGACY_SLOTS
+    table: dict[int, ProcessInfo], *, root: Path = LEGACY_SLOTS
 ) -> int:
     """Count legacy slots that hold a live or unverifiable pid."""
     try:
@@ -1290,7 +1291,7 @@ def legacy_slot_count(
         os.close(root_fd)
 
 
-def _identity_matches(info: Optional[ProcessInfo], identity: Dict[str, Any]) -> bool:
+def _identity_matches(info: ProcessInfo | None, identity: dict[str, Any]) -> bool:
     if info is None:
         return False
     if (
@@ -1303,12 +1304,12 @@ def _identity_matches(info: Optional[ProcessInfo], identity: Dict[str, Any]) -> 
 
 
 def _verified_group_members(
-    identity: Dict[str, Any],
-    table: Dict[int, ProcessInfo],
+    identity: dict[str, Any],
+    table: dict[int, ProcessInfo],
     *,
     getpgid: Callable[[int], int] = os.getpgid,
     getsid: Callable[[int], int] = os.getsid,
-) -> Optional[List[ProcessInfo]]:
+) -> list[ProcessInfo] | None:
     pid = int(identity["pid"])
     uid = int(identity["uid"])
     pgid = int(identity["pgid"])
@@ -1338,14 +1339,14 @@ def _verified_group_members(
     return verified
 
 
-def _workload_identity(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _workload_identity(record: dict[str, Any]) -> dict[str, Any] | None:
     value = record.get("workload")
     return value if isinstance(value, dict) else None
 
 
 def _record_live(
-    record: Dict[str, Any], table: Dict[int, ProcessInfo]
-) -> Tuple[bool, bool]:
+    record: dict[str, Any], table: dict[int, ProcessInfo]
+) -> tuple[bool, bool]:
     supervisor = record.get("supervisor")
     supervisor_alive = bool(
         supervisor and _identity_matches(table.get(supervisor.get("pid")), supervisor)
@@ -1360,7 +1361,7 @@ def _record_live(
 
 
 def _log_event(
-    directory: Path, event: str, record: Dict[str, Any], *, detail: Optional[str] = None
+    directory: Path, event: str, record: dict[str, Any], *, detail: str | None = None
 ) -> None:
     entry = {
         "time": datetime.datetime.now(datetime.timezone.utc).isoformat(
@@ -1402,10 +1403,10 @@ def _log_event(
 
 def _task_identity(
     *,
-    environ: Optional[Dict[str, str]] = None,
-    cwd: Optional[str] = None,
-    uid: Optional[int] = None,
-) -> Tuple[str, str]:
+    environ: dict[str, str] | None = None,
+    cwd: str | None = None,
+    uid: int | None = None,
+) -> tuple[str, str]:
     env = os.environ if environ is None else environ
     user_id = os.getuid() if uid is None else uid
     project_id = env.get("HERDR_PROJECTS_ID", "").strip()
@@ -1421,8 +1422,8 @@ def _task_identity(
 
 
 def _supervisor_identity(
-    task_key: str, boot_id: str, table: Dict[int, ProcessInfo], uid: int
-) -> Dict[str, Any]:
+    task_key: str, boot_id: str, table: dict[int, ProcessInfo], uid: int
+) -> dict[str, Any]:
     info = table.get(os.getpid())
     if info is None or info.uid != uid:
         raise HeavyError("supervisor process identity unavailable")
@@ -1439,11 +1440,11 @@ def _workload_identity_from_process(
     pid: int,
     task_key: str,
     boot_id: str,
-    table: Dict[int, ProcessInfo],
+    table: dict[int, ProcessInfo],
     *,
     getpgid: Callable[[int], int] = os.getpgid,
     getsid: Callable[[int], int] = os.getsid,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     info = table.get(pid)
     if info is None or info.uid != os.getuid() or info.pgid != pid:
         raise HeavyError("workload process group identity unavailable")
@@ -1468,12 +1469,12 @@ def _claim_termination(
     reason: str,
     *,
     claimant_pid: int,
-    expected_workload: Optional[Dict[str, Any]] = None,
+    expected_workload: dict[str, Any] | None = None,
     takeover: bool = False,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     with registry.lock():
 
-        def change(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        def change(record: dict[str, Any]) -> dict[str, Any] | None:
             workload = _workload_identity(record)
             if record.get("state") in ("complete", "removed"):
                 return None
@@ -1508,8 +1509,8 @@ def _claim_termination(
 
 def _set_curtail_request_locked(
     registry: Registry, job_id: str, reason: str, source: str
-) -> Optional[Dict[str, Any]]:
-    def change(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
+    def change(record: dict[str, Any]) -> dict[str, Any] | None:
         if (
             record.get("state") in ("complete", "removed")
             or record.get("curtail_request")
@@ -1530,7 +1531,7 @@ def _set_curtail_request_locked(
 def _clear_curtail_request(registry: Registry, job_id: str) -> None:
     with registry.lock():
 
-        def change(record: Dict[str, Any]) -> Dict[str, Any]:
+        def change(record: dict[str, Any]) -> dict[str, Any]:
             request = record.get("curtail_request") or {}
             if request.get("source") == "host-alarm":
                 record.pop("curtail_request", None)
@@ -1541,17 +1542,17 @@ def _clear_curtail_request(registry: Registry, job_id: str) -> None:
         registry.update(job_id, change)
 
 
-def _record(registry: Registry, job_id: str) -> Dict[str, Any]:
+def _record(registry: Registry, job_id: str) -> dict[str, Any]:
     with registry.lock(exclusive=False):
         return registry._read_record(job_id)
 
 
 def _mark_complete(
     registry: Registry, job_id: str, *, state: str = "complete"
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     with registry.lock():
 
-        def change(record: Dict[str, Any]) -> Dict[str, Any]:
+        def change(record: dict[str, Any]) -> dict[str, Any]:
             record["state"] = state
             return record
 
@@ -1559,13 +1560,13 @@ def _mark_complete(
 
 
 def _safe_group_members(
-    identity: Dict[str, Any],
+    identity: dict[str, Any],
     *,
-    table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table,
+    table_reader: Callable[[], dict[int, ProcessInfo]] = process_table,
     getpgid: Callable[[int], int] = os.getpgid,
     getsid: Callable[[int], int] = os.getsid,
     boot_reader: Callable[[], str] = kernel_boot_identity,
-) -> Optional[List[ProcessInfo]]:
+) -> list[ProcessInfo] | None:
     try:
         if boot_reader() != identity.get("boot_id"):
             return None
@@ -1576,12 +1577,12 @@ def _safe_group_members(
 
 
 def terminate_owned_group(
-    identity: Dict[str, Any],
+    identity: dict[str, Any],
     *,
     reason: str,
     signal_group: Callable[[int, int], None] = os.killpg,
     sleep: Callable[[float], None] = time.sleep,
-    table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table,
+    table_reader: Callable[[], dict[int, ProcessInfo]] = process_table,
     getpgid: Callable[[int], int] = os.getpgid,
     getsid: Callable[[int], int] = os.getsid,
     boot_reader: Callable[[], str] = kernel_boot_identity,
@@ -1647,7 +1648,7 @@ def terminate_owned_group(
     return False
 
 
-def _write_request_for_newest(registry: Registry) -> Dict[str, Any]:
+def _write_request_for_newest(registry: Registry) -> dict[str, Any]:
     with registry.lock():
         records = registry.records()
         active = [
@@ -1681,7 +1682,7 @@ def status_payload(
     *,
     sample_reader: Callable[[], Sample] = sample_host,
     boot_reader: Callable[[], str] = kernel_boot_identity,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return the registry status payload with limits, pauses, and queue state."""
     with registry.lock(exclusive=False):
         records = registry.records()
@@ -1744,8 +1745,8 @@ def status_payload(
 
 def _prune_finished_locked(
     registry: Registry,
-    records: List[Dict[str, Any]],
-    table: Dict[int, ProcessInfo],
+    records: list[dict[str, Any]],
+    table: dict[int, ProcessInfo],
     snapshot_started_ns: int,
     boot_id: str,
 ) -> None:
@@ -1776,13 +1777,14 @@ class SupervisorDeps:
     clock: Callable[[], float] = monotonic
     monotonic_ns: Callable[[], int] = monotonic_ns
     sleep: Callable[[float], None] = time.sleep
-    process_table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table
+    process_table_reader: Callable[[], dict[int, ProcessInfo]] = process_table
     boot_reader: Callable[[], str] = kernel_boot_identity
-    legacy_slots: Callable[[Dict[int, ProcessInfo]], int] = legacy_slot_count
-    launch_gated_workload: Optional[
-        Callable[[Sequence[str]], Tuple[Any, Callable[[], None], Callable[[], None]]]
-    ] = None
-    launch_watchdog: Optional[Callable[[str], Any]] = None
+    legacy_slots: Callable[[dict[int, ProcessInfo]], int] = legacy_slot_count
+    launch_gated_workload: (
+        Callable[[Sequence[str]], tuple[Any, Callable[[], None], Callable[[], None]]]
+        | None
+    ) = None
+    launch_watchdog: Callable[[str], Any] | None = None
     terminate: Callable[..., bool] = terminate_owned_group
     signal_group: Callable[[int, int], None] = os.killpg
     getpgid: Callable[[int], int] = os.getpgid
@@ -1790,21 +1792,25 @@ class SupervisorDeps:
     wall_clock: Callable[[], float] = time.time
 
 
-def _queue_sort_key(record: Dict[str, Any], now_ns: Optional[int] = None) -> Tuple[int, int, str]:
+def _queue_sort_key(
+    record: dict[str, Any], now_ns: int | None = None
+) -> tuple[int, int, str]:
     created = int(record.get("created_ns", 0))
     now = monotonic_ns() if now_ns is None else now_ns
     role = record.get("role")
-    priority = 0 if now - created > 600_000_000_000 else (
-        1 if role == "deploy" else 2 if role == "review" else 3
+    priority = (
+        0
+        if now - created > 600_000_000_000
+        else (1 if role == "deploy" else 2 if role == "review" else 3)
     )
     return (priority, created, str(record.get("queue_id", "")))
 
 
 def _prune_queue_records_locked(
     registry: Registry,
-    table: Dict[int, ProcessInfo],
+    table: dict[int, ProcessInfo],
     boot_id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     for queued in registry.queue_records():
         identity = queued["process"]
         if queued.get("boot_id") != boot_id or not _identity_matches(
@@ -1852,9 +1858,9 @@ def _enqueue_job(
         registry.directory,
         "queued",
         queued,
-        detail="priority position {}".format(position),
+        detail=f"priority position {position}",
     )
-    print("heavy: queued role={} position={}".format(role, position), file=sys.stderr)
+    print(f"heavy: queued role={role} position={position}", file=sys.stderr)
     return queue_id
 
 
@@ -1880,7 +1886,7 @@ def critical_pressure(sample: Sample, *, load_proxy: bool = True) -> bool:
 
 def _host_reason(
     sample: Sample, load_high_count: int = 0, paused: bool = False
-) -> Optional[str]:
+) -> str | None:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
     if sample.cpu_busy_pct >= MAX_CPU_PCT:
@@ -1894,9 +1900,7 @@ def _host_reason(
         swapout_rate=sample.swapout_bytes_per_second,
         headroom=sample.headroom_bytes,
         physical=sample.physical_bytes,
-        headroom_fraction=(
-            HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
-        ),
+        headroom_fraction=(HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION),
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -1904,8 +1908,8 @@ def _host_reason(
 
 def _role_slot_available(
     role: str,
-    active: List[Dict[str, Any]],
-    queues: List[Dict[str, Any]],
+    active: list[dict[str, Any]],
+    queues: list[dict[str, Any]],
     slot_limit: int,
     legacy_count: int = 0,
 ) -> bool:
@@ -1929,9 +1933,9 @@ def _reserve_job(
     sample: Sample,
     deps: SupervisorDeps,
     *,
-    queue_id: Optional[str] = None,
+    queue_id: str | None = None,
     role: str = "ordinary",
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     ephemeral_queue = queue_id is None
     snapshot_started_ns = deps.monotonic_ns()
     boot_id = deps.boot_reader()
@@ -1993,7 +1997,8 @@ def _reserve_job(
         busy_tasks = {row.get("task_key") for row in active}
         deploy_active = any(row.get("role") == "deploy" for row in active)
         eligible_queues = [
-            row for row in queues
+            row
+            for row in queues
             if row.get("task_key") not in busy_tasks
             and not (deploy_active and row.get("role") == "deploy")
             and _role_slot_available(
@@ -2048,7 +2053,7 @@ def _reserve_job(
             resume_queue_agent_pause(current_queue, deps)
             try:
 
-                def clear_agent_pause(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                def clear_agent_pause(row: dict[str, Any]) -> dict[str, Any] | None:
                     if not row.get("agent_pause"):
                         return None
                     updated = dict(row)
@@ -2063,11 +2068,11 @@ def _reserve_job(
 
 
 def _update_workload(
-    registry: Registry, job_id: str, workload: Dict[str, Any]
-) -> Dict[str, Any]:
+    registry: Registry, job_id: str, workload: dict[str, Any]
+) -> dict[str, Any]:
     with registry.lock():
 
-        def change(record: Dict[str, Any]) -> Dict[str, Any]:
+        def change(record: dict[str, Any]) -> dict[str, Any]:
             record["workload"] = workload
             record["state"] = "running"
             return record
@@ -2080,7 +2085,7 @@ def _update_workload(
 
 def _default_launch_gated_workload(
     argv: Sequence[str],
-) -> Tuple[subprocess.Popen, Callable[[], None], Callable[[], None]]:
+) -> tuple[subprocess.Popen, Callable[[], None], Callable[[], None]]:
     read_fd, write_fd = os.pipe()
     try:
         process = subprocess.Popen(
@@ -2178,7 +2183,7 @@ SIMULATOR_UDID_PATTERN = re.compile(
 
 def simulator_devices(
     *, command_runner: Callable[[Sequence[str], float], str] = _run_native
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Return every simulator device with its name, runtime identifier, and state."""
     output = command_runner(
         ["/usr/bin/xcrun", "simctl", "list", "devices", "--json"], SIMCTL_TIMEOUT
@@ -2190,7 +2195,7 @@ def simulator_devices(
     devices = value.get("devices") if isinstance(value, dict) else None
     if not isinstance(devices, dict):
         raise HeavyError("simulator device list is malformed")
-    found: List[Dict[str, str]] = []
+    found: list[dict[str, str]] = []
     for runtime, rows in devices.items():
         if not isinstance(runtime, str) or not isinstance(rows, list):
             continue
@@ -2213,7 +2218,7 @@ def simulator_devices(
 
 def simulator_booted_devices(
     *, command_runner: Callable[[Sequence[str], float], str] = _run_native
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Return every booted or booting simulator device and its runtime identifier."""
     return {
         row["udid"]: row["runtime"]
@@ -2222,19 +2227,23 @@ def simulator_booted_devices(
     }
 
 
-def _version_numbers(text: str) -> Tuple[int, ...]:
+def _version_numbers(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", text))
 
 
-def _runtime_version(identifier: str) -> Tuple[int, ...]:
+def _runtime_version(identifier: str) -> tuple[int, ...]:
     return _version_numbers(identifier.rsplit(".", 1)[-1])
 
 
 def _newest_runtime_matches(
-    matches: List[Dict[str, str]], requested: Tuple[int, ...]
-) -> List[Dict[str, str]]:
+    matches: list[dict[str, str]], requested: tuple[int, ...]
+) -> list[dict[str, str]]:
     if requested:
-        return [row for row in matches if _runtime_version(row["runtime"])[: len(requested)] == requested]
+        return [
+            row
+            for row in matches
+            if _runtime_version(row["runtime"])[: len(requested)] == requested
+        ]
     if not matches:
         return matches
     newest = max(_runtime_version(row["runtime"]) for row in matches)
@@ -2242,21 +2251,22 @@ def _newest_runtime_matches(
 
 
 def devices_named_by_job(
-    argv: Sequence[str], devices: Sequence[Dict[str, str]]
-) -> List[str]:
+    argv: Sequence[str], devices: Sequence[dict[str, str]]
+) -> list[str]:
     """Return the simulator devices that the job's arguments name.
 
     A job names a device when a ``-destination`` names it by ``id`` or by name,
-    or when an argument after ``simctl`` is exactly a device identifier or a
-    device name. A device identifier anywhere else, such as in an output path,
-    names nothing. A name with no OS names the newest runtime that has a device
+    or when ``simctl boot`` or ``simctl bootstatus -b`` is given exactly a device
+    identifier or a device name. Any other ``simctl`` subcommand names nothing,
+    and a device identifier anywhere else, such as in an output path, names
+    nothing. A name with no OS names the newest runtime that has a device
     of that name. A job that names no device is never credited with booting one.
     """
     named: set = set()
     for index, arg in enumerate(argv[:-1]):
         if arg != "-destination":
             continue
-        fields: Dict[str, str] = {}
+        fields: dict[str, str] = {}
         for part in str(argv[index + 1]).split(","):
             key, separator, value = part.partition("=")
             if separator:
@@ -2266,29 +2276,47 @@ def devices_named_by_job(
             continue
         if SIMULATOR_UDID_PATTERN.fullmatch(fields.get("id", "")):
             named.add(fields["id"].upper())
-        matches = [row for row in devices if fields.get("name") and row["name"] == fields["name"]]
-        requested = _version_numbers(fields.get("os", "")) if fields.get("os", "").lower() != "latest" else ()
-        named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, requested))
+        matches = [
+            row
+            for row in devices
+            if fields.get("name") and row["name"] == fields["name"]
+        ]
+        requested = (
+            _version_numbers(fields.get("os", ""))
+            if fields.get("os", "").lower() != "latest"
+            else ()
+        )
+        named.update(
+            row["udid"].upper() for row in _newest_runtime_matches(matches, requested)
+        )
     simctl_positions = [
-        index for index, arg in enumerate(argv) if os.path.basename(str(arg)) == "simctl"
+        index
+        for index, arg in enumerate(argv)
+        if os.path.basename(str(arg)) == "simctl"
     ]
     if simctl_positions:
-        for arg in argv[simctl_positions[0] + 1 :]:
-            if SIMULATOR_UDID_PATTERN.fullmatch(str(arg)):
-                named.add(str(arg).upper())
-            matches = [row for row in devices if row["name"] and row["name"] == str(arg)]
-            named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, ()))
+        arguments = [str(arg) for arg in argv[simctl_positions[0] + 1 :]]
+        subcommand = next((arg for arg in arguments if not arg.startswith("-")), "")
+        boots = subcommand == "boot" or (
+            subcommand == "bootstatus" and "-b" in arguments
+        )
+        if boots:
+            for arg in arguments[arguments.index(subcommand) + 1 :]:
+                if SIMULATOR_UDID_PATTERN.fullmatch(arg):
+                    named.add(arg.upper())
+                matches = [row for row in devices if row["name"] and row["name"] == arg]
+                named.update(
+                    row["udid"].upper() for row in _newest_runtime_matches(matches, ())
+                )
     return sorted(named)
 
 
 def simulator_process_rows(
     *, command_runner: Callable[[Sequence[str], float], str] = _run_native
-) -> List[Tuple[int, int, str]]:
+) -> list[tuple[int, int, str]]:
     """Return the process table rows for simulator processes and their parents."""
-    output = command_runner(
-        ["/bin/ps", "-axo", "pid=,ppid=,command="], NATIVE_TIMEOUT
-    )
-    rows: List[Tuple[int, int, str]] = []
+    output = command_runner(["/bin/ps", "-axo", "pid=,ppid=,command="], NATIVE_TIMEOUT)
+    rows: list[tuple[int, int, str]] = []
     for line in output.splitlines():
         parts = line.strip().split(None, 2)
         if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
@@ -2297,7 +2325,7 @@ def simulator_process_rows(
     return rows
 
 
-def _process_executable(pid: int) -> Optional[str]:
+def _process_executable(pid: int) -> str | None:
     """Return the executable path of a process, or None when it cannot be read."""
     if _LIBPROC is None:
         return None
@@ -2320,9 +2348,9 @@ def _simulator_candidate(command: str) -> bool:
 
 
 def simulator_device_owners(
-    rows: Sequence[Tuple[int, int, str]],
-    executable_reader: Callable[[int], Optional[str]] = _process_executable,
-) -> Dict[int, Optional[str]]:
+    rows: Sequence[tuple[int, int, str]],
+    executable_reader: Callable[[int], str | None] = _process_executable,
+) -> dict[int, str | None]:
     """Map each simulator process pid to the device that owns it.
 
     A process is a simulator process only when its own executable is the
@@ -2334,7 +2362,7 @@ def simulator_device_owners(
     whose executable cannot be read, is left out.
     """
     parents = {pid: ppid for pid, ppid, _ in rows}
-    executables: Dict[int, str] = {}
+    executables: dict[int, str] = {}
     for pid, _, command in rows:
         if not _simulator_candidate(command):
             continue
@@ -2346,7 +2374,7 @@ def simulator_device_owners(
         for pid, _, command in rows
         if "launchd_sim" in command and pid not in executables
     }
-    launchd: Dict[int, str] = {}
+    launchd: dict[int, str] = {}
     for pid, _, command in rows:
         executable = executables.get(pid)
         if executable is None or os.path.basename(executable) != "launchd_sim":
@@ -2354,7 +2382,7 @@ def simulator_device_owners(
         match = SIMULATOR_DEVICE_PATTERN.search(command)
         if match:
             launchd[pid] = match.group(1)
-    owners: Dict[int, Optional[str]] = {}
+    owners: dict[int, str | None] = {}
     for pid, ppid, _ in rows:
         executable = executables.get(pid)
         if executable is None:
@@ -2386,11 +2414,11 @@ def simulator_device_owners(
 
 
 def simulator_device_boot_epochs(
-    rows: Sequence[Tuple[int, int, str]],
-    executable_reader: Callable[[int], Optional[str]] = _process_executable,
-) -> Dict[str, float]:
+    rows: Sequence[tuple[int, int, str]],
+    executable_reader: Callable[[int], str | None] = _process_executable,
+) -> dict[str, float]:
     """Return the wall clock start time of each simulator device's launchd process."""
-    epochs: Dict[str, float] = {}
+    epochs: dict[str, float] = {}
     for pid, _, command in rows:
         if "launchd_sim" not in command:
             continue
@@ -2423,7 +2451,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _process_identity(pid: int) -> Optional[Tuple[int, str]]:
+def _process_identity(pid: int) -> tuple[int, str] | None:
     """Return the uid and start token of a process, or None when it cannot be read."""
     try:
         info = _native_process_info(pid)
@@ -2436,12 +2464,12 @@ def _process_identity(pid: int) -> Optional[Tuple[int, str]]:
 
 def _orphan_snapshot(
     *,
-    booted_reader: Callable[[], Dict[str, str]],
-    rows_reader: Callable[[], List[Tuple[int, int, str]]],
-    executable_reader: Callable[[int], Optional[str]],
-    identity_reader: Callable[[int], Optional[Tuple[int, str]]],
+    booted_reader: Callable[[], dict[str, str]],
+    rows_reader: Callable[[], list[tuple[int, int, str]]],
+    executable_reader: Callable[[int], str | None],
+    identity_reader: Callable[[int], tuple[int, str] | None],
     epoch_clock: Callable[[], float],
-) -> Dict[int, Tuple[Optional[str], Tuple[int, str]]]:
+) -> dict[int, tuple[str | None, tuple[int, str]]]:
     """Return the simulator processes that belong to no booted device.
 
     Each process comes with the uid and start token read right after the process
@@ -2451,7 +2479,7 @@ def _orphan_snapshot(
     taken = epoch_clock()
     booted = set(booted_reader())
     owners = simulator_device_owners(rows_reader(), executable_reader)
-    snapshot: Dict[int, Tuple[Optional[str], Tuple[int, str]]] = {}
+    snapshot: dict[int, tuple[str | None, tuple[int, str]]] = {}
     for pid, udid in sorted(owners.items()):
         if udid is not None and udid in booted:
             continue
@@ -2469,15 +2497,15 @@ def _orphan_snapshot(
 
 def stop_orphan_simulator_processes(
     *,
-    booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
-    rows_reader: Callable[[], List[Tuple[int, int, str]]] = simulator_process_rows,
+    booted_reader: Callable[[], dict[str, str]] = simulator_booted_devices,
+    rows_reader: Callable[[], list[tuple[int, int, str]]] = simulator_process_rows,
     kill: Callable[[int, int], None] = os.kill,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = monotonic,
-    identity_reader: Callable[[int], Optional[Tuple[int, str]]] = _process_identity,
-    executable_reader: Callable[[int], Optional[str]] = _process_executable,
+    identity_reader: Callable[[int], tuple[int, str] | None] = _process_identity,
+    executable_reader: Callable[[int], str | None] = _process_executable,
     epoch_clock: Callable[[], float] = time.time,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Stop simulator processes that belong to no booted device.
 
     A simulator process is an orphan when the device that owns it is not booted,
@@ -2513,22 +2541,20 @@ def stop_orphan_simulator_processes(
     targets = snapshot()
     if not targets:
         return {"stopped": 0, "devices": []}
-    groups: Dict[Optional[str], List[int]] = {}
+    groups: dict[str | None, list[int]] = {}
     for pid, (udid, _identity) in sorted(targets.items()):
         groups.setdefault(udid, []).append(pid)
     stopped = 0
-    devices: List[str] = []
+    devices: list[str] = []
     for udid in sorted(groups, key=lambda value: (value is None, value or "")):
         pids = sorted(groups[udid])
         fresh = snapshot()
         live = [
-            pid
-            for pid in pids
-            if pid in fresh and fresh[pid][1] == targets[pid][1]
+            pid for pid in pids if pid in fresh and fresh[pid][1] == targets[pid][1]
         ]
         if not live:
             continue
-        signalled: List[int] = []
+        signalled: list[int] = []
         for pid in live:
             verdict = revalidate(pid, udid, targets[pid][1])
             if verdict == "booting":
@@ -2585,7 +2611,7 @@ def _simulator_shutdown(udid: str) -> bool:
 
 
 def _device_used_by_other_job(
-    udid: str, boot_epoch: float, other_records: Sequence[Dict[str, Any]]
+    udid: str, boot_epoch: float, other_records: Sequence[dict[str, Any]]
 ) -> bool:
     """Return True when another running job may be using one simulator device."""
     for other in other_records:
@@ -2613,24 +2639,28 @@ def _device_used_by_other_job(
 
 
 def shutdown_simulators_booted_by_job(
-    record: Dict[str, Any],
+    record: dict[str, Any],
     *,
-    other_records: Sequence[Dict[str, Any]] = (),
-    other_records_reader: Optional[Callable[[], Sequence[Dict[str, Any]]]] = None,
-    booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
-    rows_reader: Callable[[], List[Tuple[int, int, str]]] = simulator_process_rows,
+    other_records: Sequence[dict[str, Any]] = (),
+    other_records_reader: Callable[[], Sequence[dict[str, Any]]] | None = None,
+    booted_reader: Callable[[], dict[str, str]] = simulator_booted_devices,
+    rows_reader: Callable[[], list[tuple[int, int, str]]] = simulator_process_rows,
     epochs_reader: Callable[
-        [Sequence[Tuple[int, int, str]]], Dict[str, float]
+        [Sequence[tuple[int, int, str]]], dict[str, float]
     ] = simulator_device_boot_epochs,
     shutdown: Callable[[str], bool] = _simulator_shutdown,
-) -> List[str]:
+) -> list[str]:
     """Shut down the simulator devices that one job booted.
 
     A device belongs to the job when the job's arguments name it, it was not
     booted when the job started, and its launchd process started while the job
-    ran. A job whose booted-device baseline is unknown, or whose record carries
-    no named devices, shuts nothing down. A device another running job may use is
-    left alone.
+    ran. A device with a live process outside the simulator infrastructure that
+    names its identifier, such as a viewer or a person's ``simctl`` command, is in
+    use by someone else and is left alone. The cleanup process and its parents do
+    not count, because their command line carries the job's own arguments. A job
+    whose booted-device baseline is unknown, or whose record carries no named
+    devices, shuts nothing down. A device another running job may use is left
+    alone.
     """
     simulators = record.get("simulators")
     if not isinstance(simulators, dict):
@@ -2645,7 +2675,7 @@ def shutdown_simulators_booted_by_job(
     named_devices = {str(value).upper() for value in named}
     booted = booted_reader()
     boot_epochs = epochs_reader(rows_reader())
-    stopped: List[str] = []
+    stopped: list[str] = []
     for udid in sorted(booted):
         if udid in set(booted_before) or udid.upper() not in named_devices:
             continue
@@ -2661,6 +2691,23 @@ def shutdown_simulators_booted_by_job(
         if _device_used_by_other_job(udid, epoch, competitors):
             continue
         if udid not in booted_reader():
+            continue
+        rows = rows_reader()
+        parents = {pid: ppid for pid, ppid, _ in rows}
+        own_chain = set()
+        current = os.getpid()
+        while current > 1 and current not in own_chain:
+            own_chain.add(current)
+            current = parents.get(current, 0)
+        needle = udid.lower()
+        if any(
+            needle in command.lower()
+            and pid not in own_chain
+            and "launchd_sim" not in command
+            and f"/coresimulator/devices/{needle}/" not in command.lower()
+            and ".simruntime/" not in command
+            for pid, _, command in rows
+        ):
             continue
         if shutdown(udid):
             stopped.append(udid)
@@ -2694,7 +2741,7 @@ def _attach_simulator_state(
     try:
         with registry.lock(name=SIMULATOR_LOCK_NAME, timeout=SIMULATOR_LOCK_TIMEOUT):
             try:
-                devices: Optional[List[Dict[str, str]]] = simulator_devices()
+                devices: list[dict[str, str]] | None = simulator_devices()
             except (HeavyError, OSError):
                 devices = None
             booted = (
@@ -2712,7 +2759,7 @@ def _attach_simulator_state(
                 "named": devices_named_by_job(argv, devices or []),
             }
 
-            def attach(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            def attach(current: dict[str, Any]) -> dict[str, Any] | None:
                 current["simulators"] = state
                 return current
 
@@ -2734,7 +2781,7 @@ def _mark_simulator_job(
     if not _is_simulator_job(command_basename, argv):
         return
 
-    def mark(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def mark(current: dict[str, Any]) -> dict[str, Any] | None:
         current["simulator_job"] = True
         return current
 
@@ -2742,7 +2789,7 @@ def _mark_simulator_job(
         registry.update(job_id, mark)
 
 
-def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[str]:
+def _cleanup_job_simulators(registry: Registry, record: dict[str, Any]) -> list[str]:
     """Shut down the simulators that one job booted and log the result once.
 
     The competing jobs are read again for every device. A registry read that
@@ -2792,9 +2839,9 @@ def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[
 def reap_dead_jobs(
     registry: Registry,
     *,
-    table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table,
+    table_reader: Callable[[], dict[int, ProcessInfo]] = process_table,
     boot_reader: Callable[[], str] = kernel_boot_identity,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Free the slot of every job whose supervisor process is gone.
 
     A supervisor is gone when its recorded pid, uid, and start token no longer
@@ -2802,7 +2849,7 @@ def reap_dead_jobs(
     slot is free on the next admission decision, and one event is logged.
     """
     boot_id = boot_reader()
-    reaped: List[Dict[str, Any]] = []
+    reaped: list[dict[str, Any]] = []
     with registry.lock():
         table = table_reader()
         for record in registry.records():
@@ -2843,7 +2890,7 @@ def reap_dead_jobs(
     return reaped
 
 
-def _normal_completion(workload: Dict[str, Any], deps: SupervisorDeps) -> bool:
+def _normal_completion(workload: dict[str, Any], deps: SupervisorDeps) -> bool:
     members = _safe_group_members(
         workload,
         table_reader=deps.process_table_reader,
@@ -2857,7 +2904,7 @@ def _normal_completion(workload: Dict[str, Any], deps: SupervisorDeps) -> bool:
 def _curtail_current(
     registry: Registry,
     job_id: str,
-    workload: Dict[str, Any],
+    workload: dict[str, Any],
     reason: str,
     deps: SupervisorDeps,
     workload_process: Any = None,
@@ -2904,7 +2951,7 @@ def _curtail_current(
     return success
 
 
-def _sample_invalid_reason(sample: Sample, now: float) -> Optional[str]:
+def _sample_invalid_reason(sample: Sample, now: float) -> str | None:
     if not isinstance(sample, Sample):
         return "telemetry-invalid"
     values = (
@@ -2948,7 +2995,7 @@ def _sample_invalid_reason(sample: Sample, now: float) -> Optional[str]:
 
 
 def _signal_owned_group(
-    identity: Dict[str, Any], signum: int, deps: SupervisorDeps
+    identity: dict[str, Any], signum: int, deps: SupervisorDeps
 ) -> bool:
     if (
         identity.get("uid") != os.getuid()
@@ -2977,9 +3024,9 @@ def _process_pause_identity(
     pid: int,
     task_key: str,
     boot_id: str,
-    table: Dict[int, ProcessInfo],
+    table: dict[int, ProcessInfo],
     uid: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     info = table.get(pid)
     if info is None or info.uid != uid:
         return None
@@ -2993,10 +3040,10 @@ def _process_pause_identity(
 
 
 def signal_verified_processes(
-    identities: Sequence[Dict[str, Any]],
+    identities: Sequence[dict[str, Any]],
     signum: int,
     deps: SupervisorDeps,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Send a signal to each process whose identity still matches the live process table.
 
     Args:
@@ -3012,8 +3059,8 @@ def signal_verified_processes(
         table = deps.process_table_reader()
     except Exception:
         return [], [item for item in identities if isinstance(item, dict)]
-    succeeded: List[Dict[str, Any]] = []
-    failed: List[Dict[str, Any]] = []
+    succeeded: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     for identity in identities:
         if not isinstance(identity, dict):
             continue
@@ -3038,8 +3085,8 @@ def signal_verified_processes(
 
 
 def resume_queue_agent_pause(
-    record: Dict[str, Any], deps: SupervisorDeps
-) -> Tuple[bool, List[Dict[str, Any]]]:
+    record: dict[str, Any], deps: SupervisorDeps
+) -> tuple[bool, list[dict[str, Any]]]:
     """Send SIGCONT to the agent processes paused for a queued job.
 
     Args:
@@ -3062,7 +3109,7 @@ def resume_queue_agent_pause(
 
 def _request_global_pause(
     registry: Registry, reason: str, deps: SupervisorDeps, *, urgent: bool = False
-) -> Optional[str]:
+) -> str | None:
     if urgent:
         requested = []
         with registry.lock():
@@ -3077,7 +3124,7 @@ def _request_global_pause(
                     continue
                 job_id = current["job_id"]
 
-                def mark(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                def mark(record: dict[str, Any]) -> dict[str, Any] | None:
                     if record.get("state") != "running" or _workload_identity(
                         record
                     ) != _workload_identity(current):
@@ -3151,7 +3198,7 @@ def _request_global_pause(
         job_id = target["job_id"]
         selection = "ordinary-before-review" if ordinary else "review-fallback"
 
-        def record_pause_slot(current: Dict[str, Any]) -> Dict[str, Any]:
+        def record_pause_slot(current: dict[str, Any]) -> dict[str, Any]:
             current["last_pause_request_ns"] = now_ns
             current["last_pause_boot_id"] = boot_id
             current["last_pause_job_id"] = job_id
@@ -3160,7 +3207,7 @@ def _request_global_pause(
 
         registry.update(PROTOCOL_RECORD_ID, record_pause_slot)
 
-        def request(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        def request(record: dict[str, Any]) -> dict[str, Any] | None:
             if (
                 record.get("state") != "running"
                 or _workload_identity(record) != _workload_identity(target)
@@ -3196,7 +3243,7 @@ def _request_global_pause(
     return changed["job_id"]
 
 
-def request_critical_pauses() -> List[str]:
+def request_critical_pauses() -> list[str]:
     """Request pauses for workloads under critical pressure and return their job ids."""
     registry = Registry(state_directory())
     registry.ensure_protocol()
@@ -3211,7 +3258,7 @@ def request_critical_pauses() -> List[str]:
 
 
 def _apply_pause_request(
-    registry: Registry, job_id: str, workload: Dict[str, Any], deps: SupervisorDeps
+    registry: Registry, job_id: str, workload: dict[str, Any], deps: SupervisorDeps
 ) -> bool:
     changed = None
     with registry.lock():
@@ -3227,7 +3274,7 @@ def _apply_pause_request(
         if not _signal_owned_group(workload, signal.SIGSTOP, deps):
             return False
 
-        def mark_paused(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        def mark_paused(record: dict[str, Any]) -> dict[str, Any] | None:
             current_pause = record.get("pause") or {}
             if (
                 _workload_identity(record) != workload
@@ -3261,7 +3308,7 @@ def _apply_pause_request(
 def _resume_current(
     registry: Registry,
     job_id: str,
-    workload: Dict[str, Any],
+    workload: dict[str, Any],
     sample: Sample,
     deps: SupervisorDeps,
 ) -> bool:
@@ -3310,8 +3357,11 @@ def _resume_current(
             active_count += legacy_count
             queues = _prune_queue_records_locked(registry, table, boot_id)
             if not _role_slot_available(
-                current.get("role", "ordinary"), active_records, queues,
-                slot_limit, legacy_count,
+                current.get("role", "ordinary"),
+                active_records,
+                queues,
+                slot_limit,
+                legacy_count,
             ):
                 return False
         except Exception:
@@ -3321,7 +3371,7 @@ def _resume_current(
         ):
             return False
 
-        def mark_running(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        def mark_running(record: dict[str, Any]) -> dict[str, Any] | None:
             if (
                 _workload_identity(record) != workload
                 or (record.get("pause") or {}).get("status") != "paused"
@@ -3351,7 +3401,7 @@ def _resume_current(
 def _supervise_running(
     registry: Registry,
     job_id: str,
-    record: Dict[str, Any],
+    record: dict[str, Any],
     workload_process: Any,
     watchdog: Any,
     deps: SupervisorDeps,
@@ -3361,11 +3411,11 @@ def _supervise_running(
     workload = _workload_identity(record)
     if workload is None:
         raise HeavyError("workload identity missing")
-    pressure_since: Optional[float] = None
-    healthy_since: Optional[float] = None
-    last_pause_retry: Optional[float] = None
-    last_resume_retry: Optional[float] = None
-    root_exit_code: Optional[int] = None
+    pressure_since: float | None = None
+    healthy_since: float | None = None
+    last_pause_retry: float | None = None
+    last_resume_retry: float | None = None
+    root_exit_code: int | None = None
     while True:
         if watchdog is not None and watchdog.poll() is not None:
             _curtail_current(
@@ -3511,7 +3561,7 @@ def _launch_job(
     registry: Registry,
     deps: SupervisorDeps,
     role: str = "ordinary",
-    project_key: Optional[str] = None,
+    project_key: str | None = None,
     stop_event: Callable[[], bool] = lambda: False,
 ) -> int:
     started = deps.clock()
@@ -3569,7 +3619,7 @@ def _launch_job(
         if not reserved:
             with registry.lock():
                 registry.remove_queue(queue_id)
-    record: Dict[str, Any] = {}
+    record: dict[str, Any] = {}
     workload_process = None
     watchdog = None
     open_gate = None
@@ -3704,7 +3754,7 @@ def watchdog_loop(
     *,
     clock_ns: Callable[[], int] = monotonic_ns,
     sleep: Callable[[float], None] = time.sleep,
-    table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table,
+    table_reader: Callable[[], dict[int, ProcessInfo]] = process_table,
     boot_reader: Callable[[], str] = kernel_boot_identity,
     terminate: Callable[..., bool] = terminate_owned_group,
 ) -> int:
@@ -3836,8 +3886,8 @@ def watchdog_loop(
 
 
 def _watchdog_takeover_record(
-    record: Dict[str, Any], workload: Dict[str, Any], claimant_pid: int
-) -> Optional[Dict[str, Any]]:
+    record: dict[str, Any], workload: dict[str, Any], claimant_pid: int
+) -> dict[str, Any] | None:
     if _workload_identity(record) != workload or not record.get("termination"):
         return None
     termination = record["termination"]
@@ -3849,8 +3899,8 @@ def _watchdog_takeover_record(
 
 
 def _takeover_termination(
-    registry: Registry, job_id: str, workload: Dict[str, Any], claimant_pid: int
-) -> Optional[Dict[str, Any]]:
+    registry: Registry, job_id: str, workload: dict[str, Any], claimant_pid: int
+) -> dict[str, Any] | None:
     with registry.lock():
         return registry.update(
             job_id,
@@ -3862,9 +3912,7 @@ def _watchdog_main(job_id: str) -> int:
     return watchdog_loop(job_id, Registry(state_directory()))
 
 
-def _project_build_args(
-    argv: Sequence[str], cwd: str
-) -> Tuple[List[str], Optional[str]]:
+def _project_build_args(argv: Sequence[str], cwd: str) -> tuple[list[str], str | None]:
     if not argv or os.path.basename(argv[0]) != "xcodebuild":
         return list(argv), None
     project_path = None
@@ -3901,13 +3949,13 @@ def _project_build_args(
 
 def _acquire_project_lock(
     registry: Registry,
-    project_key: Optional[str],
+    project_key: str | None,
     *,
     clock: Callable[[], float],
     sleep: Callable[[float], None],
     stop_event: Callable[[], bool],
-    heartbeat: Optional[Callable[[], None]] = None,
-) -> Optional[int]:
+    heartbeat: Callable[[], None] | None = None,
+) -> int | None:
     if project_key is None:
         return None
     digest = hashlib.sha256(project_key.encode("utf-8")).hexdigest()[:24]
@@ -3946,10 +3994,10 @@ def _acquire_project_lock(
 def run_supervisor(
     argv: Sequence[str],
     *,
-    registry: Optional[Registry] = None,
-    task_key: Optional[str] = None,
-    task_id: Optional[str] = None,
-    deps: Optional[SupervisorDeps] = None,
+    registry: Registry | None = None,
+    task_key: str | None = None,
+    task_id: str | None = None,
+    deps: SupervisorDeps | None = None,
     role: str = "ordinary",
     stop_event: Callable[[], bool] = lambda: False,
 ) -> int:
@@ -3989,7 +4037,7 @@ def _safe_registry_for_cli() -> Registry:
     return registry
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Run the heavy command line and return the process exit code."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     if argv is None and not sys.flags.isolated:
@@ -4021,7 +4069,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         environment_role = os.environ.get("HEAVY_ROLE", "").strip().lower()
         if environment_role not in ("", "ordinary", "build", "test", "review"):
             raise HeavyError("HEAVY_ROLE must be review or ordinary")
-        role = "deploy" if role_flag == "--deploy" else "review" if role_flag == "--review" or environment_role == "review" else "ordinary"
+        role = (
+            "deploy"
+            if role_flag == "--deploy"
+            else "review"
+            if role_flag == "--review" or environment_role == "review"
+            else "ordinary"
+        )
         if role_flag and arguments[:1] in (["status"], ["request-curtail"]):
             raise HeavyError("priority role requires a workload command")
         registry = _safe_registry_for_cli()
@@ -4080,7 +4134,7 @@ def sample_with_emergency(
     clock: Callable[[], float] = monotonic,
 ) -> Sample:
     """Sample host telemetry, attaching a partial sample to the error when a full one fails."""
-    captured: Dict[str, str] = {}
+    captured: dict[str, str] = {}
 
     def capture(argv: Sequence[str], timeout: float) -> str:
         output = command_runner(argv, timeout)
