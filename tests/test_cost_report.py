@@ -99,6 +99,33 @@ def _session_file(
     return path
 
 
+def _attribution(
+    session_id: str,
+    cost: float,
+    number: int,
+    day: str,
+    repo: str = "shyamsivakumar/mac-ops",
+    title: str | None = None,
+) -> cost_report.SessionAttribution:
+    """An attributed session for the window tests."""
+    session = cost_report.SessionCost(
+        session_id=session_id,
+        path=f"/tmp/{session_id}.jsonl",
+        pi_home="/tmp",
+        cwd="/tmp",
+        name=None,
+        cost_usd=cost,
+        day=day,
+    )
+    return cost_report.SessionAttribution(
+        session=session,
+        repo=repo,
+        pr_number=number,
+        pr_title=title,
+        pr_merged_at="2026-11-14T02:14:35Z" if number == 259 else None,
+    )
+
+
 class CostReportTests(unittest.TestCase):
     def test_read_session_sums_usage_cost_and_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -226,6 +253,112 @@ class CostReportTests(unittest.TestCase):
         )
         self.assertEqual(report["pr_count"], 1)
         self.assertAlmostEqual(report["cost_per_pr_usd"], 2.0)
+
+    def test_a_pull_request_opened_after_the_session_is_not_its_pull_request(self):
+        session = SessionCost(
+            session_id="s4",
+            path="/tmp/s4.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 · a ticket that had two pull requests",
+            started_at="2026-11-13T12:00:00Z",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 900,
+                "title": "a later fix for the same ticket",
+                "body": "Refs #482",
+                "headRefName": "t3/later",
+                "state": "OPEN",
+                "createdAt": "2026-11-18T00:00:00Z",
+                "mergedAt": None,
+            },
+            {
+                "number": 487,
+                "title": "the pull request the session worked on",
+                "body": "Refs #482",
+                "headRefName": "t3/earlier",
+                "state": "MERGED",
+                "createdAt": "2026-11-12T00:00:00Z",
+                "mergedAt": "2026-11-17T18:14:00Z",
+            },
+        ]
+        out = attribute(session, index, repo=REPO)
+        self.assertEqual(out.pr_number, 487)
+        self.assertEqual(out.kind, "ticket")
+
+    def test_a_session_with_no_pull_request_yet_stays_unattributed(self):
+        session = SessionCost(
+            session_id="s5",
+            path="/tmp/s5.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 · a ticket whose pull request came later",
+            started_at="2026-11-13T12:00:00Z",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 900,
+                "title": "a later fix for the same ticket",
+                "body": "Refs #482",
+                "headRefName": "t3/later",
+                "state": "OPEN",
+                "createdAt": "2026-11-18T00:00:00Z",
+                "mergedAt": None,
+            }
+        ]
+        out = attribute(session, index, repo=REPO)
+        self.assertIsNone(out.pr_number)
+        self.assertIn("existed when the session ran", out.reason)
+
+    def test_the_window_mean_counts_every_pull_request(self):
+        summary = cost_report._window_summary(
+            [
+                _attribution("a", 1.0, 1, "2026-11-10"),
+                _attribution("b", 3.0, 2, "2026-11-10"),
+                _attribution("c", 0.0, 3, "2026-11-10"),
+            ],
+            "shyamsivakumar/mac-ops",
+            ["2026-11-10"],
+        )
+        self.assertEqual(summary["prs"], 3)
+        self.assertAlmostEqual(summary["total_cost_usd"], 4.0)
+        self.assertAlmostEqual(summary["mean_cost_per_pr_usd"], 4.0 / 3)
+
+    def test_the_before_and_after_windows_use_local_days(self):
+        merge = "2026-11-14T02:14:35Z"  # 2026-11-13 18:14 in Los Angeles
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 259,
+                "title": "Refactor the refill log",
+                "body": "",
+                "headRefName": "t3/refill",
+                "state": "MERGED",
+                "createdAt": "2026-11-13T00:00:00Z",
+                "mergedAt": merge,
+            }
+        ]
+        attributions = [
+            _attribution("a", 1.0, 259, "2026-11-13", title="Refactor the refill log"),
+            _attribution("b", 2.0, 260, "2026-11-14"),
+        ]
+        rows = cost_report.refactor_comparison(
+            attributions,
+            index,
+            before_days=2,
+            after_days=2,
+            collected_days=["2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15"],
+        )
+        self.assertEqual(len(rows), 1)
+        # The merge is 2026-11-13 18:14 in Los Angeles, so the days before it
+        # are 2026-11-11 and 2026-11-12, and the days after it are 2026-11-14
+        # and 2026-11-15. A UTC window would have skipped 2026-11-14.
+        self.assertIn("2026-11-12", rows[0]["before"]["days"])
+        self.assertIn("2026-11-14", rows[0]["after"]["days"])
+        self.assertNotIn("2026-11-13", rows[0]["before"]["days"])
 
     def test_refactor_is_read_from_the_title(self):
         self.assertTrue(is_refactor("Rename the lane driver module"))
