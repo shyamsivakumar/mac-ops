@@ -123,10 +123,10 @@ TURN_CAP_JOB = "dev.coordinator.turncap"
 # The jobs the coordinator retired. A retired job has no plist in the
 # repository, so the installer must also take the installed copy away and
 # unload the running job: otherwise the job stays loaded and keeps
-# running. No job is retired now: the pi tick is back (MO-250, mac-ops
-# #267), it runs on DeepSeek and it leaves board intake to the shift and
-# to `coordq`'s refill.
-RETIRED_JOBS: tuple[str, ...] = ()
+# running. dev.coordinator.overnight ran the same `overnight shift` as
+# dev.coordinator.lanes; the lanes job is kept because the lane watchdog and
+# the tick check its label and lanes.log.
+RETIRED_JOBS: tuple[str, ...] = ("dev.coordinator.overnight",)
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
 # queue here: the board is the list.

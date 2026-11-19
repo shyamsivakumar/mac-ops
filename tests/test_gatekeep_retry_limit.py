@@ -157,6 +157,22 @@ class FirstRetryTest(RetryLimitBase):
         self.assertEqual(len(self.gate_items()), 1)
         self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
 
+    def test_a_given_up_head_costs_no_per_pull_request_read(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 2, "at": None, "givenUp": True}})
+        reads = []
+        original = coordq.gh_json
+        coordq.gh_json = lambda endpoint, *a, **k: (reads.append(endpoint), original(endpoint))[1]
+        self.run_gatekeep(dry_run=True)
+        self.assertEqual(reads, [f"repos/{REPO}/pulls?state=open&per_page=100"])
+
+    def test_a_retryable_head_keeps_its_per_pull_request_reads(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 0, "at": None, "givenUp": False}})
+        reads = []
+        original = coordq.gh_json
+        coordq.gh_json = lambda endpoint, *a, **k: (reads.append(endpoint), original(endpoint))[1]
+        self.run_gatekeep(dry_run=True)
+        self.assertIn(f"repos/{REPO}/issues/9/comments?per_page=100", reads)
+
     def test_a_gate_that_never_ran_is_queued_once(self):
         self.write_queue()
         out, _ = self.run_gatekeep()

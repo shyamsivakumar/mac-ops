@@ -708,6 +708,7 @@ def run(
     command = " ".join(argv)
     hit = gh_gateway.cached(argv)
     if hit is not None:
+        gh_gateway.record(argv, 1, free="hit")
         return hit
     # A formatted paginated read counts its pages from the response headers,
     # so the command may carry --include; the caller still gets the body it
@@ -1445,6 +1446,36 @@ def release_shift_lock(fd: int) -> None:
 
 
 def cmd_shift(args: argparse.Namespace) -> int:
+    """Run one cycle of the shift under the shift's own lock.
+
+    The lock comes before the board read, so a cycle that starts while
+    another cycle runs exits without a single GitHub call. Two cycles never
+    run at once, whatever starts them: the job fires every three minutes
+    and a person can start a cycle by hand while the job's cycle runs."""
+    if args.dry_run:
+        return shift_cycle(args)
+    lock_fd, lock_problem = take_shift_lock()
+    stamp = datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z")
+    if lock_fd is None:
+        if lock_problem:
+            emit(
+                f"overnight: {stamp} REFUSED: {lock_problem}; the cycle "
+                "wrote no receipt",
+                err=True,
+            )
+            return 1
+        emit(
+            f"overnight: {stamp} another cycle holds the lock, so this "
+            "cycle did no work"
+        )
+        return 0
+    try:
+        return shift_cycle(args)
+    finally:
+        release_shift_lock(lock_fd)
+
+
+def shift_cycle(args: argparse.Namespace) -> int:
     """Run one cycle of the shift.
 
     The shift is never unarmed and has no deadline (spec revision 3): a
@@ -1585,66 +1616,44 @@ def cmd_shift(args: argparse.Namespace) -> int:
         mode = "manual-merge" if lane_driver.merge_mode(repo, {}) in ("manual", "ascend") else "allowed"
         emit(f"overnight: lane {repo}: {mode}")
     lane_driver.LANE_REPOS = selected
-    if not args.dry_run:
-        # The shift's own lock: two cycles never run at once, whatever
-        # starts them. The job fires every five minutes and a cycle takes
-        # about a minute and a half, so the next fire lands long after
-        # this cycle ends. The lock covers the case where a person starts
-        # a cycle by hand while the job's cycle runs.
-        lock_fd, lock_problem = take_shift_lock()
-        if lock_fd is None:
-            if lock_problem:
-                emit(
-                    f"overnight: {stamp} REFUSED: {lock_problem}; the cycle "
-                    "wrote no receipt",
-                    err=True,
-                )
-                return 1
-            emit(
-                f"overnight: {stamp} another cycle holds the lock, so this "
-                "cycle did no work"
+    if args.dry_run:
+        emit(f"overnight: {stamp} shift cycle (dry run, read only)")
+        return cmd_order(
+            argparse.Namespace(
+                dry_run=True,
+                root=args.root,
+                deadline=left,
+                allowed=allowed,
             )
-            return 0
-        try:
-            lane_driver.print = emit
-            # The shift measures the items against the state it kept, so
-            # the pass knows how long each item has been idle.
-            lane_driver.STALL_STATE = load_stall_state(root)
-            try:
-                lane_driver.main()
-            finally:
-                # The stall records of this pass are written even when the
-                # pass failed an item: a reported stall and a stalled board
-                # are the shift's own findings, not a side effect of the
-                # pass's success. The records come before the state is
-                # saved, so the state says the alert was delivered only
-                # after it was delivered.
-                try:
-                    for line in stall_records(
-                        root, lane_driver.STALL_EVENTS, None, lane_driver.STALL_STATE
-                    ):
-                        emit(f"overnight: {line}")
-                finally:
-                    save_stall_state(root, lane_driver.STALL_STATE)
-            write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
-            # Part T10: the cycle parks what it cannot decide and logs what
-            # it found. A pending request is parked with its exact text and
-            # is never answered.
-            park_cycle(root, started + args.deadline)
-            if report_cycle:
-                return write_morning_report(root)
-            return 0
-        finally:
-            release_shift_lock(lock_fd)
-    emit(f"overnight: {stamp} shift cycle (dry run, read only)")
-    return cmd_order(
-        argparse.Namespace(
-            dry_run=True,
-            root=args.root,
-            deadline=left,
-            allowed=allowed,
         )
-    )
+    lane_driver.print = emit
+    # The shift measures the items against the state it kept, so
+    # the pass knows how long each item has been idle.
+    lane_driver.STALL_STATE = load_stall_state(root)
+    try:
+        lane_driver.main()
+    finally:
+        # The stall records of this pass are written even when the
+        # pass failed an item: a reported stall and a stalled board
+        # are the shift's own findings, not a side effect of the
+        # pass's success. The records come before the state is
+        # saved, so the state says the alert was delivered only
+        # after it was delivered.
+        try:
+            for line in stall_records(
+                root, lane_driver.STALL_EVENTS, None, lane_driver.STALL_STATE
+            ):
+                emit(f"overnight: {line}")
+        finally:
+            save_stall_state(root, lane_driver.STALL_STATE)
+    write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
+    # Part T10: the cycle parks what it cannot decide and logs what
+    # it found. A pending request is parked with its exact text and
+    # is never answered.
+    park_cycle(root, started + args.deadline)
+    if report_cycle:
+        return write_morning_report(root)
+    return 0
 
 
 def load_stall_state(root: Path) -> dict:
@@ -4356,6 +4365,7 @@ def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
         die("the attended night ran out of time before the next command could run")
     hit = gh_gateway.cached(argv)
     if hit is not None:
+        gh_gateway.record(argv, 1, free="hit")
         return 0, hit
     run_argv, headers_counted = gh_gateway.prepare(argv)
     try:
