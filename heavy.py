@@ -24,7 +24,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 
 GIB = 1024**3
@@ -73,6 +73,9 @@ SIMULATOR_DEVICE_PATTERN = re.compile(
 )
 SIMULATOR_RUNTIME_PATTERN = re.compile(r"/([^/]+\.simruntime)/")
 SIMULATOR_JOB_COMMANDS = ("xcodebuild", "simctl")
+XCRUN_OPTIONS_WITH_VALUE = ("-sdk", "--sdk", "-toolchain", "--toolchain")
+SIMULATOR_PENDING_NAME = "simulators-pending.json"
+PENDING_BOOT_TOLERANCE = 1.0
 
 
 def monotonic_ns() -> int:
@@ -2163,18 +2166,40 @@ def _stop_watchdog(watchdog: Any) -> None:
             pass
 
 
-def _is_simulator_job(command_basename: str, argv: Sequence[str]) -> bool:
-    """Return True when the job may boot simulators.
+def _simulator_tool_index(argv: Sequence[str]) -> Optional[int]:
+    """Return the index in argv of the ``xcodebuild`` or ``simctl`` executable the job runs.
 
-    The command heavy runs can wrap the real tool, as in ``xcrun xcodebuild``
-    or ``xcrun simctl``. The wrapper's name says nothing, so the arguments
-    decide as well: a job that runs ``xcodebuild`` or ``simctl`` in any
-    argument is a simulator job.
+    The executable is argv[0], or the tool that ``xcrun`` runs after its own
+    options. A ``xcrun`` lookup such as ``--find`` or ``--show-sdk-path`` runs no
+    tool. A tool name given as an argument to any other command is not run by
+    the job, so it never counts.
     """
-    if command_basename in SIMULATOR_JOB_COMMANDS:
-        return True
-    return any(
-        os.path.basename(str(arg)) in SIMULATOR_JOB_COMMANDS for arg in argv
+    if not argv:
+        return None
+    first = os.path.basename(str(argv[0]))
+    if first in SIMULATOR_JOB_COMMANDS:
+        return 0
+    if first != "xcrun":
+        return None
+    index = 1
+    while index < len(argv):
+        arg = str(argv[index])
+        if arg in ("-f", "--find") or arg.startswith("--show-"):
+            return None
+        if arg in XCRUN_OPTIONS_WITH_VALUE:
+            index += 2
+        elif arg.startswith("-"):
+            index += 1
+        else:
+            return index if os.path.basename(arg) in SIMULATOR_JOB_COMMANDS else None
+    return None
+
+
+def _is_simulator_job(command_basename: str, argv: Sequence[str]) -> bool:
+    """Return True when the job runs ``xcodebuild`` or ``simctl``, directly or through ``xcrun``."""
+    return (
+        command_basename in SIMULATOR_JOB_COMMANDS
+        or _simulator_tool_index(argv) is not None
     )
 
 
@@ -2278,11 +2303,9 @@ def devices_named_by_job(
         matches = [row for row in devices if fields.get("name") and row["name"] == fields["name"]]
         requested = _version_numbers(fields.get("os", "")) if fields.get("os", "").lower() != "latest" else ()
         named.update(row["udid"].upper() for row in _newest_runtime_matches(matches, requested))
-    simctl_positions = [
-        index for index, arg in enumerate(argv) if os.path.basename(str(arg)) == "simctl"
-    ]
-    if simctl_positions:
-        arguments = [str(arg) for arg in argv[simctl_positions[0] + 1 :]]
+    tool_index = _simulator_tool_index(argv)
+    if tool_index is not None and os.path.basename(str(argv[tool_index])) == "simctl":
+        arguments = [str(arg) for arg in argv[tool_index + 1 :]]
         subcommand = next((arg for arg in arguments if not arg.startswith("-")), "")
         boots = subcommand == "boot" or (subcommand == "bootstatus" and "-b" in arguments)
         if boots:
@@ -2636,6 +2659,7 @@ def shutdown_simulators_booted_by_job(
         [Sequence[Tuple[int, int, str]]], Dict[str, float]
     ] = simulator_device_boot_epochs,
     shutdown: Callable[[str], bool] = _simulator_shutdown,
+    pending: Optional[MutableMapping[str, float]] = None,
 ) -> List[str]:
     """Shut down the simulator devices that one job booted.
 
@@ -2648,26 +2672,48 @@ def shutdown_simulators_booted_by_job(
     whose booted-device baseline is unknown, or whose record carries no named
     devices, shuts nothing down. A device another running job may use is left
     alone.
+
+    ``pending`` maps a device identifier to the boot time of a device whose
+    owner finished while another running job may still use it. This call adds
+    the job's own deferred devices to it. It also shuts down a pending device,
+    whatever the job's own baseline says, once no other running job may use it,
+    so the last job to release a device shuts it down. A pending device that is
+    no longer booted, that booted again since it was recorded, that someone
+    else uses, or that was shut down, leaves ``pending``.
     """
+    pending = {} if pending is None else pending
+    booted_before: set = set()
+    named_devices: set = set()
+    started_at = 0.0
     simulators = record.get("simulators")
-    if not isinstance(simulators, dict):
+    if isinstance(simulators, dict):
+        before = simulators.get("booted")
+        began = simulators.get("started_at")
+        named = simulators.get("named")
+        if (
+            isinstance(before, list)
+            and isinstance(began, (int, float))
+            and not isinstance(began, bool)
+            and isinstance(named, list)
+        ):
+            booted_before = set(before)
+            started_at = float(began)
+            named_devices = {str(value).upper() for value in named}
+    if not named_devices and not pending:
         return []
-    booted_before = simulators.get("booted")
-    started_at = simulators.get("started_at")
-    if not isinstance(booted_before, list) or not isinstance(started_at, (int, float)):
-        return []
-    named = simulators.get("named")
-    if isinstance(started_at, bool) or not isinstance(named, list):
-        return []
-    named_devices = {str(value).upper() for value in named}
     booted = booted_reader()
     boot_epochs = epochs_reader(rows_reader())
     stopped: List[str] = []
     for udid in sorted(booted):
-        if udid in set(booted_before) or udid.upper() not in named_devices:
-            continue
+        key = udid.upper()
         epoch = boot_epochs.get(udid)
-        if epoch is None or epoch < float(started_at):
+        if epoch is None:
+            continue
+        if key in pending:
+            if abs(epoch - pending[key]) > PENDING_BOOT_TOLERANCE:
+                del pending[key]
+                continue
+        elif udid in booted_before or key not in named_devices or epoch < started_at:
             continue
         competitors = list(other_records)
         if other_records_reader is not None:
@@ -2676,7 +2722,9 @@ def shutdown_simulators_booted_by_job(
             except Exception:
                 return []
         if _device_used_by_other_job(udid, epoch, competitors):
+            pending[key] = epoch
             continue
+        pending.pop(key, None)
         if udid not in booted_reader():
             continue
         rows = rows_reader()
@@ -2698,6 +2746,9 @@ def shutdown_simulators_booted_by_job(
             continue
         if shutdown(udid):
             stopped.append(udid)
+    booted_keys = {udid.upper() for udid in booted}
+    for key in [key for key in pending if key not in booted_keys]:
+        del pending[key]
     return stopped
 
 
@@ -2776,6 +2827,40 @@ def _mark_simulator_job(
         registry.update(job_id, mark)
 
 
+def _read_pending_simulators(directory: Path) -> Dict[str, float]:
+    try:
+        value = json.loads((directory / SIMULATOR_PENDING_NAME).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key.upper(): float(epoch)
+        for key, epoch in value.items()
+        if isinstance(key, str)
+        and isinstance(epoch, (int, float))
+        and not isinstance(epoch, bool)
+    }
+
+
+def _write_pending_simulators(directory: Path, pending: Dict[str, float]) -> None:
+    target = directory / SIMULATOR_PENDING_NAME
+    if not pending:
+        try:
+            os.unlink(str(target))
+        except FileNotFoundError:
+            pass
+        return
+    temp = directory / (".simulators-pending-" + uuid.uuid4().hex + ".tmp")
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(temp), flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(pending, handle, sort_keys=True)
+    os.replace(str(temp), str(target))
+
+
 def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[str]:
     """Shut down the simulators that one job booted and log the result once.
 
@@ -2784,8 +2869,12 @@ def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[
     shut down because the registry could not be read. The whole decision and the
     shutdown run under the simulator lock, so a job cannot take a device between
     the check and the shutdown.
+
+    A device the job booted, that another running job still may use, stays on
+    and is kept in the pending file of the registry. Every simulator job that
+    ends checks that file, so the last job to release the device shuts it down.
     """
-    if not isinstance(record.get("simulators"), dict):
+    if not isinstance(record.get("simulators"), dict) and record.get("simulator_job") is not True:
         return []
 
     def competing_records():
@@ -2799,9 +2888,13 @@ def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[
 
     try:
         with registry.lock(name=SIMULATOR_LOCK_NAME, timeout=SIMULATOR_LOCK_TIMEOUT):
+            pending = _read_pending_simulators(registry.directory)
+            before = dict(pending)
             stopped = shutdown_simulators_booted_by_job(
-                record, other_records_reader=competing_records
+                record, other_records_reader=competing_records, pending=pending
             )
+            if pending != before:
+                _write_pending_simulators(registry.directory, pending)
     except Exception:
         return []
     if stopped:
