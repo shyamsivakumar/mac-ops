@@ -1205,6 +1205,8 @@ def merge_pass(repo, ledger):
         if skip:
             ledger[settled] = skip
             continue
+        if gate_verdict(repo, number, head, pr["baseRefName"])[0] != "PASS":
+            continue
         found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
         wait = f"merge-wait:{repo}#{number}:{head}"
         ledger[wait] = ledger.get(wait, 0) + 1
@@ -1216,6 +1218,18 @@ def merge_pass(repo, ledger):
             ledger[settled] = note
             if ledger.pop(wait) >= MERGE_WAIT_PASSES:
                 withdraw_decision(merge_wait_item(repo, number, head, 0)["id"])
+
+
+def restrict_merge_repos(allowed):
+    global MERGE_REPOS
+    MERGE_REPOS = [repo for repo in MERGE_REPOS if allowed is None or repo in allowed]
+
+
+def merge_passes(ledger):
+    for repo in MERGE_REPOS:
+        if repo not in gate_policy.LANE_REPOS:
+            with item_boundary(repo, "merge-pass", ledger):
+                merge_pass(repo, ledger)
 
 
 def act_on_pr(repo, number, ledger):
@@ -2191,10 +2205,7 @@ def run_pass(ledger):
             elif not done and not b:
                 print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
 
-    for repo in MERGE_REPOS:
-        if repo not in gate_policy.LANE_REPOS:
-            with item_boundary(repo, "merge-pass", ledger):
-                merge_pass(repo, ledger)
+    merge_passes(ledger)
 
     if item_failure_summary(ledger):
         raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures")
