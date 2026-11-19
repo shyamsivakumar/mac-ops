@@ -1737,7 +1737,8 @@ def _prune_finished_locked(
     table: Dict[int, ProcessInfo],
     snapshot_started_ns: int,
     boot_id: str,
-) -> None:
+) -> int:
+    removed = 0
     for record in records:
         supervisor = record.get("supervisor")
         if not isinstance(supervisor, dict):
@@ -1749,12 +1750,40 @@ def _prune_finished_locked(
             raise HeavyError("registry boot identity is invalid")
         if recorded_boot != boot_id:
             registry.remove(record["job_id"])
+            removed += 1
             continue
         if int(record.get("created_ns", 0)) >= snapshot_started_ns:
             continue
         alive, supervisor_alive = _record_live(record, table)
         if not alive and not supervisor_alive:
+            if record.get("state") not in ("complete", "removed"):
+                _log_event(
+                    registry.directory,
+                    "job-dead",
+                    record,
+                    detail="supervisor process is gone",
+                )
             registry.remove(record["job_id"])
+            removed += 1
+    return removed
+
+
+def reap_dead_jobs(registry: Optional[Registry] = None) -> int:
+    if registry is None:
+        registry = Registry(state_directory())
+    snapshot_started_ns = monotonic_ns()
+    boot_id = kernel_boot_identity()
+    table = process_table()
+    with registry.lock():
+        records = [
+            record
+            for record in registry.records()
+            if isinstance(record.get("supervisor"), dict)
+            and record["supervisor"].get("boot_id") == boot_id
+        ]
+        return _prune_finished_locked(
+            registry, records, table, snapshot_started_ns, boot_id
+        )
 
 
 @dataclass
