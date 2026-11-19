@@ -720,6 +720,7 @@ def run(
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
+            env=gh_gateway.gateway_env(),
         )
     except FileNotFoundError:
         die(f"{argv[0]} is not on PATH")
@@ -4364,6 +4365,7 @@ def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
             text=True,
             timeout=max(1, min(timeout, int(left))),
             check=False,
+            env=gh_gateway.gateway_env(),
         )
     except FileNotFoundError:
         die(f"{argv[0]} is not on PATH")
