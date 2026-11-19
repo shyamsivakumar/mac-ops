@@ -4,18 +4,24 @@ import unittest
 C = runpy.run_path('coordinator/bin/coordq')
 
 
+def review_selection(entry_id):
+    return next(e['selection'] for e in C['model_list'].entries('review') if e['id'] == entry_id)
+
+
 class ReviewerQuotaTests(unittest.TestCase):
     def test_vendor_routing(self):
-        for builder, expected in [('claude', 'ASTRA_MODEL'), ('gpt-6.1-sol', 'ASTRA_MODEL'), ('minimax/m3', 'ASTRA_MODEL'), ('deepseek/flash', 'ASTRA_MODEL'), ('glm/5', 'ASTRA_MODEL')]:
-            self.assertEqual(C['reviewer_model']([builder]), C[expected])
-        self.assertEqual(C['reviewer_model']([]), C['ASTRA_MODEL'])
+        for builder, expected in [('claude', 'astra-api'), ('gpt-6.1-sol', 'opus-api'), ('minimax/m3', 'astra-api'), ('deepseek/flash', 'astra-api'), ('glm/5', 'astra-api')]:
+            self.assertEqual(C['reviewer_model']([builder]), review_selection(expected))
+        self.assertEqual(C['reviewer_model']([]), review_selection('astra-api'))
 
     def test_quota_exhaustion_excludes_builder(self):
         queue = {}
-        current = C['ASTRA_MODEL']
-        next_model = C['fallback_reviewer'](queue, 'head', current, ['deepseek/flash'])
-        self.assertEqual(next_model, C['OPUS_MODEL'])
-        self.assertIsNone(C['fallback_reviewer'](queue, 'head', next_model, ['deepseek/flash']))
+        current = review_selection('astra-api')
+        next_model = C['fallback_reviewer'](queue, 'head', current, ['gpt-6.1-sol'])
+        self.assertEqual(next_model, review_selection('opus-api'))
+        last_model = C['fallback_reviewer'](queue, 'head', next_model, ['gpt-6.1-sol'])
+        self.assertEqual(last_model, review_selection('opus-sub'))
+        self.assertIsNone(C['fallback_reviewer'](queue, 'head', last_model, ['gpt-6.1-sol']))
 
     def test_quota_markers(self):
         for error in ['Spend limit', 'usage limit', 'quota exhausted', 'insufficient_quota']:
@@ -34,7 +40,7 @@ class ReviewerQuotaTests(unittest.TestCase):
         from importlib.machinery import SourceFileLoader
         c = SourceFileLoader('quota_coordq', 'coordinator/bin/coordq').load_module()
         key = 'gate:o/r#1:abc'
-        args = {'modelSelection': c.ASTRA_MODEL, 'clientRequestId': key, 'title': 'gate'}
+        args = {'modelSelection': review_selection('astra-api'), 'clientRequestId': key, 'title': 'gate'}
         event = {'kind': 'candidate', 'pr': 'o/r#1', 'head': 'abc', 'key': key, 'args': args, 'builderModels': ['minimax/m3']}
         queue = {'gatedHeads': {key: 1}, 'items': [], 'next': 2}
         class Lock:
@@ -51,9 +57,9 @@ class ReviewerQuotaTests(unittest.TestCase):
                     # queue one reviewer, not two.
                     gate_candidates=lambda cfg: [event, event], load_receipts=lambda: receipts,
                     path=lambda name: d + '/' + name,
-                    call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'gpt-6.2-astra', 'providerInstanceId': 'codex', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
+                    call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'openai/gpt-6.2-astra', 'providerInstanceId': 'openai-api', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
                 with redirect_stdout(io.StringIO()):
                     c.cmd_gatekeep(argparse.Namespace(config=config, dry_run=False))
                     c.cmd_gatekeep(argparse.Namespace(config=config, dry_run=False))
             self.assertEqual(len(queue['items']), 1)
-            self.assertEqual(queue['items'][0]['args']['modelSelection'], c.OPUS_MODEL)
+            self.assertEqual(queue['items'][0]['args']['modelSelection'], review_selection('astra-sub'))

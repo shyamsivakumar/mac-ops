@@ -1,9 +1,10 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
-import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
+import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
 import { answerCause, isStale, restored } from "./answers.js";
+import { boardGlance, FLOW_FILE, parseFlow } from "./board.js";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript, SESSION_NAME } from "./transcript.js";
-import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
+import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE, turnKey } from "./ui.js";
 
 async function swapChat() {
   const tree = JSON.parse(JSON.stringify(layout()));
@@ -85,6 +86,13 @@ const askOf = ({ id, group, title, why, cause, kind, options }) => ({
     : options.map((o) => ({ kind: "option", text: o.label, label: o.label, detail: o.detail, rec: Boolean(o.recommended) })),
 });
 
+const NEEDS_FRESH = 300000;
+
+function boardNeeds(now) {
+  const published = shared("cockpit.needs");
+  return published && now - published.at <= NEEDS_FRESH ? published.n : null;
+}
+
 const clock = (at) => {
   const d = new Date(at);
   return `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -146,6 +154,10 @@ export default class Coordinator extends View {
     this.preview = false;
     this.chipping = false;
     this.boxHandle = cx.focus_handle();
+    this.rootHandle = cx.focus_handle();
+    this.glance = new Map();
+    this.flowStat = "";
+    this.glanceRev = -1;
     if (!keysBound) {
       cx.bind_keys(KEYS);
       keysBound = true;
@@ -238,6 +250,7 @@ export default class Coordinator extends View {
         await this.readDecisions();
         this.prune();
         this.view = await readTranscript(cx);
+        await this.readGlance();
         if (this.known !== undefined && this.fromBottom > 0) this.shown += Math.max(0, this.view.turns.length - this.known);
         this.known = this.view.turns.length;
         this.error = "";
@@ -246,7 +259,7 @@ export default class Coordinator extends View {
       }
       this.refreshing = false;
       const v = this.view;
-      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, v?.model, v?.errored, this.error, this.decisionsStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
+      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, v?.model, v?.errored, this.error, this.decisionsStat, this.flowStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
       if (stamp === this.stamp) return;
       this.stamp = stamp;
       const published = JSON.stringify(this.decisions);
@@ -256,6 +269,23 @@ export default class Coordinator extends View {
       }
       cx.notify();
     });
+  }
+
+  async readGlance() {
+    const stat = await exec("stat", ["-f", "%Fm %z", FLOW_FILE]);
+    const seen = stat.code === 0 ? stat.stdout.trim() : "";
+    if (seen === this.flowStat && this.view.rev === this.glanceRev) return;
+    this.flowStat = seen;
+    this.glanceRev = this.view.rev;
+    const text = seen ? await readTextFile(FLOW_FILE) : null;
+    const cards = this.view.turns.filter((m) => m.status);
+    const windows = cards.map((m, i) => ({
+      id: turnKey(m),
+      from: cards[i - 1]?.at ?? m.at,
+      to: m.at,
+      known: i > 0,
+    }));
+    this.glance = text === null ? new Map() : boardGlance(parseFlow(text), windows);
   }
 
   async readDecisions() {
@@ -694,6 +724,32 @@ export default class Coordinator extends View {
     });
   }
 
+  latestCard() {
+    return this.view?.turns.filter((m) => m.status).at(-1) ?? null;
+  }
+
+  replyTo(need, cx) {
+    const typed = draftText(this.input.content()).trim();
+    const line = `Re ${need.id} (${need.text}): `;
+    this.input.set_value(typed ? `${typed}\n${line}` : line);
+    cx.timer.after(60, () => this.input.focus());
+    cx.notify();
+  }
+
+  glanceKey(e, cx) {
+    const m = e.modifiers;
+    if (e.is_held || this.focused || !this.rootHandle.is_focused() || this.preview || m.platform || m.control || m.alt || m.shift) return;
+    const card = this.latestCard();
+    if (!card) return;
+    const n = /^[1-3]$/.test(e.key) ? Number(e.key) - 1 : -1;
+    if (e.key === "f") {
+      if (!card.status.foldable) return;
+      this.toggle(`fold-${turnKey(card)}`, cx);
+    } else if (n >= 0 && card.status.needs[n]) this.replyTo(card.status.needs[n], cx);
+    else return;
+    cx.stop_propagation();
+  }
+
   toggle(key, cx) {
     this.open.has(key) ? this.open.delete(key) : this.open.add(key);
     cx.notify();
@@ -706,9 +762,12 @@ export default class Coordinator extends View {
     cx.spawn(async (cx) => {
       try {
         this.view = await loadOlder(cx, PAGE);
+        await this.readGlance();
         this.known = this.view.turns.length;
         this.shown += PAGE;
         this.prepended = true;
+      } catch (error) {
+        this.error = String(error.message);
       } finally {
         this.loading = false;
         cx.notify();
@@ -727,6 +786,7 @@ export default class Coordinator extends View {
     this.grewAbove = 0;
     const drafts = this.drafts();
     const answers = this.answers(drafts);
+    const newest = this.latestCard();
     const cb = {
       tasks: shared("hub")?.tasks ?? {},
       width: this.box.width,
@@ -757,6 +817,16 @@ export default class Coordinator extends View {
       sender: (from) => agents().find((a) => a.address === from)?.tab_name ?? from,
       link: (url) => (/^https?:\/\//i.test(url) ? exec("open", [url]) : notify({ title: "Link not opened", body: "Only web links open from the chat.", level: "info", timeout: 2500 })),
       heights: this.heights,
+      glance: this.glance,
+      clock,
+      newestKey: newest ? turnKey(newest) : "",
+      boardNeeds: boardNeeds(now),
+      quiet: (m) => {
+        const g = this.glance.get(turnKey(m));
+        return m.status?.lone && !m.status.question && g?.known && g.done === 0 && g.unreviewed === 0;
+      },
+      replyTo: (need, cx) => this.replyTo(need, cx),
+      focusLog: () => this.rootHandle.focus(),
       image: (ref) => this.wantImage(ref, cx),
       draft: () => draftText(this.input.content()),
       preview: this.preview,
@@ -810,7 +880,7 @@ export default class Coordinator extends View {
     const strip = taskStrip(t, this.view, cb, this.box.width);
     const open = list.filter((a) => !decided[a.id]);
     const error = this.decisionsError();
-    return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome)
+    return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome).track_focus(this.rootHandle).on_key_down((e, cx) => this.glanceKey(e, cx))
       .child(status(t, info, this.view, now, this.box.width, this.error))
       .when(strip, (el) => el.child(strip))
       .when(open.length || error, (el) => el.child(askRow(t, open, open.filter((a) => drafts.has(a.id)).length, error, cb, this.decisionsAt(), now)))

@@ -25,7 +25,7 @@ export const LANE_RANK = Object.fromEntries(LANES.map((l, i) => [l[0], i]));
 export const PR_LANES = new Set(["checks", "review", "ready"]);
 const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
 export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "stuck" && !reasons?.length) || ((col === "needs" || col === "stuck") && PR_REASONS.has(reasons?.[0]));
-export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
+export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], asked: ["asked the Coordinator", "A thread ended on a question that does not name Shyam, so the Coordinator handles it"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const LANE_NAME = Object.fromEntries(LANES.map((l) => [l[0], l[1]]));
 export const COLUMN_LIMIT = { needs: 10 };
 const AGED_LANES = new Set(["needs", "stuck", "ready"]);
@@ -108,13 +108,16 @@ export function columnHead(t, key, col, state, cb) {
   const review = key === "review" && col.lanes.ready > 0 && !state.popup
     ? { id: "review-ready", hint: "m", label: `Review ${col.lanes.ready}`, run: (cx) => cb.review(cx), tip: `Go through the ${col.lanes.ready} ready cards one at a time: verdict, CI and changed files, then approve or send back (m)` }
     : null;
-  const retry = key === "needs" && state.failed > 0
+  const retry = key === "stuck" && state.failed > 0
     ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
+    : null;
+  const clear = key === "stuck" && state.clear.actions.length > 0
+    ? { id: "clear-stuck", hint: "C", label: state.armed?.kind === "clear-stuck" ? `Confirm ${state.clear.actions.length}` : `Clear ${state.clear.actions.length}`, run: (cx) => cb.clearStuck(cx), tip: state.clear.tip }
     : null;
   const rebase = state.conflicts[key] > 0
     ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every column)` }
     : null;
-  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, review, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
+  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, review, retry, rebase, clear, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
   const buttons = [settleReviewed, retry, rebase, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
@@ -132,7 +135,7 @@ export function columnHead(t, key, col, state, cb) {
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
       .when(Boolean(review), (el) => el.child(action(t, review.id, review.hint, review.label, review.run, review.tip, tight)))
-      .children([retry, rebase].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
+      .children([retry, rebase, clear].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
       .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5)))));
 }
 
@@ -146,13 +149,8 @@ function projectItem(v) {
   return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
 }
 
-function alertsItem() {
-  const a = shared("cockpit.alerts");
-  if (a && !a.on) return { id: "alerts", prio: 3, label: "Alerts · off", tip: "Phone alerts are off. Click to turn them on." };
-  const last = a?.sent ? `Last sent ${ago(a.sent.at, Date.now())} ago: ${a.sent.text.replace(/^Mirror: /, "")}.` : "Nothing sent yet.";
-  if (a?.failed) return { id: "alerts", prio: -1, label: "Alerts · relay down", tone: "blocked", tip: `The last phone alert failed, so Herdr showed a desktop notification instead: ${a.failed}. ${last} Click to turn alerts off.` };
-  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming ready to merge is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
-}
+const sumRows = (a, r) => ({ acted: a.acted + r.acted, ignored: a.ignored + r.ignored });
+const actRate = (r) => (r.acted + r.ignored ? `${Math.round((100 * r.acted) / (r.acted + r.ignored))}%` : "–");
 
 function barItems(v) {
   const { worktrees: w, slots } = v;
@@ -169,9 +167,9 @@ function barItems(v) {
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
-    alertsItem(),
     { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Lane-wide bulk actions are off in this view; marked cards (x) can still be acted on." },
     ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
+    ...(v.acts ? [{ id: "acts", prio: 5, label: `Acts · ${actRate(v.acts.rows.reduce(sumRows, { acted: 0, ignored: 0 }))}`, tone: "muted", tip: "How many of the cards that needed you in the last 7 days you acted on. Click for the split by source." }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
@@ -206,18 +204,34 @@ export function fitBar(width, v) {
   return shown;
 }
 
+const AWAY_LEAD = { "": "  ", "·": " · ", "│": " │ " };
+
+export function awayNotice(a, pending) {
+  if (a.need.length && !pending.length) return null;
+  const n = pending.length;
+  const seg = (count, text, tone) => (count ? [[`${count} ${text}`, tone]] : []);
+  const tally = [...seg(a.done, "done", "muted"), ...seg(a.merged, "merged", "muted"), ...seg(a.inReview, "in review", "muted")];
+  const head = [[n ? `${n} need you` : "Nothing needs you", n ? "blocked" : "muted", ""], ...seg(a.stuck, "newly stuck", "working").map((x) => [...x, n ? "" : "·"])];
+  const rest = [...tally.map((x, i) => [...x, n && !i ? "│" : "·"]), [`away ${a.for}`, "dim", n ? "│" : "·"]];
+  const parts = [...head, ...rest];
+  return { id: "away", level: n ? "error" : "success", text: parts.map(([text, , lead], i) => (i ? AWAY_LEAD[lead] : "") + text).join(""), items: [], parts, show: n };
+}
+
 function noticeLine(t, notice, cb) {
   return h_flex().id("bar-notice").flex_1().min_w(0).gap(4).items_center().overflow_hidden()
-    .child(h_flex().id("bar-notice-text").flex_1().min_w(0).h(18).gap(6).items_center().cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => cb.notice(cx)).tooltip(notice.text)
+    .child(h_flex().id("bar-notice-text").flex_1().min_w(0).h(18).gap(6).items_center().cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => cb.notice(notice, cx)).tooltip(notice.text)
       .child(div().size(6).flex_none().rounded(3).bg(t[NOTICE_TONE[notice.level]]))
-      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(notice.text)))
+      .child(notice.parts
+        ? h_flex().flex_1().min_w(0).gap(5).items_center().overflow_hidden().children(notice.parts.flatMap(([text, tone, lead]) => [...(lead ? [div().flex_none().text_size(10.5).text_color(t.dim).child(lead)] : []), div().flex_none().text_size(10.5).text_color(t[tone]).child(text)]))
+        : div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(notice.text)))
+    .when(Boolean(notice.show), (el) => el.child(action(t, "bar-away-show", "b", `Show ${notice.show}`, (cx) => cb.glance(cx), "Select the next Needs you card from this list (b)")))
     .child(headButton(t, "bar-notice-x", "✕", "Dismiss", () => cb.dismiss()));
 }
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
     .when(v.marks > 0, (el) => el.child(markedBar(t, markedText(v, width), cb)))
-    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.id === "alerts" ? cb.alerts(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
     .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
@@ -391,7 +405,7 @@ function ageTone(lane, ms) {
   return ms >= RED_AFTER ? "blocked" : ms >= AMBER_AFTER ? "working" : "muted";
 }
 
-const NEED_WORD = { question: "question", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
+const NEED_WORD = { question: "question", asked: "asked", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
 const LANE_WORD = { needs: "Needs you", stuck: "CI failed", run: "running", backlog: "queued", checks: "checks", review: "review", ready: "ready to merge", done: "done" };
 const stateWord = (v) => ((v.col === "needs" || v.col === "stuck") && v.needs?.length ? NEED_WORD[v.needs[0]] : v.col === "dead" ? (v.c.kind === "fail" ? "failed" : "stopped") : LANE_WORD[v.col]);
 const LANE_TONE = Object.fromEntries(LANES.map((l) => [l[0], l[2]]));
@@ -633,7 +647,18 @@ function decisionBase(col, g, info, verdict, now, tab) {
       checks: null,
     };
   }
+  const askingThread = g.lead ?? c;
+  const asked = col === "needs" && (askingThread.kind === "done" || askingThread.kind === "idle") ? askingThread.choices : null;
+  if (asked) {
+    const best = asked.options.indexOf(asked.recommended);
+    const pick = (i) => ({ id: `choice:${i}`, key: String(i + 1), label: clip(asked.options[i], 60) });
+    const rest = asked.options.map((_, i) => i).filter((i) => i !== best).map(pick);
+    return { headline: `Answer ${name}'s question`, primary: pick(best), why: [asked.question, `${g.project} · asked ${age} ago`], hint: "Press the number or click to send that answer to the thread now. Enter sends the recommended one.", other: [...rest, ...other], checks: null };
+  }
   const checks = pr ? checksOf(info.gh, verdict) : null;
+  if (reasons?.[0] === "asked") {
+    return { headline: `${name} asked the Coordinator`, primary: { id: "open", key: "o", label: "Open thread" }, why: [c.context, `${g.title} · ${g.project} · asked ${age} ago`], other: other.filter((x) => x.id !== "open"), checks: null };
+  }
   if (reasons?.[0] === "stalled") {
     return { headline: `${name} has stalled`, primary: { id: "open", key: "o", label: "Open thread" }, why: [`No agent activity for ${elapsed(now - stallOf(g, now))}.`, `${g.title} · ${g.project}`], other: other.filter((x) => x.id !== "open"), checks: null };
   }
@@ -852,7 +877,7 @@ function ticketPanel(t, v, cb) {
 export function decisionView(t, v, input, cb) {
   const { col, d, armed, armedKind, outdated, replying, outcome } = v;
   const [, label, tone] = LANES.find((l) => l[0] === col);
-  const hint = d.hint ?? (outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in T3 Code." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
+  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.hint ?? (d.primary.id === "open" ? "Opens the thread in T3 Code." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
@@ -980,6 +1005,7 @@ export const KEY_TABLE = [
   { keys: "s", group: "Card", all: "Settle the card's finished threads" },
   { keys: "p", group: "Card", all: "Open the pull request" },
   { keys: "w", group: "Card", all: "Open the Herdr tab whose terminal runs in the task's worktree (only when one exists)" },
+  { keys: "b", group: "Move", all: "While the away line is showing, select the next Needs you card it lists, in the order they started waiting" },
   { keys: "c", group: "Card", all: "Open the pull request's changed files on GitHub (the pop-up lists them and clicking a file opens them too)" },
   { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
   { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, Stuck and In review cards)" },
@@ -1002,7 +1028,8 @@ export const KEY_TABLE = [
   { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
   { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (ready to merge cards in In review)" },
   { keys: "m", group: "Board", all: "Review the ready to merge cards one at a time, oldest first: verdict, CI and changed files. In it: a approves (press twice), d sends back with a note, j k or → ← move, s skips, Esc closes" },
-  { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Needs you)" },
+  { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Stuck)" },
+  { keys: "C", group: "Board", all: "Send every stuck card its standard fix, press twice: rebase for a conflict, retry for a failed run, send back for failing CI, requested changes or no fix round started. Questions, stalled and snoozed cards are skipped (Stuck)" },
   { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (every column with PRs; a column head button does one column)" },
   { keys: "Z", group: "Board", all: "List snoozed cards, wake one or all" },
   { keys: "f", group: "Board", all: "Fold or show this column" },
@@ -1111,6 +1138,35 @@ export function noticeSheet(t, notice, cb) {
             .child(div().size(6).flex_none().rounded(3).bg(t[x.ok ? "done" : "blocked"]))
             .child(div().text_size(11.5).font_semibold().text_color(t.foreground).child(x.name)))
           .child(div().w_full().pl(12).text_size(11.5).line_height("17px").text_color(t.muted).child(x.text))))));
+}
+
+const ACT_COL = 64;
+const ACT_ROW = 24;
+export const actsHeight = (rows) => Math.min(DEC_CAP, 34 + 24 + (rows + 2) * ACT_ROW + 76);
+
+export function actsSheet(t, acts, cb) {
+  const { rows } = acts;
+  const cell = (text, style) => div().w(ACT_COL).flex_none().flex().justify_end().text_size(11.5).text_color(style).child(text);
+  const line = (id, label, r, strong) => h_flex().id(id).w_full().h(ACT_ROW).gap(6).items_center()
+    .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(strong ? t.foreground : t.muted).child(label))
+    .child(cell(String(r.entered), t.foreground))
+    .child(cell(String(r.acted), t.foreground))
+    .child(cell(String(r.ignored), r.ignored ? t.working : t.foreground))
+    .child(cell(actRate(r), t.foreground));
+  const total = rows.reduce((a, r) => ({ entered: a.entered + r.entered, acted: a.acted + r.acted, ignored: a.ignored + r.ignored }), { entered: 0, acted: 0, ignored: 0 });
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Needs you, last 7 days"))
+      .child(headButton(t, "acts-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("acts-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().px(16).py(10).gap(2)
+        .when(!rows.length, (el) => el.child(div().w_full().text_size(11.5).text_color(t.muted).child(`Collecting since ${acts.since ? `${ago(acts.since, Date.now())} ago` : "now"}`)))
+        .when(rows.length > 0, (el) => el.child(h_flex().w_full().h(ACT_ROW).gap(6).items_center()
+          .child(div().flex_1().text_size(10.5).text_color(t.dim).child("Source"))
+          .children(["Entered", "Acted", "Ignored", "Rate"].map((x) => cell(x, t.dim)))))
+        .children(rows.map((r) => line(`acts-${r.src}`, r.src, r, false)))
+        .when(rows.length > 0, (el) => el.child(line("acts-total", "All", total, true)))
+        .child(div().w_full().pt(8).text_size(10.5).line_height("15px").text_color(t.dim).child(`Counts cards logged with a source since ${acts.since ? `${ago(acts.since, Date.now())} ago` : "now"}. Rate is acted divided by acted plus ignored. A card still waiting counts in Entered only.`))));
 }
 
 export function thumb(t, top, view, total) {

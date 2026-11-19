@@ -1,7 +1,7 @@
 import { div, image, svg } from "gpui-kit";
 import { settings } from "herdr";
 import { v_flex, h_flex, Textarea, TextView } from "gpui-base";
-import { blocksOf } from "./transcript.js";
+import { blocksOf, tickEntries } from "./transcript.js";
 
 const TONE = { running: "working", waiting: "blocked", failed: "blocked", stopped: "working", done: "done", idle: "idle" };
 const STATUS = { working: ["working", "working"], blocked: ["asking", "blocked"], done: ["idle", "done"], idle: ["idle", "idle"] };
@@ -245,7 +245,10 @@ function bodyOf(t, m, now, color, room, cb) {
         n++;
       }
       out.push(link(t, `earlier-${key}-${i}`, `${n} earlier tool calls`, (_e, cx) => cb.toggle(`earlier-${key}`, cx)));
-    } else if (item.k === "text") out.push(...textBlocks(t, `${key}-${i}`, item.blocks, color, room, cb));
+    } else if (item.k === "text") {
+      out.push(...textBlocks(t, `${key}-${i}`, item.blocks, color, room, cb));
+      if (item.untagged) out.push(div().text_size(10).text_color(t.dim).child("no status block"));
+    } else if (item.k === "status") out.push(statusBlock(t, item, m, key, now, room, cb));
     else if (item.k === "event") out.push(eventLine(t, item));
     else if (item.k === "images") out.push(imageStrip(t, item.images, `img-${key}-${i}`, cb));
     else if (groupable(item) && m.items[i + 1] && groupable(m.items[i + 1])) {
@@ -258,6 +261,80 @@ function bodyOf(t, m, now, color, room, cb) {
     }
   }
   return out;
+}
+
+const NEEDS_SHOWN = 3;
+
+const ruled = (tone) => h_flex().w_full().min_w(0).pl(8).gap(8).items_center().border_l(2).border_color(tone);
+
+const rowTag = (tone, text) => div().flex_none().text_size(10).font_semibold().text_color(tone).child(text);
+
+function replyButton(t, id, n, onClick) {
+  return h_flex().id(id).h(20).px(8).flex_none().items_center().rounded(4).border_1().border_color(t.input).bg(t.raised)
+    .text_size(10.5).font_medium().text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.selected)).on_click(onClick).child(`${n} Reply`);
+}
+
+function needRows(t, key, needs, now, cb) {
+  const [first, ...rest] = needs;
+  const reply = (n, need) => replyButton(t, `need-reply-${key}-${n}`, n + 1, (_e, cx) => cb.replyTo(need, cx));
+  return [
+    ruled(t.blocked)
+      .child(rowTag(t.blocked, `NEEDS YOU ${needs.length}`))
+      .child(div().flex_1().min_w(0).text_size(13).line_height("18px").font_medium().text_color(t.foreground).child(first.text))
+      .child(div().flex_none().text_size(10.5).text_color(t.dim).child(ago(first.since, now)))
+      .child(reply(0, first)),
+    ...rest.slice(0, NEEDS_SHOWN - 1).map((need, i) => ruled(t.blocked)
+      .child(div().flex_1().min_w(0).text_size(11.5).line_height("16px").text_color(t.muted).child(need.text))
+      .child(div().flex_none().text_size(10.5).text_color(t.dim).child(ago(need.since, now)))
+      .child(reply(i + 1, need))),
+    ...(rest.length > NEEDS_SHOWN - 1 ? [ruled(t.blocked).child(div().text_size(10.5).text_color(t.dim).child(`+${rest.length - (NEEDS_SHOWN - 1)} more`))] : []),
+  ];
+}
+
+function stuckRow(t, stuck) {
+  const [first, ...rest] = stuck;
+  return ruled(t.working)
+    .child(rowTag(t.working, `STUCK ${stuck.length}`))
+    .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(`${first.key} ${first.why} · ${first.action}`))
+    .when(rest.length > 0, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`+${rest.length} more`)));
+}
+
+function changeLine(at, g, clock) {
+  if (!g.known) return clock(at);
+  const changes = [g.done && `+${g.done} done`, g.merged && `+${g.merged} merged`, g.unreviewed && `${g.unreviewed} in review`].filter(Boolean);
+  return changes.length ? `${changes.join("  ")} · ${clock(at)}` : `no change since ${clock(g.since)}`;
+}
+
+function statusBlock(t, item, m, key, now, room, cb) {
+  const { status } = item;
+  const g = cb.glance.get(key) ?? { known: false };
+  const onBoard = key === cb.newestKey ? cb.boardNeeds : null;
+  const open = item.foldable && cb.isOpen(`fold-${key}`);
+  const board = status.needs.length === 0 ? onBoard ?? 0 : 0;
+  const calm = status.needs.length === 0 && onBoard === 0 && status.stuck.length === 0 && g.known && g.done === 0 && g.unreviewed === 0 && !item.question;
+  const line = changeLine(m.at, g, cb.clock);
+  const rows = [
+    ...(status.needs.length ? needRows(t, key, status.needs, now, cb) : []),
+    ...(board > 0 ? [ruled(t.blocked).child(rowTag(t.blocked, `NEEDS YOU ${board} (on board)`))] : []),
+    ...(status.stuck.length ? [stuckRow(t, status.stuck)] : []),
+    ruled(calm ? t.done : t.input)
+      .when(calm, (el) => el.child(div().flex_none().text_size(10).text_color(t.done).child("●")).child(div().flex_none().text_size(11).font_medium().text_color(t.foreground).child("Nothing needs you ·")))
+      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(line))
+      .when(item.foldable, (el) => el.child(link(t, `fold-link-${key}`, `${open ? "▾ Hide full" : "▸ Read full"} · ${item.lines} lines`, (_e, cx) => cb.toggle(`fold-${key}`, cx)))),
+    ...(status.note ? [ruled(t.input).child(div().flex_1().min_w(0).text_size(10.5).line_height("15px").text_color(t.dim).child(status.note))] : []),
+  ];
+  return v_flex().w_full().min_w(0).gap(4)
+    .children(item.foldable && !open ? [] : textBlocks(t, `${key}-status`, item.blocks, t.foreground, room, cb))
+    .child(v_flex().w_full().min_w(0).gap(3).children(rows));
+}
+
+function tickLine(t, e, cb) {
+  const last = e.run.at(-1);
+  const waiting = last.status.needs.length;
+  const needs = waiting ? `${waiting} waiting` : "no needs in this status";
+  return h_flex().id(`tick-${e.key}`).w_full().h(18).px(2).cursor_pointer().hover((s) => s.bg(t.selected)).items_center()
+    .on_click((_e, cx) => cb.toggle(e.key, cx))
+    .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).child(`${e.open ? "▾" : "▸"} Status ${cb.clock(last.at)} · ${needs} · ${e.run.length} unchanged`));
 }
 
 export function turn(t, m, now, cb) {
@@ -281,19 +358,18 @@ export function turn(t, m, now, cb) {
 
 export const TURN_ESTIMATE = 160;
 
-function drawTurns(t, turns, now, cb) {
+function drawTurns(t, entries, now, cb) {
   const out = [];
   let below = 0;
   const from = cb.fromBottom - cb.viewH;
   const to = cb.fromBottom + 2 * cb.viewH;
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const m = turns[i];
-    const key = turnKey(m);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const { key } = entries[i];
     const h = cb.heights.get(key) ?? TURN_ESTIMATE;
     const near = below + h >= from && below <= to;
     const above = below >= cb.fromBottom + cb.viewH;
     out.push(near
-      ? div().id(`turn-${key}`).w_full().flex_none().px(12).py(4).on_size_change((size, cx) => cb.turnSize(key, size.height, cx, above)).child(turn(t, m, now, cb))
+      ? div().id(`turn-${key}`).w_full().flex_none().px(12).py(4).on_size_change((size, cx) => cb.turnSize(key, size.height, cx, above)).child(entries[i].run ? tickLine(t, entries[i], cb) : turn(t, entries[i].turn, now, cb))
       : div().w_full().flex_none().h(h));
     below += h;
   }
@@ -328,8 +404,9 @@ export function conversation(t, view, error, now, cb) {
     .when(hidden > 0, (el) => el.child(footerLink(t, "co-show-older", view.unread ? "Show older" : `Show older · ${hidden} more`, (_e, cx) => cb.more(cx))))
     .when(hidden <= 0 && view.unread, (el) => el.child(footerLink(t, "co-older-block", cb.loading ? "Loading…" : "Show older", (_e, cx) => cb.older(cx))))
     .when(hidden <= 0 && !view.unread && view.hasOlder, (el) => el.child(footerLink(t, "co-older", cb.loading ? "Loading…" : "↑ Load previous session", (_e, cx) => cb.older(cx))))
-    .children(drawTurns(t, view.turns.slice(-cb.shown), now, cb));
+    .children(drawTurns(t, tickEntries(view.turns.slice(-cb.shown), cb.quiet, cb.isOpen), now, cb));
   const column = div().id("co-turns").size_full().relative().overflow_hidden()
+    .on_click(() => cb.focusLog())
     .on_scroll_wheel((e, cx) => cb.wheel(e.delta.y, cx))
     .child(v_flex().size_full().justify_end().child(content))
     .when(cb.contentH > cb.viewH, (el) => el.child(thumb(t, cb.contentH - cb.viewH - cb.fromBottom, cb.viewH, cb.contentH)))
