@@ -14,7 +14,13 @@ Nothing else keeps a copy of a model id.
 | `review` | The gate. | The first entry that is not blocked and whose vendor differs from the builder's executed vendor. A `reviewer:<id>` label puts that entry first. |
 | `panel` | A panel, only when Shyam asks for one. | Nothing starts a panel on its own. |
 
-A builder that ran on Terra (OpenAI) is reviewed by an Anthropic entry.
+The workhorses are the two Morph models, Kimi K3.1 (vendor moonshot) and
+DeepSeek V4.1 Flash (vendor deepseek). Both run through the `pi` provider
+instance. Terra is the build fallback. Reviews are Astra, then Opus. Fable runs
+only when Shyam asks for it.
+
+A builder that ran on Kimi or DeepSeek is reviewed by Astra. A builder that ran
+on Terra (OpenAI) is reviewed by an Anthropic entry (Opus).
 Sol and other OpenAI API models never build.
 
 ## Blocked providers

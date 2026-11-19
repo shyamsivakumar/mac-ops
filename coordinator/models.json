@@ -1,70 +1,54 @@
 {
   "build": [
     {
-      "id": "minimax",
+      "id": "kimi",
       "selection": {
-        "instanceId": "minimax",
-        "model": "minimax/MiniMax-M3.1-Flash"
+        "instanceId": "pi",
+        "model": "morph/morph-kimik31"
       },
-      "vendor": "minimax"
-    },
-    {
-      "id": "glm",
-      "selection": {
-        "instanceId": "glm",
-        "model": "zai/glm-5.3"
-      },
-      "vendor": "zhipu"
+      "vendor": "moonshot"
     },
     {
       "id": "deepseek",
       "selection": {
         "instanceId": "pi",
-        "model": "deepseek/deepseek-flash"
+        "model": "morph/morph-dsv41flash"
       },
       "vendor": "deepseek"
     },
     {
-      "id": "cursor",
-      "selection": {
-        "instanceId": "cursor",
-        "model": "default"
-      },
-      "vendor": "cursor"
-    },
-    {
       "id": "terra",
       "selection": {
         "instanceId": "codex",
         "model": "gpt-6.1-terra"
       },
       "vendor": "openai"
-    },
-    {
-      "id": "sonnet",
-      "selection": {
-        "instanceId": "claudeAgent",
-        "model": "claude-sonnet-5-5"
-      },
-      "vendor": "anthropic"
     }
   ],
   "fix": [
     {
+      "id": "kimi",
+      "selection": {
+        "instanceId": "pi",
+        "model": "morph/morph-kimik31"
+      },
+      "vendor": "moonshot"
+    },
+    {
+      "id": "deepseek",
+      "selection": {
+        "instanceId": "pi",
+        "model": "morph/morph-dsv41flash"
+      },
+      "vendor": "deepseek"
+    },
+    {
       "id": "terra",
       "selection": {
         "instanceId": "codex",
         "model": "gpt-6.1-terra"
       },
       "vendor": "openai"
-    },
-    {
-      "id": "sonnet",
-      "selection": {
-        "instanceId": "claudeAgent",
-        "model": "claude-sonnet-5-5"
-      },
-      "vendor": "anthropic"
     }
   ],
   "review": [
@@ -97,14 +81,6 @@
       "selection": {
         "instanceId": "claudeAgent",
         "model": "claude-opus-5-5"
-      },
-      "vendor": "anthropic"
-    },
-    {
-      "id": "sonnet",
-      "selection": {
-        "instanceId": "claudeAgent",
-        "model": "claude-sonnet-5-5"
       },
       "vendor": "anthropic"
     }
@@ -144,12 +120,12 @@
     }
   ],
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order: the workhorses are Morph Kimi K3.1 and Morph DeepSeek V4.1 Flash, with Terra as the build fallback",
     "fix and finish rounds": "use the fix list in order",
-    "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor",
+    "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor; reviews are Astra then Opus",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
     "builder:<id> label": "tries that entry first, then the list",
-    "panel": "runs only when Shyam asks for one; nothing starts a panel on its own",
+    "panel": "runs only when Shyam asks for one (Fable on request); nothing starts a panel on its own",
     "never": "Sol or other OpenAI API models as builders"
   }
 }
