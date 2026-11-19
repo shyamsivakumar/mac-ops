@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT = "7eee29d1-22a7-42a4-aec0-8e8552c864c5"
@@ -62,9 +63,16 @@ def plan(deployments):
         for d in deployments
     ):
         raise RollbackRecordError("the Bot 1 deployment history contains an invalid record")
-    deployments = sorted(
-        deployments, key=lambda d: d.get("createdAt", ""), reverse=True
-    )
+    try:
+        timestamps = [datetime.fromisoformat(d["createdAt"].replace("Z", "+00:00")) for d in deployments]
+        if any(timestamp.tzinfo is None for timestamp in timestamps):
+            raise ValueError("timestamp lacks timezone")
+    except (KeyError, ValueError, TypeError):
+        raise RollbackRecordError("the Bot 1 deployment history contains an invalid timestamp") from None
+    deployments = [d for _, d in sorted(
+        zip((timestamp.astimezone(timezone.utc) for timestamp in timestamps), deployments, strict=True),
+        key=lambda pair: pair[0], reverse=True,
+    )]
     production = next(
         (d for d in deployments if d.get("status") == "SUCCESS"),
         None,
