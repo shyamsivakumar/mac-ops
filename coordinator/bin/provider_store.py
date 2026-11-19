@@ -92,21 +92,16 @@ def stamp(seconds):
     """A moment as the ISO text the store writes.
 
     The text keeps the whole precision of the moment, because the failure
-    time is what orders one refusal against another: rounding it up would
-    make a refusal that came a tenth of a millisecond later look older,
-    and the newer word on when the provider comes back would be lost."""
+    time orders one refusal against another."""
     return datetime.fromtimestamp(float(seconds), timezone.utc).isoformat()
 
 
 def stamp_expiry(seconds):
     """The end of a block as the ISO text the store writes.
 
-    The text carries whole milliseconds, rounded up. The pi reader parses
-    the expiry with Date.parse, which reads milliseconds only, so a
-    sub-millisecond expiry would be read a fraction early there and held
-    here: the provider would be free in pi and blocked in Python. Rounding
-    up keeps the two readers on one instant and never frees the provider
-    before the reset it was given."""
+    Whole milliseconds, rounded up: the pi reader parses the expiry with
+    Date.parse, which reads milliseconds only, and rounding up keeps the
+    two readers on one instant and never frees the provider early."""
     millis = math.ceil(float(seconds) * 1000.0)
     moment = datetime.fromtimestamp(millis // 1000, timezone.utc)
     moment = moment.replace(microsecond=(millis % 1000) * 1000)

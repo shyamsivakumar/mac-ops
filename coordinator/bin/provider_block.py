@@ -40,15 +40,13 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
     """Block one provider and return the record written, or None.
 
     The block runs from the moment the run failed to the reset the provider
-    named, or to an hour after the failure when it named none.
-
-    A failure read late never replaces a newer failure's record. A newer
-    failure always replaces an older one, even when its reset is sooner or
-    has already passed, and it is written even when the provider has no
-    record yet: an 11:00 "retry after 0s" frees a provider that a 10:00
-    refusal held until 14:00, and the passed expiry is kept so a late
-    replay of the 10:00 refusal cannot bring the block back. A record whose
-    reset has passed blocks nobody."""
+    named, or to an hour after the failure when it named none. A failure
+    read late never replaces a newer failure's record, and a newer failure
+    always replaces an older one, even when its reset is sooner or has
+    already passed: the provider's latest word about when it comes back is
+    the one to keep, and it is written even when the provider had no
+    record yet, so a late replay of the older refusal cannot bring the
+    block back."""
     name = identity(selection)
     if not name:
         return None
