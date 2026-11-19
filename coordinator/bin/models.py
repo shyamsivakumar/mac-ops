@@ -22,12 +22,7 @@ INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
 BLOCKED_FILE = "providers-blocked.json"
 BLOCKED_LOCK_FILE = "providers-blocked.lock"
-VENDOR_PREFIXES = (
-    ("claude", "anthropic"),
-    ("gpt", "openai"),
-    ("o3", "openai"),
-    ("o4", "openai"),
-)
+VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
 class ModelsError(ValueError):
@@ -36,7 +31,6 @@ class ModelsError(ValueError):
 
 class BlockStoreBusy(Exception):
     """The provider block store is being written, so a caller waits."""
-
 
 
 def path():
@@ -63,10 +57,7 @@ def validate(data):
             selection = entry.get("selection") if isinstance(entry, dict) else None
             if not (
                 isinstance(selection, dict)
-                and all(
-                    nonempty_string(selection.get(key))
-                    for key in ("instanceId", "model")
-                )
+                and all(nonempty_string(selection.get(key)) for key in ("instanceId", "model"))
                 and all(nonempty_string(entry.get(key)) for key in ("id", "vendor"))
             ):
                 raise ModelsError(
@@ -114,14 +105,8 @@ def identity(selection):
 
 def same_selection(a, b):
     """Whether two selections name the same provider and the exact same model string."""
-    return (
-        isinstance(a, dict)
-        and isinstance(b, dict)
-        and bool(a.get("instanceId"))
-        and bool(a.get("model"))
-        and a.get("instanceId") == b.get("instanceId")
-        and a.get("model") == b.get("model")
-    )
+    return (isinstance(a, dict) and isinstance(b, dict) and bool(a.get("instanceId")) and bool(a.get("model"))
+            and a.get("instanceId") == b.get("instanceId") and a.get("model") == b.get("model"))
 
 
 def queue_dir():

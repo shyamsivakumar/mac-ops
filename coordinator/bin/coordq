@@ -675,7 +675,7 @@ def drain():
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
                 code, out = call(step["tool"], step["args"], rules)
-            except model_list.ModelsError as e:
+            except (model_list.ModelsError, model_list.BlockStoreBusy) as e:
                 for unused in keys[index:]:
                     queue["reserved"].pop(unused, None)
                     queue["reservedThreads"].pop(unused, None)
@@ -683,7 +683,7 @@ def drain():
                 if item.get("actionKey"):
                     set_action_key_state(queue, item["actionKey"], "queued")
                 save(queue)
-                log(f"#{item['id']} not started, the model files cannot be read: {e}")
+                log(f"#{item['id']} not started: {e}")
                 return
             except (OSError, subprocess.SubprocessError, ValueError) as e:
                 code, out = 1, str(e)
@@ -1274,7 +1274,10 @@ def cmd_create(a):
         die(refusal)
     if "projectId" not in args and not args.get("workspaceStrategy"):
         args["scratch"] = True
-    code, out = call("t3_thread_launch", args)
+    try:
+        code, out = call("t3_thread_launch", args)
+    except model_list.BlockStoreBusy as e:
+        die(f"refused: {e}, try again")
     print(out)
     sys.exit(code)
 
