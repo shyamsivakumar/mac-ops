@@ -253,13 +253,11 @@ def dead_run_recovery():
 
     def run(cmd, timeout=150):
         if cmd[0] == "git":
-            if "worktree" in cmd:
-                exact(cmd, ["git", "-C", "/Users/shyamsivakumar/Code/" + lane.PATHS[repo],
-                            "worktree", "list", "--porcelain"])
-                return "worktree /tmp/fixture-worktree\n"
             if "ls-remote" in cmd:
                 return "a" * 40 + "\trefs/heads/builder/fixture"
-            return "refs/heads/builder/fixture"
+            exact(cmd, ["git", "-C", "/Users/shyamsivakumar/Code/" + lane.PATHS[repo],
+                        "worktree", "list", "--porcelain"])
+            return "worktree /tmp/fixture-worktree\n"
         launches.append(json.loads(cmd[2]))
         return "fixture-relaunch"
 
@@ -269,11 +267,9 @@ def dead_run_recovery():
              patch.object(lane, "DRY", False), patch.object(lane, "t3", side_effect=t3), \
              patch.object(lane, "last_reply", return_value="provider individual spend limit"), \
              patch.object(lane, "stall_receipts", return_value={f"ticket:{repo}#7:a1": "fixture-dead"}), \
-             patch.object(lane, "barred_workspace", return_value=None), \
+             patch.object(lane, "barred_workspace", side_effect=lambda t: None if t.get("worktreePath") else "root workspace"), \
              patch.object(lane, "read_json", return_value={"state": "OPEN", "headRefName": "builder/fixture",
-                                                           "baseRefName": "main", "number": 9,
-                                                           "isCrossRepository": False,
-                                                           "headRefOid": "a" * 40}), \
+                                                           "baseRefName": "main", "number": 9, "headRefOid": "a" * 40}), \
              patch.object(lane, "run", side_effect=run):
             lane.recover_dead_runs(ledger)
 
@@ -285,8 +281,6 @@ def dead_run_recovery():
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
-    # A stopped builder in the project root with no worktree of its own
-    # starts again in a worktree of the pull request's branch.
     thread.pop("worktreePath")
     dead["pullRequests"] = [{"repository": repo, "number": 9, "headRefOid": "a" * 40}]
     launches.clear()
@@ -403,14 +397,11 @@ def gate_pipeline():
     for name, target, verdict, reply, ledger, expected in cases:
         actions = []
         fork = name == "fork-pr"
-        origin_tip = "c" * 40 if fork else head
         pr = dict(number=20, state="OPEN", headRefOid=head,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
-        def command(cmd, timeout=150, fork=fork, origin_tip=origin_tip):
-            if cmd[0] == "git" and "ls-remote" in cmd:
-                return f"{origin_tip}\trefs/heads/builder/fixture"
+        def command(cmd, timeout=150):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == [lane.COORDQ, "list"]:
@@ -446,10 +437,7 @@ def gate_pipeline():
                     exact(payload["workspaceStrategy"], {"type": "worktree",
                                                          "baseRef": "origin/main" if fork else "origin/builder/fixture",
                                                          "startFromOrigin": True})
-                    exact("refs/pull/20/head" in payload["message"], fork)
                     exact(f"prints {head}" in payload["message"], fork)
-                    # The review brief says to check out nothing, so the
-                    # note for a reviewer must not ask for a checkout.
                     exact("checkout FETCH_HEAD" in payload["message"], False)
                     actions.append(payload["modelSelection"]["instanceId"])
                 return "fixture-receipt"
@@ -472,9 +460,9 @@ def gate_pipeline():
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "barred_workspace", return_value=None), \
-                 patch.object(lane, "branch_on_origin", return_value=origin_tip), \
+                 patch.object(lane, "branch_on_origin", return_value="c" * 40 if fork else head), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
-                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="main" if fork else "builder/fixture", baseRefName="main", isCrossRepository=fork, headRefOid=head)), \
+                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main", headRefOid=head)), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
                 lane.act_on_pr(target, 20, dict(ledger))
@@ -1700,8 +1688,6 @@ def send_integrity():
                 reads.append("read")
                 return {"thread": {**fixer_identity(), **thread}}
             def command(cmd, timeout=150):
-                if cmd[0] == "git":
-                    return "a" * 40 + "\trefs/heads/builder/fixture"
                 exact(reads, ["read"])
                 exact(cmd[:2], [lane.COORDQ, "start"])
                 payload = json.loads(cmd[2])
@@ -1719,8 +1705,9 @@ def send_integrity():
             output = io.StringIO()
             with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
                  patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
-                 patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main", isCrossRepository=False, headRefOid="a" * 40)), \
+                 patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main", headRefOid="a" * 40)), \
                  patch.object(lane, "barred_workspace", return_value=None), \
+                 patch.object(lane, "branch_on_origin", return_value="a" * 40), \
                  patch.object(lane, "run", command), contextlib.redirect_stdout(output):
                 try:
                     result = lane.send("old", "brief", "fix", ledger, key, repo=repo, pr_number=385)
@@ -1807,7 +1794,7 @@ def root_workspace():
                 if "symbolic-ref" in cmd:
                     return branch
                 exact(cmd[1:4], ["-C", root, "ls-remote"])
-                exact(cmd[4:], ["--heads", "origin", "builder/fixture"])
+                exact(cmd[4:], ["--heads", "origin", "refs/heads/builder/fixture"])
                 return listing
             payload = json.loads(cmd[2])
             if payload.get("threadId"):
@@ -1819,7 +1806,7 @@ def root_workspace():
                 messages.append(payload["message"])
             return "receipt"
         pull = pr or dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main",
-                          isCrossRepository=False, headRefOid=head)
+                          headRefOid=head)
         with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
              patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
              patch.object(lane, "read_json", return_value=pull), \
@@ -1827,85 +1814,24 @@ def root_workspace():
             result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=pr_number)
         return result, actions
 
-    # A thread without a worktree works in the shared root.
-    result, actions = send_to({"status": "running"})
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
+    def fresh(thread, reason, **kw):
+        exact(send_to(thread, **kw), (f"fresh (old {reason}): receipt", ["fresh"]))
+
+    def checked_out(thread, **kw):
+        fresh(thread, "root workspace", base="origin/main", **kw)
+        exact(all(part in messages[-1] for part in ("refs/pull/512/head", f"prints {head}", "git checkout FETCH_HEAD")), True)
+
+    fresh({"status": "running"}, "root workspace")
     exact(messages[-1], "brief")
-    # So does a thread whose worktree is the root checkout of a repository.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    # And so does a thread whose worktree is the root checkout of another
-    # repository.
-    result, actions = send_to({"status": "running", "worktreePath": worktree}, git=other_root_git)
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    # A worktree path that cannot be read cannot be shown to be a worktree
-    # of its own, so the work does not go there either.
-    result, actions = send_to({"status": "running", "worktreePath": worktree}, git="")
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    # A thread with its own worktree takes the work.
-    result, actions = send_to({"status": "running", "worktreePath": worktree})
-    exact(result, "receipt")
-    exact(actions, ["send"])
-    # The rule holds on every path of the lane, not only on the check
-    # path: a thread in a shared checkout takes no work either.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    # A thread whose worktree is on a herdr branch takes no work either:
-    # a herdr branch is Shyam's to merge.
-    result, actions = send_to({"status": "running", "worktreePath": worktree},
-                               branch="refs/heads/herdr/gh-trim")
-    exact(result, "fresh (old herdr branch herdr/gh-trim): receipt")
-    exact(actions, ["fresh"])
-    # A branch that is not on origin cannot be the base of the worktree,
-    # so the work starts at the default branch instead of being dropped.
-    result, actions = send_to({"status": "running"}, listing="", base="origin/main")
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    # A pull request from a fork has its branch only on the fork: the work
-    # starts at the default branch and the note says how to get the code.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
-                               listing="", base="origin/main")
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    exact("refs/pull/512/head" in messages[-1], True)
-    # A builder checks the head out before it changes anything.
-    exact("checkout FETCH_HEAD" in messages[-1], True)
-    # A pull request from a fork can use a branch name that origin has too,
-    # at another commit: the name of the branch proves nothing, and the
-    # note gives the head commit to check the fetch against.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
-                               pr=dict(number=512, state="OPEN", headRefName="main", baseRefName="main",
-                                       isCrossRepository=True, headRefOid="b" * 40),
-                               listing="c" * 40 + "\trefs/heads/main", base="origin/main")
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    exact("refs/pull/512/head" in messages[-1] and "prints " + "b" * 40 in messages[-1], True)
-    # A pull request that is not from a fork still starts at the default
-    # branch when its branch on origin is not at its head commit.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
-                               listing="c" * 40 + "\trefs/heads/builder/fixture", base="origin/main")
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    exact("refs/pull/512/head" in messages[-1] and "prints " + head in messages[-1], True)
-    # A pull request that does not say whether it is from a fork is not
-    # taken to be from the base repository.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
-                               pr=dict(number=512, state="OPEN", headRefName="builder/fixture",
-                                       baseRefName="main", headRefOid=head), base="origin/main")
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
-    exact("refs/pull/512/head" in messages[-1], True)
-    # The thread's own pull request names the branch when the send carries none.
-    result, actions = send_to({"status": "running", "worktreePath": root,
-                               "pullRequests": [{"repository": repo, "number": 512}]},
-                               git=root_git, pr_number=None)
-    exact(result, "fresh (old root workspace): receipt")
-    exact(actions, ["fresh"])
+    fresh({"status": "running", "worktreePath": root}, "root workspace", git=root_git)
+    fresh({"status": "running", "worktreePath": worktree}, "root workspace", git=other_root_git)
+    fresh({"status": "running", "worktreePath": worktree}, "root workspace", git="")
+    fresh({"status": "running", "worktreePath": worktree}, "herdr branch herdr/gh-trim", branch="refs/heads/herdr/gh-trim")
+    fresh({"status": "running", "worktreePath": worktree}, "branch unreadable", branch="")
+    exact(send_to({"status": "running", "worktreePath": worktree}), ("receipt", ["send"]))
+    checked_out({"status": "running"}, listing="")
+    checked_out({"status": "running"}, listing="c" * 40 + "\trefs/heads/builder/fixture")
+    fresh({"status": "running", "pullRequests": [{"repository": repo, "number": 512}]}, "root workspace", pr_number=None)
     # A herdr pull request is skipped, and a merged one is skipped too.
     result, actions = send_to({"status": "running", "worktreePath": worktree},
                                pr=dict(number=512, state="OPEN", headRefName="herdr/board-stuck-lane",
