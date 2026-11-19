@@ -339,7 +339,7 @@ ALLOWED_COMMANDS = [
     "gh pr view 1 -R x/y",
     "gh --repo x/y pr list",
 ]
-MERGES_NOT_ENFORCED = [
+MERGES = [
     "gh pr merge 531",
     "gh pr merge 531 -R x/y --squash --delete-branch",
     "gh -R x/y pr merge 531 --squash",
@@ -347,9 +347,22 @@ MERGES_NOT_ENFORCED = [
     "gh pr -R x/y merge 531",
     "hc send c 'gh pr merge is gated' && gh pr merge 531 --squash",
     "gh pr merge 531 --match-head-commit",
+    "gh -R x/y pr merge 1 --squash --match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223",
+    "gh pr merge 1",
+    "bash -c 'gh pr merge 1'",
+    "eval \"gh -R x/y pr merge 1\"",
+    "heavy gh pr merge 1",
     "gh pr merge 531 --match-head-commit main",
     "if true; then gh pr merge 531 --squash; fi",
     "until false; do gh pr merge 531; done",
+]
+
+
+NOT_MERGES = [
+    "gh pr view 1",
+    "gh pr create --title T --body 'then gh pr merge 1'",
+    "gh -R x/y pr view 1",
+    "gh api repos/x/y/pulls/1",
 ]
 
 
@@ -401,10 +414,13 @@ class HookTest(unittest.TestCase):
                 command,
             )
 
-    def test_merge_commands_are_not_enforced_here(self):
-        for role in (None, "gate"):
-            for command in MERGES_NOT_ENFORCED:
-                self.assertIsNone(self.decided(command, role), (role, command))
+    def test_every_merge_command_is_denied_for_every_role(self):
+        for role in (None, "gate", "builder"):
+            for command in MERGES:
+                decision = self.decided(command, role)
+                self.assertEqual((decision or {}).get("permissionDecision"), "deny", command)
+            for command in NOT_MERGES:
+                self.assertIsNone(self.decided(command, role), command)
 
     def test_a_command_in_or_moving_into_the_ascend_tree_is_denied(self):
         ascend = Path.home() / "Code/slash-eureka/x"
@@ -471,7 +487,7 @@ console.log(JSON.stringify(out));
             (bash("git push"), True),
             (bash("git push origin t3/x --force"), True),
             (bash("git push origin HEAD:main"), True),
-            (bash("gh -R x/y pr merge 531 --squash"), False),
+            (bash("gh -R x/y pr merge 531 --squash"), True),
             (bash("ls ~/.ssh; cat ~/.ssh/id_rsa"), True),
             (bash("git push -u origin t3/x"), False),
             (bash("git push main task"), False),

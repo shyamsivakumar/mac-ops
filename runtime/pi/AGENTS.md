@@ -55,6 +55,7 @@ The list lives in `mac-ops runtime/agents/deny-rules.json` and `scripts/install_
 - No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).
 - No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.
 - No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.
+- No `gh pr merge` by an agent. Merges belong to the lane and the merge pass.
 <!-- mac-ops deny-rules END -->
 
 For omp conventions, see `llmwiki/runtime/omp/AGENTS.md`. Pi board workers

@@ -1,8 +1,8 @@
 PASS installer: install twice over a scratch home, then status: installed=True
-PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-x5n9bpnc/home/.pi/agent/extensions/deny-guar
+PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-o0755fio/home/.pi/agent/extensions/deny-guar
 PASS installer: claude deny list complete: missing=[]
-PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-x5n9bpnc/home/.claude/hooks/deny-merge-guard.py
-PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-x5n9bpnc/home/.claude/hooks/deny-merge-guard.py']
+PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-o0755fio/home/.claude/hooks/deny-merge-guard.py
+PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-o0755fio/home/.claude/hooks/deny-merge-guard.py']
 not run claude permissions.deny: read under slash-eureka: Read(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: edit under slash-eureka: Edit(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: read an env file: Read(**/.env) installed; Claude evaluates it in a session, so the decision is not run here
@@ -18,7 +18,7 @@ PASS claude hook: hc send with an unquoted push command spelled out: allow (no d
 PASS claude hook: hc send naming the merge command: allow (no decision)
 PASS claude hook: PR heredoc naming a merge: allow (no decision)
 PASS claude hook: commit message naming the merge command: allow (no decision)
-PASS claude hook: real merge after a message naming it: allowed (merge rule not enforced here): allow (no decision)
+PASS claude hook: real merge after a message naming it: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
 PASS claude hook: push HEAD to a protected branch: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
 PASS claude hook: push HEAD to a full protected ref: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
 PASS claude hook: plus-prefixed protected destination: deny (mac-ops deny rules (#530): force-push in any form is denied)
@@ -49,24 +49,29 @@ PASS claude hook: push main inside a for loop: deny (mac-ops deny rules (#530): 
 PASS claude hook: push main after a negation: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
 PASS claude hook: push main inside a brace group: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
 PASS claude hook: bare push inside a while loop: deny (mac-ops deny rules (#530): this push names no explicit destination branch; name the branch)
-PASS claude hook: builder merge inside an if body: allowed (merge rule not enforced here): allow (no decision)
-PASS claude hook: builder merge inside an until loop: allowed (merge rule not enforced here): allow (no decision)
+PASS claude hook: builder merge inside an if body: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: builder merge inside an until loop: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
 PASS claude hook: task-branch push inside an if body: allow (no decision)
 PASS claude hook: git push origin task: allow (no decision)
 PASS claude hook: git push main task (a remote named main): allow (no decision)
 PASS claude hook: git push origin HEAD:main: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
 PASS claude hook: git push origin task --force: deny (mac-ops deny rules (#530): force-push in any form is denied)
 PASS claude hook: git push origin +task: deny (mac-ops deny rules (#530): force-push in any form is denied)
-PASS claude hook: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allow (no decision)
-PASS claude hook: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allow (no decision)
-PASS claude hook: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allow (no decision)
+PASS claude hook: gh -R x/y pr merge 1 from a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: gh --repo=x/y pr merge 1 from a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: gh pr -R x/y merge 1 from a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
 PASS claude hook: gh -R x/y pr view 1: allow (no decision)
-PASS claude hook: unpinned merge: allowed (merge rule not enforced here): allow (no decision)
-PASS claude hook: pinned merge as a builder: allowed (merge rule not enforced here): allow (no decision)
-PASS claude hook: pinned merge from a gate role (not executed): allow (no decision)
-PASS claude hook: pinned merge with -R before pr from a gate role: allow (no decision)
-PASS claude hook: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allow (no decision)
-PASS claude hook: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allow (no decision)
+PASS claude hook: unpinned merge: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: pinned merge as a builder: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: pinned merge from a gate role (not executed): deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: gh pr merge 1: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: gh pr view 1: allow (no decision)
+PASS claude hook: gh pr create: allow (no decision)
+PASS claude hook: merge inside bash -c: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: merge inside eval: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: pinned merge with -R before pr from a gate role: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: pin mentioned in a body, not a merge argument: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
+PASS claude hook: pin quoted inside a multiword subject: deny (mac-ops deny rules (#530): gh pr merge is denied for agents; merges belong to the lane and)
 PASS claude hook: cwd inside the Ascend tree, cat README.md: deny
 PASS claude hook: cwd in mac-ops, cat README.md: allow
 PASS claude hook: cd into the Ascend tree, then ls: deny
@@ -80,7 +85,7 @@ PASS pi guard agent: hc send with an unquoted push command spelled out: allowed
 PASS pi guard agent: hc send naming the merge command: allowed
 PASS pi guard agent: PR heredoc naming a merge: allowed
 PASS pi guard agent: commit message naming the merge command: allowed
-PASS pi guard agent: real merge after a message naming it: allowed (merge rule not enforced here): allowed
+PASS pi guard agent: real merge after a message naming it: blocked
 PASS pi guard agent: push HEAD to a protected branch: blocked
 PASS pi guard agent: push HEAD to a full protected ref: blocked
 PASS pi guard agent: plus-prefixed protected destination: blocked
@@ -111,24 +116,29 @@ PASS pi guard agent: push main inside a for loop: blocked
 PASS pi guard agent: push main after a negation: blocked
 PASS pi guard agent: push main inside a brace group: blocked
 PASS pi guard agent: bare push inside a while loop: blocked
-PASS pi guard agent: builder merge inside an if body: allowed (merge rule not enforced here): allowed
-PASS pi guard agent: builder merge inside an until loop: allowed (merge rule not enforced here): allowed
+PASS pi guard agent: builder merge inside an if body: blocked
+PASS pi guard agent: builder merge inside an until loop: blocked
 PASS pi guard agent: task-branch push inside an if body: allowed
 PASS pi guard agent: git push origin task: allowed
 PASS pi guard agent: git push main task (a remote named main): allowed
 PASS pi guard agent: git push origin HEAD:main: blocked
 PASS pi guard agent: git push origin task --force: blocked
 PASS pi guard agent: git push origin +task: blocked
-PASS pi guard agent: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allowed
+PASS pi guard agent: gh -R x/y pr merge 1 from a builder: blocked
+PASS pi guard agent: gh --repo=x/y pr merge 1 from a builder: blocked
+PASS pi guard agent: gh pr -R x/y merge 1 from a builder: blocked
 PASS pi guard agent: gh -R x/y pr view 1: allowed
-PASS pi guard agent: unpinned merge: allowed (merge rule not enforced here): allowed
-PASS pi guard agent: pinned merge as a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent: pinned merge from a gate role (not executed): allowed
-PASS pi guard agent: pinned merge with -R before pr from a gate role: allowed
-PASS pi guard agent: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allowed
-PASS pi guard agent: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allowed
+PASS pi guard agent: unpinned merge: blocked
+PASS pi guard agent: pinned merge as a builder: blocked
+PASS pi guard agent: pinned merge from a gate role (not executed): blocked
+PASS pi guard agent: gh pr merge 1: blocked
+PASS pi guard agent: gh pr view 1: allowed
+PASS pi guard agent: gh pr create: allowed
+PASS pi guard agent: merge inside bash -c: blocked
+PASS pi guard agent: merge inside eval: blocked
+PASS pi guard agent: pinned merge with -R before pr from a gate role: blocked
+PASS pi guard agent: pin mentioned in a body, not a merge argument: blocked
+PASS pi guard agent: pin quoted inside a multiword subject: blocked
 PASS pi guard agent: read under slash-eureka: blocked
 PASS pi guard agent: edit an env file: blocked
 PASS pi guard agent: write an env file: blocked
@@ -147,7 +157,7 @@ PASS pi guard agent-minimax: hc send with an unquoted push command spelled out: 
 PASS pi guard agent-minimax: hc send naming the merge command: allowed
 PASS pi guard agent-minimax: PR heredoc naming a merge: allowed
 PASS pi guard agent-minimax: commit message naming the merge command: allowed
-PASS pi guard agent-minimax: real merge after a message naming it: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-minimax: real merge after a message naming it: blocked
 PASS pi guard agent-minimax: push HEAD to a protected branch: blocked
 PASS pi guard agent-minimax: push HEAD to a full protected ref: blocked
 PASS pi guard agent-minimax: plus-prefixed protected destination: blocked
@@ -178,24 +188,29 @@ PASS pi guard agent-minimax: push main inside a for loop: blocked
 PASS pi guard agent-minimax: push main after a negation: blocked
 PASS pi guard agent-minimax: push main inside a brace group: blocked
 PASS pi guard agent-minimax: bare push inside a while loop: blocked
-PASS pi guard agent-minimax: builder merge inside an if body: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-minimax: builder merge inside an until loop: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-minimax: builder merge inside an if body: blocked
+PASS pi guard agent-minimax: builder merge inside an until loop: blocked
 PASS pi guard agent-minimax: task-branch push inside an if body: allowed
 PASS pi guard agent-minimax: git push origin task: allowed
 PASS pi guard agent-minimax: git push main task (a remote named main): allowed
 PASS pi guard agent-minimax: git push origin HEAD:main: blocked
 PASS pi guard agent-minimax: git push origin task --force: blocked
 PASS pi guard agent-minimax: git push origin +task: blocked
-PASS pi guard agent-minimax: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-minimax: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-minimax: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-minimax: gh -R x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-minimax: gh --repo=x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-minimax: gh pr -R x/y merge 1 from a builder: blocked
 PASS pi guard agent-minimax: gh -R x/y pr view 1: allowed
-PASS pi guard agent-minimax: unpinned merge: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-minimax: pinned merge as a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-minimax: pinned merge from a gate role (not executed): allowed
-PASS pi guard agent-minimax: pinned merge with -R before pr from a gate role: allowed
-PASS pi guard agent-minimax: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-minimax: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-minimax: unpinned merge: blocked
+PASS pi guard agent-minimax: pinned merge as a builder: blocked
+PASS pi guard agent-minimax: pinned merge from a gate role (not executed): blocked
+PASS pi guard agent-minimax: gh pr merge 1: blocked
+PASS pi guard agent-minimax: gh pr view 1: allowed
+PASS pi guard agent-minimax: gh pr create: allowed
+PASS pi guard agent-minimax: merge inside bash -c: blocked
+PASS pi guard agent-minimax: merge inside eval: blocked
+PASS pi guard agent-minimax: pinned merge with -R before pr from a gate role: blocked
+PASS pi guard agent-minimax: pin mentioned in a body, not a merge argument: blocked
+PASS pi guard agent-minimax: pin quoted inside a multiword subject: blocked
 PASS pi guard agent-minimax: read under slash-eureka: blocked
 PASS pi guard agent-minimax: edit an env file: blocked
 PASS pi guard agent-minimax: write an env file: blocked
@@ -214,7 +229,7 @@ PASS pi guard agent-glm: hc send with an unquoted push command spelled out: allo
 PASS pi guard agent-glm: hc send naming the merge command: allowed
 PASS pi guard agent-glm: PR heredoc naming a merge: allowed
 PASS pi guard agent-glm: commit message naming the merge command: allowed
-PASS pi guard agent-glm: real merge after a message naming it: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-glm: real merge after a message naming it: blocked
 PASS pi guard agent-glm: push HEAD to a protected branch: blocked
 PASS pi guard agent-glm: push HEAD to a full protected ref: blocked
 PASS pi guard agent-glm: plus-prefixed protected destination: blocked
@@ -245,24 +260,29 @@ PASS pi guard agent-glm: push main inside a for loop: blocked
 PASS pi guard agent-glm: push main after a negation: blocked
 PASS pi guard agent-glm: push main inside a brace group: blocked
 PASS pi guard agent-glm: bare push inside a while loop: blocked
-PASS pi guard agent-glm: builder merge inside an if body: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-glm: builder merge inside an until loop: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-glm: builder merge inside an if body: blocked
+PASS pi guard agent-glm: builder merge inside an until loop: blocked
 PASS pi guard agent-glm: task-branch push inside an if body: allowed
 PASS pi guard agent-glm: git push origin task: allowed
 PASS pi guard agent-glm: git push main task (a remote named main): allowed
 PASS pi guard agent-glm: git push origin HEAD:main: blocked
 PASS pi guard agent-glm: git push origin task --force: blocked
 PASS pi guard agent-glm: git push origin +task: blocked
-PASS pi guard agent-glm: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-glm: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-glm: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-glm: gh -R x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-glm: gh --repo=x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-glm: gh pr -R x/y merge 1 from a builder: blocked
 PASS pi guard agent-glm: gh -R x/y pr view 1: allowed
-PASS pi guard agent-glm: unpinned merge: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-glm: pinned merge as a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-glm: pinned merge from a gate role (not executed): allowed
-PASS pi guard agent-glm: pinned merge with -R before pr from a gate role: allowed
-PASS pi guard agent-glm: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-glm: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-glm: unpinned merge: blocked
+PASS pi guard agent-glm: pinned merge as a builder: blocked
+PASS pi guard agent-glm: pinned merge from a gate role (not executed): blocked
+PASS pi guard agent-glm: gh pr merge 1: blocked
+PASS pi guard agent-glm: gh pr view 1: allowed
+PASS pi guard agent-glm: gh pr create: allowed
+PASS pi guard agent-glm: merge inside bash -c: blocked
+PASS pi guard agent-glm: merge inside eval: blocked
+PASS pi guard agent-glm: pinned merge with -R before pr from a gate role: blocked
+PASS pi guard agent-glm: pin mentioned in a body, not a merge argument: blocked
+PASS pi guard agent-glm: pin quoted inside a multiword subject: blocked
 PASS pi guard agent-glm: read under slash-eureka: blocked
 PASS pi guard agent-glm: edit an env file: blocked
 PASS pi guard agent-glm: write an env file: blocked
@@ -281,7 +301,7 @@ PASS pi guard agent-deepseek: hc send with an unquoted push command spelled out:
 PASS pi guard agent-deepseek: hc send naming the merge command: allowed
 PASS pi guard agent-deepseek: PR heredoc naming a merge: allowed
 PASS pi guard agent-deepseek: commit message naming the merge command: allowed
-PASS pi guard agent-deepseek: real merge after a message naming it: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-deepseek: real merge after a message naming it: blocked
 PASS pi guard agent-deepseek: push HEAD to a protected branch: blocked
 PASS pi guard agent-deepseek: push HEAD to a full protected ref: blocked
 PASS pi guard agent-deepseek: plus-prefixed protected destination: blocked
@@ -312,24 +332,29 @@ PASS pi guard agent-deepseek: push main inside a for loop: blocked
 PASS pi guard agent-deepseek: push main after a negation: blocked
 PASS pi guard agent-deepseek: push main inside a brace group: blocked
 PASS pi guard agent-deepseek: bare push inside a while loop: blocked
-PASS pi guard agent-deepseek: builder merge inside an if body: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-deepseek: builder merge inside an until loop: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-deepseek: builder merge inside an if body: blocked
+PASS pi guard agent-deepseek: builder merge inside an until loop: blocked
 PASS pi guard agent-deepseek: task-branch push inside an if body: allowed
 PASS pi guard agent-deepseek: git push origin task: allowed
 PASS pi guard agent-deepseek: git push main task (a remote named main): allowed
 PASS pi guard agent-deepseek: git push origin HEAD:main: blocked
 PASS pi guard agent-deepseek: git push origin task --force: blocked
 PASS pi guard agent-deepseek: git push origin +task: blocked
-PASS pi guard agent-deepseek: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-deepseek: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-deepseek: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-deepseek: gh -R x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-deepseek: gh --repo=x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-deepseek: gh pr -R x/y merge 1 from a builder: blocked
 PASS pi guard agent-deepseek: gh -R x/y pr view 1: allowed
-PASS pi guard agent-deepseek: unpinned merge: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-deepseek: pinned merge as a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-deepseek: pinned merge from a gate role (not executed): allowed
-PASS pi guard agent-deepseek: pinned merge with -R before pr from a gate role: allowed
-PASS pi guard agent-deepseek: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-deepseek: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-deepseek: unpinned merge: blocked
+PASS pi guard agent-deepseek: pinned merge as a builder: blocked
+PASS pi guard agent-deepseek: pinned merge from a gate role (not executed): blocked
+PASS pi guard agent-deepseek: gh pr merge 1: blocked
+PASS pi guard agent-deepseek: gh pr view 1: allowed
+PASS pi guard agent-deepseek: gh pr create: allowed
+PASS pi guard agent-deepseek: merge inside bash -c: blocked
+PASS pi guard agent-deepseek: merge inside eval: blocked
+PASS pi guard agent-deepseek: pinned merge with -R before pr from a gate role: blocked
+PASS pi guard agent-deepseek: pin mentioned in a body, not a merge argument: blocked
+PASS pi guard agent-deepseek: pin quoted inside a multiword subject: blocked
 PASS pi guard agent-deepseek: read under slash-eureka: blocked
 PASS pi guard agent-deepseek: edit an env file: blocked
 PASS pi guard agent-deepseek: write an env file: blocked
@@ -348,7 +373,7 @@ PASS pi guard agent-openai-api: hc send with an unquoted push command spelled ou
 PASS pi guard agent-openai-api: hc send naming the merge command: allowed
 PASS pi guard agent-openai-api: PR heredoc naming a merge: allowed
 PASS pi guard agent-openai-api: commit message naming the merge command: allowed
-PASS pi guard agent-openai-api: real merge after a message naming it: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-openai-api: real merge after a message naming it: blocked
 PASS pi guard agent-openai-api: push HEAD to a protected branch: blocked
 PASS pi guard agent-openai-api: push HEAD to a full protected ref: blocked
 PASS pi guard agent-openai-api: plus-prefixed protected destination: blocked
@@ -379,24 +404,29 @@ PASS pi guard agent-openai-api: push main inside a for loop: blocked
 PASS pi guard agent-openai-api: push main after a negation: blocked
 PASS pi guard agent-openai-api: push main inside a brace group: blocked
 PASS pi guard agent-openai-api: bare push inside a while loop: blocked
-PASS pi guard agent-openai-api: builder merge inside an if body: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-openai-api: builder merge inside an until loop: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-openai-api: builder merge inside an if body: blocked
+PASS pi guard agent-openai-api: builder merge inside an until loop: blocked
 PASS pi guard agent-openai-api: task-branch push inside an if body: allowed
 PASS pi guard agent-openai-api: git push origin task: allowed
 PASS pi guard agent-openai-api: git push main task (a remote named main): allowed
 PASS pi guard agent-openai-api: git push origin HEAD:main: blocked
 PASS pi guard agent-openai-api: git push origin task --force: blocked
 PASS pi guard agent-openai-api: git push origin +task: blocked
-PASS pi guard agent-openai-api: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-openai-api: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-openai-api: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-openai-api: gh -R x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-openai-api: gh --repo=x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-openai-api: gh pr -R x/y merge 1 from a builder: blocked
 PASS pi guard agent-openai-api: gh -R x/y pr view 1: allowed
-PASS pi guard agent-openai-api: unpinned merge: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-openai-api: pinned merge as a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-openai-api: pinned merge from a gate role (not executed): allowed
-PASS pi guard agent-openai-api: pinned merge with -R before pr from a gate role: allowed
-PASS pi guard agent-openai-api: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-openai-api: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-openai-api: unpinned merge: blocked
+PASS pi guard agent-openai-api: pinned merge as a builder: blocked
+PASS pi guard agent-openai-api: pinned merge from a gate role (not executed): blocked
+PASS pi guard agent-openai-api: gh pr merge 1: blocked
+PASS pi guard agent-openai-api: gh pr view 1: allowed
+PASS pi guard agent-openai-api: gh pr create: allowed
+PASS pi guard agent-openai-api: merge inside bash -c: blocked
+PASS pi guard agent-openai-api: merge inside eval: blocked
+PASS pi guard agent-openai-api: pinned merge with -R before pr from a gate role: blocked
+PASS pi guard agent-openai-api: pin mentioned in a body, not a merge argument: blocked
+PASS pi guard agent-openai-api: pin quoted inside a multiword subject: blocked
 PASS pi guard agent-openai-api: read under slash-eureka: blocked
 PASS pi guard agent-openai-api: edit an env file: blocked
 PASS pi guard agent-openai-api: write an env file: blocked
@@ -415,7 +445,7 @@ PASS pi guard agent-anthropic-api: hc send with an unquoted push command spelled
 PASS pi guard agent-anthropic-api: hc send naming the merge command: allowed
 PASS pi guard agent-anthropic-api: PR heredoc naming a merge: allowed
 PASS pi guard agent-anthropic-api: commit message naming the merge command: allowed
-PASS pi guard agent-anthropic-api: real merge after a message naming it: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-anthropic-api: real merge after a message naming it: blocked
 PASS pi guard agent-anthropic-api: push HEAD to a protected branch: blocked
 PASS pi guard agent-anthropic-api: push HEAD to a full protected ref: blocked
 PASS pi guard agent-anthropic-api: plus-prefixed protected destination: blocked
@@ -446,24 +476,29 @@ PASS pi guard agent-anthropic-api: push main inside a for loop: blocked
 PASS pi guard agent-anthropic-api: push main after a negation: blocked
 PASS pi guard agent-anthropic-api: push main inside a brace group: blocked
 PASS pi guard agent-anthropic-api: bare push inside a while loop: blocked
-PASS pi guard agent-anthropic-api: builder merge inside an if body: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-anthropic-api: builder merge inside an until loop: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-anthropic-api: builder merge inside an if body: blocked
+PASS pi guard agent-anthropic-api: builder merge inside an until loop: blocked
 PASS pi guard agent-anthropic-api: task-branch push inside an if body: allowed
 PASS pi guard agent-anthropic-api: git push origin task: allowed
 PASS pi guard agent-anthropic-api: git push main task (a remote named main): allowed
 PASS pi guard agent-anthropic-api: git push origin HEAD:main: blocked
 PASS pi guard agent-anthropic-api: git push origin task --force: blocked
 PASS pi guard agent-anthropic-api: git push origin +task: blocked
-PASS pi guard agent-anthropic-api: gh -R x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-anthropic-api: gh --repo=x/y pr merge 1 from a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-anthropic-api: gh pr -R x/y merge 1 from a builder: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-anthropic-api: gh -R x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-anthropic-api: gh --repo=x/y pr merge 1 from a builder: blocked
+PASS pi guard agent-anthropic-api: gh pr -R x/y merge 1 from a builder: blocked
 PASS pi guard agent-anthropic-api: gh -R x/y pr view 1: allowed
-PASS pi guard agent-anthropic-api: unpinned merge: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-anthropic-api: pinned merge as a builder: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-anthropic-api: pinned merge from a gate role (not executed): allowed
-PASS pi guard agent-anthropic-api: pinned merge with -R before pr from a gate role: allowed
-PASS pi guard agent-anthropic-api: pin mentioned in a body, not a merge argument: allowed (merge rule not enforced here): allowed
-PASS pi guard agent-anthropic-api: pin quoted inside a multiword subject: allowed (merge rule not enforced here): allowed
+PASS pi guard agent-anthropic-api: unpinned merge: blocked
+PASS pi guard agent-anthropic-api: pinned merge as a builder: blocked
+PASS pi guard agent-anthropic-api: pinned merge from a gate role (not executed): blocked
+PASS pi guard agent-anthropic-api: gh pr merge 1: blocked
+PASS pi guard agent-anthropic-api: gh pr view 1: allowed
+PASS pi guard agent-anthropic-api: gh pr create: allowed
+PASS pi guard agent-anthropic-api: merge inside bash -c: blocked
+PASS pi guard agent-anthropic-api: merge inside eval: blocked
+PASS pi guard agent-anthropic-api: pinned merge with -R before pr from a gate role: blocked
+PASS pi guard agent-anthropic-api: pin mentioned in a body, not a merge argument: blocked
+PASS pi guard agent-anthropic-api: pin quoted inside a multiword subject: blocked
 PASS pi guard agent-anthropic-api: read under slash-eureka: blocked
 PASS pi guard agent-anthropic-api: edit an env file: blocked
 PASS pi guard agent-anthropic-api: write an env file: blocked
@@ -477,4 +512,4 @@ PASS pi guard agent-anthropic-api: write prose that mentions .env: allowed
 PASS pushing a task branch is still allowed (scratch remote): ['refs/heads/t3/deny-probe']
 PASS scratch remote has no main branch: ['refs/heads/t3/deny-probe']
 
-471 passed, 0 failed, 7 not run
+506 passed, 0 failed, 7 not run

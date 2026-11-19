@@ -13,11 +13,19 @@ each tool checks tools, and written into the scope files as prose.
 2. No reads or edits of secret files: `.env` files, `auth.json`, key and token
    files, `~/.ssh`.
 3. No force-push in any form, and no push to `main` or `master`.
-4. A command whose working directory is inside the Ascend tree is refused.
+4. No `gh pr merge` by an agent.
+5. A command whose working directory is inside the Ascend tree is refused.
 
-The list only denies. Nothing here allows anything. Merges are owned by the
-lane and the merge pass (#647/#649), not enforced by this hook, because a
-command parser cannot stop `gh api .../merge`.
+The list only denies. Nothing here allows anything.
+
+`gh pr merge` is refused for every agent, in any role and with any arguments,
+including `-R` or `--repo` before or after `pr`, and inside `bash -c`, `eval`
+and the wrappers the push parser handles. The rule depends on #656 being
+installed first: once it is, the lane and the merge pass (#647/#649) are
+processes, not agents, so no agent merges anywhere. There is no gate role and
+no pin check. A merge run from Shyam's own shell is not hooked and needs
+nothing. A command parser cannot stop `gh api .../merge`, so that form is not
+enforced here.
 
 ## How a push is decided
 
