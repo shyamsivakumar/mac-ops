@@ -81,6 +81,13 @@ healthy window. The gate is sampled by the controller; it does not modify the
 board plugin or depend on an upstream change. The installer does not change
 worker instructions.
 
+## Roll a bot back
+
+`python3 scripts/bot_rollback.py --dry-run` prints the exact steps that roll
+each bot back to the rollback SHA its promotion path recorded, and the health
+check that follows. The dry run reads only; `--execute` runs the rollback, and
+that is the owner's call. See [the bot rollback command](docs/bot-rollback.md).
+
 ## Check a task
 
 Run `~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py` from the task
