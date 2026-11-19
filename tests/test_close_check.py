@@ -896,7 +896,7 @@ class CloseStepTest(unittest.TestCase):
 class GateBriefTest(unittest.TestCase):
     def test_the_gate_brief_runs_the_checklist_before_the_close(self):
         gate_policy = load(BIN / "gate_policy.py", "gate_policy")
-        brief = gate_policy.build_gate_brief({"key": "MO"}, "shyamsivakumar/mac-ops", 524, 12,
+        brief = gate_policy.build_gate_brief({"key": "MO"}, "shyamsivakumar/fixture", 524, 12,
                                              "a" * 40, False)
         self.assertIn("close_check.py", brief)
         self.assertLess(brief.index("close_check.py"), brief.index("gh issue close"))

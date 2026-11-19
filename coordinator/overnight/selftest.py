@@ -403,15 +403,28 @@ def gate_pipeline():
          [chain[chain.index(chain[0]) + 1]], None),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
+        ("stray-pass-ignored", repo, "absent", "", {}, [chain[0]], None),
+        ("earlier-fail-later-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"], None),
+        ("retry-replaced-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("merge-timeout-but-merged", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
     ]
+    gate_key = f"gate:{repo}#20:{head}"
+    extra = {"stray-pass-ignored": {"stray": "VERDICT: PASS"},
+             "earlier-fail-later-pass": {gate_key + ":old:retry": "old"},
+             "retry-replaced-pass": {gate_key + ":old:retry": "old"}}
+    replies = {"stray": "VERDICT: PASS", "old": "dead\nVERDICT: FAIL"}
+    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
+        receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate"}
+        receipts.update(extra.get(name, {}))
+        thread_replies = {**replies, **replies_by_case.get(name, {}), "gate": reply}
         pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
         def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
-                    head=head, reply=reply, verdict=verdict):
+                    head=head, reply=reply, verdict=verdict, name=name):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
@@ -449,9 +462,13 @@ def gate_pipeline():
             if cmd[:2] == ["ticket", "close"]:
                 actions.append("provides")
                 return "closed"
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state"]:
+                return json.dumps({"state": "MERGED"})
             if cmd[:3] == ["gh", "pr", "merge"]:
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
+                if name == "merge-timeout-but-merged":
+                    raise subprocess.TimeoutExpired(cmd, 150)
                 return "merged"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
@@ -474,20 +491,17 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args, head=head, verdict=verdict, reply=reply):
-            if tool == "t3_thread_list":
-                exact(head[:8] in args["titleContains"], True)
-                return {"threads": [] if verdict == "absent" else [
-                    dict(threadId="gate", status="completed", updatedAt="fixture")]}
+        def threads(tool, args, thread_replies=thread_replies):
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
-                return {"items": [{"type": "assistant_message", "text": reply}]}
+                return {"thread": {"status": "completed"},
+                        "items": [{"type": "assistant_message", "text": thread_replies[args["threadId"]]}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def decision(item, actions=actions):
             # The board write is the one live file this eval must not touch.
-            exact(item["id"], "prompt-merge-FIX-20")
+            exact(item["id"] in ("prompt-merge-FIX-20", "lane-gate-split-FIX-20"), True)
             exact(item["group"], "Coordinator")
             exact(item["kind"], "action")
             exact(item.get("options"), None)
@@ -497,6 +511,7 @@ def gate_pipeline():
         try:
             with tempfile.TemporaryDirectory() as scratch, \
                  scratch_board(scratch), \
+                 patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
@@ -504,6 +519,7 @@ def gate_pipeline():
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
+                Path(scratch, "receipts.json").write_text(json.dumps(receipts))
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
             try:
@@ -1564,6 +1580,12 @@ def consolidation_guard():
                 exact("verify every Provides claim" in emitted, True)
                 exact("false, missing or unverified, close nothing" in emitted, True)
                 exact(emitted.index("verify every Provides claim") < emitted.index("gh issue close"), True)
+    lane_brief = ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX"}, 1, 2, "a" * 40, "main", False, False)
+    exact("gh pr merge" in lane_brief, False)
+    exact("fast-forward" in lane_brief and "git merge --ff-only" in lane_brief, False)
+    exact("PROVIDES: PASS " + "a" * 40 in lane_brief, True)
+    other_brief = ticket.gate_brief("shyamsivakumar/tunerise", {"key": "FIX"}, 1, 2, "a" * 40, "main", False, False)
+    exact("gh pr merge 2 -R shyamsivakumar/tunerise --squash --match-head-commit " + "a" * 40 in other_brief, True)
     for brief in (builder, gate):
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []

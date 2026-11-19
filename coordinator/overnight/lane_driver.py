@@ -23,6 +23,7 @@ _BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
+from gate_policy import LANE_REPOS
 import prompt_paths
 
 # The lane driver loads inside the overnight command, so it names itself on
@@ -393,18 +394,37 @@ def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False
 
 
 def gate_verdict(repo, number, head):
+    receipts = json.load(open(RECEIPTS))
+    key = f"gate:{repo}#{number}:{head}"
+    current = receipts.get(key)
+    if not current:
+        return "absent", None, ""
+    gate = {"threadId": current}
+    status = (t3("t3_thread_read", {"threadId": current, "limit": 1}).get("thread") or {}).get("status")
+    if status in ("running", "queued", "starting", "preparing"):
+        return "running", gate, ""
+    reply = last_reply(current)
+    if reply.endswith("VERDICT: FAIL"):
+        return "FAIL", gate, reply
+    if not reply.endswith("VERDICT: PASS"):
+        return "none", gate, reply
+    earlier = {v for k, v in receipts.items() if k.startswith(key + ":") and v != current}
+    if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in sorted(earlier)):
+        return "SPLIT", gate, reply
+    return "PASS", gate, reply
+
+
+def gate_split_decision(repo, number, head):
     key = CFG[repo]["key"]
-    threads = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"], "titleContains": f"review #{number} {head[:8]}", "limit": 10}).get("threads") or []
-    for t in sorted(threads, key=lambda t: t.get("updatedAt") or "", reverse=True):
-        if t.get("status") in ("running", "queued", "starting", "preparing"):
-            return "running", t, ""
-        reply = last_reply(t["threadId"])
-        if reply.endswith("VERDICT: PASS"):
-            return "PASS", t, reply
-        if reply.endswith("VERDICT: FAIL"):
-            return "FAIL", t, reply
-        return "none", t, reply
-    return "absent", None, ""
+    item = {"id": f"lane-gate-split-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} has a gate PASS and a gate FAIL on head {head[:8]}. "
+                      "Nothing merged: read both reports and merge it or send it back."),
+            "why": ("Two gates reviewed the same head and disagreed, so the lane does not merge on the "
+                    "PASS. If the FAIL is wrong, merge it yourself pinned to this head.")}
+    if DRY:
+        return f"DRY #{number}: gate PASS and FAIL on one head, one decisions item"
+    publish_decision(item)
+    return f"#{number}: gate PASS and FAIL on head {head[:8]}, no merge, decisions item raised"
 
 
 def duplicate_refusal(exc):
@@ -581,8 +601,6 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     return out
 
 
-LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
-              "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
 
 
@@ -991,7 +1009,12 @@ def merge_on_reviewed_base(repo, number, head, base):
         return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
                        f"{current.get('baseRefName')}, head {head[:8]} -> "
                        f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
-    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    try:
+        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        after = json.loads(run(["gh", "pr", "view", str(number), "-R", repo, "--json", "state"])) or {}
+        if after.get("state") != "MERGED":
+            raise
     landed = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                              "--json", "baseRefName"])) or {}
     if landed.get("baseRefName") != base:
@@ -1111,6 +1134,8 @@ def act_on_pr(repo, number, ledger):
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
+    if verdict == "SPLIT":
+        return gate_split_decision(repo, number, head)
     if verdict == "PASS":
         return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
     if verdict == "FAIL":
@@ -1162,12 +1187,9 @@ def act_on_pr(repo, number, ledger):
         return f"#{number}: no gate brief ({brief[-120:]})"
     if failed_reviews(repo, number, ledger)[0] >= GATE_ROUND_CAP - 1:
         brief += f"\n{OPEN_FINDINGS_INSTRUCTION}\n"
-    brief += ("\nLane override: review only. Do not merge or close issues; the lane owns completion. "
-              f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
-              f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
     args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"gate:{repo}#{number}:{head}:{tag}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
 
