@@ -123,6 +123,15 @@ def write_json(path: Path, data: dict) -> None:
     atomic_write(path, json.dumps(data, indent=2) + "\n")
 
 
+def check_markers(text: str, path: Path) -> None:
+    opening, closing = text.count(BEGIN), text.count(END)
+    misordered = opening == closing == 1 and text.index(BEGIN) > text.index(END)
+    if opening != closing or opening > 1 or misordered:
+        raise RuntimeError(
+            f"{path} has unbalanced mac-ops deny-rules markers; fix it by hand, nothing was changed"
+        )
+
+
 def split_section(text: str) -> tuple[str, str]:
     head = text.split(BEGIN, 1)[0].rstrip("\n")
     tail = text.split(END, 1)[1].lstrip("\n") if END in text else ""
@@ -191,6 +200,7 @@ class Installer:
         if path.is_symlink():
             return "skipped (symlink; covered by the repo file)"
         text = path.read_text() if path.exists() else ""
+        check_markers(text, path)
         head, tail = split_section(text) if BEGIN in text else (text.rstrip("\n"), "")
         section = (
             BEGIN
@@ -235,13 +245,13 @@ class Installer:
         hooks = dict(settings.get("hooks") or {})
         pre = list(hooks.get("PreToolUse") or [])
         command = self.hook_command(spec)
+        matcher = spec["claude_code"]["hook"]["matcher"]
         registered = any(
-            h.get("command") == command
+            entry.get("matcher") == matcher
+            and any(h.get("command") == command for h in entry.get("hooks") or [])
             for entry in pre
-            for h in entry.get("hooks") or []
         )
         if not registered:
-            matcher = spec["claude_code"]["hook"]["matcher"]
             pre.append(
                 {
                     "matcher": matcher,
@@ -264,8 +274,11 @@ class Installer:
         if saved.get("hook_registered") and "PreToolUse" in hooks:
             pre = []
             for entry in hooks["PreToolUse"]:
+                ours = entry.get("matcher") == spec["claude_code"]["hook"]["matcher"]
                 inner = [
-                    h for h in entry.get("hooks") or [] if h.get("command") != command
+                    h
+                    for h in entry.get("hooks") or []
+                    if not (ours and h.get("command") == command)
                 ]
                 if inner or not entry.get("hooks"):
                     pre.append(
@@ -325,6 +338,14 @@ class Installer:
         saved = load_json(self.receipt)
         if saved and saved.get("owner") != OWNER:
             raise RuntimeError("Unrecognized deny-rules receipt; refusing to overwrite")
+        for target in self.guard_targets(spec):
+            if target.is_file() and OWNER not in target.read_text():
+                raise RuntimeError(
+                    f"{target} is a guard this installer does not own; move it aside or merge its rules into deny-rules.json, nothing was changed"
+                )
+        for path in self.scope_paths(spec):
+            if path.is_file() and not path.is_symlink():
+                check_markers(path.read_text(), path)
         stamp = str(time.time_ns())
         snapshot = self.snapshot(spec, self.backups / stamp / "snapshot")
         self.prior = self.backups / stamp / "prior"
@@ -386,9 +407,12 @@ class Installer:
             raise RuntimeError(
                 "Unrecognized deny-rules receipt; refusing to touch anything"
             )
+        for path in self.scope_paths(spec):
+            if path.is_file() and not path.is_symlink():
+                check_markers(path.read_text(), path)
         actions = ["claude settings: " + self.unmerge_claude(saved, spec)]
         actions.append("t3 gate instance: " + self.unmerge_t3_gate(spec, saved))
-        for target, backup in saved["prior_files"].items():
+        for target, backup in (saved.get("prior_files") or {}).items():
             Path(target).unlink(missing_ok=True)
             if backup:
                 shutil.copy2(backup, target, follow_symlinks=False)

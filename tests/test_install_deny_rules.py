@@ -137,10 +137,8 @@ class InstallTest(FakeHome):
         settings["permissions"]["deny"] = [kept]
         self.settings_path.write_text(json.dumps(settings))
         hook = self.installer.hook_target(SPEC)
-        guard = self.installer.guard_targets(SPEC)[0]
-        for path, text in ((hook, "# user hook\n"), (guard, "// user guard\n")):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("# user hook\n")
         t3_path = self.installer.t3_settings(SPEC)
         t3_path.parent.mkdir(parents=True)
         prior = {"driver": "claudeAgent", "displayName": "mine", "enabled": False}
@@ -151,8 +149,46 @@ class InstallTest(FakeHome):
         self.installer.uninstall(SPEC)
         self.assertEqual(load(self.settings_path)["permissions"]["deny"], [kept])
         self.assertEqual(hook.read_text(), "# user hook\n")
-        self.assertEqual(guard.read_text(), "// user guard\n")
         self.assertEqual(load(t3_path)["providerInstances"][instance_id], prior)
+
+    def test_an_unmanaged_guard_is_refused_and_nothing_changes(self):
+        guard = self.installer.guard_targets(SPEC)[1]
+        guard.parent.mkdir(parents=True)
+        guard.write_text("// guard with extra denied paths\n")
+        before = self.managed_bytes()
+        with self.assertRaises(RuntimeError):
+            self.installer.install(SPEC)
+        self.assertEqual(self.managed_bytes(), before)
+
+    def test_a_hook_registered_under_another_matcher_still_gets_a_bash_registration(self):
+        command = self.installer.hook_command(SPEC)
+        read_entry = {"matcher": "Read", "hooks": [{"type": "command", "command": command}]}
+        settings = load(self.settings_path)
+        settings["hooks"] = {"PreToolUse": [read_entry]}
+        self.settings_path.write_text(json.dumps(settings))
+        self.installer.install(SPEC)
+        matchers = [b["matcher"] for b in load(self.settings_path)["hooks"]["PreToolUse"]]
+        self.assertEqual(matchers, ["Read", SPEC["claude_code"]["hook"]["matcher"]])
+        self.installer.uninstall(SPEC)
+        self.assertEqual(load(self.settings_path)["hooks"]["PreToolUse"], [read_entry])
+
+    def test_unbalanced_scope_markers_refuse_and_change_nothing(self):
+        scope = self.installer.scope_paths(SPEC)[0]
+        scope.write_text(f"head\n{install_deny_rules.BEGIN}\nuser lines after the marker\n")
+        before = self.managed_bytes()
+        with self.assertRaises(RuntimeError):
+            self.installer.install(SPEC)
+        self.assertEqual(self.managed_bytes(), before)
+        self.assertFalse(self.installer.receipt.exists())
+
+    def test_a_receipt_without_prior_files_is_upgraded(self):
+        self.installer.install(SPEC)
+        receipt = load(self.installer.receipt)
+        receipt.pop("prior_files")
+        self.installer.receipt.write_text(json.dumps(receipt))
+        self.installer.install(SPEC)
+        self.assertIn("prior_files", load(self.installer.receipt))
+        self.assertTrue(all(v == "installed" for v in self.installer.status(SPEC)["pi_guards"].values()))
 
     def block_last_guard(self):
         last = self.installer.guard_targets(SPEC)[-1]
@@ -467,6 +503,8 @@ console.log(JSON.stringify(out));
         guard = self.installer.guard_targets(SPEC)[0]
         fake_env = self.home / "app/.env"
         ascend = str(self.home / "Code/slash-eureka/README.md")
+        (self.home / "Code/slash-eureka").mkdir(parents=True)
+        (self.home / "link").symlink_to(self.home / "Code/slash-eureka")
         gate = {"MAC_OPS_ROLE": "gate"}
 
         def bash(command, env=None, cwd=None):
@@ -478,6 +516,7 @@ console.log(JSON.stringify(out));
             (({"toolName": "edit", "input": {"path": str(fake_env)}}, {}), True),
             (bash(f"cat {fake_env}"), True),
             (bash("git push origin main"), True),
+            (({"toolName": "write", "input": {"path": str(self.home / "link/new.txt")}}, {}), True),
             (bash("if true; then git push origin main; fi"), True),
             (bash("cat README.md", cwd=str(self.home / "Code/slash-eureka/x")), True),
             (bash("cat README.md", cwd=str(self.home)), False),
