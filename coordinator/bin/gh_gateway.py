@@ -738,7 +738,10 @@ def parse_options(argv):
             rest = word[1:]
             while rest and not rest.startswith("-"):
                 short = "-" + rest[0]
-                if short in booleans:
+                # A value option wins over a family flag, exactly as it does
+                # for a detached argument: `run list -wRnightly` carries a
+                # workflow name, not a selector.
+                if short in booleans and short not in values:
                     options[short] = True
                     ordered.append((short, True))
                     rest = rest[1:]
