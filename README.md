@@ -130,6 +130,14 @@ Admission also checks fresh CPU, memory, pressure, load and swap readings.
 Missing capacity or telemetry holds new work. Environment variables cannot raise
 the safety thresholds.
 
+No job keeps its slot past 45 minutes, counting time spent paused or asleep. The job's own
+watchdog and every heavy command (including `heavy status`) terminate an
+overdue job. `HEAVY_MAX_RUNTIME_SECONDS` may lower the ceiling and never raises
+it. The terminated command prints `heavy: terminated: wall-clock limit 45m` and
+exits 76. After install, any heavy call ends builds already past the ceiling, and
+records created before the change get the 45-minute default counted from their
+creation.
+
 Direct xcodebuild commands use shared DerivedData and background scheduling.
 Review commands keep ordinary scheduling. Pause and resume preserve work, but a
 stopped command retains memory. User interruption and watchdog cleanup remain
