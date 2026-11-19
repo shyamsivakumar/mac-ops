@@ -568,7 +568,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if not repo:
             raise ValueError(f"No repository for {lkey}")
         if reroute == "model is blocked":
-            if reusable_worktree(thread):
+            if reusable_worktree(thread) and ledger.setdefault("worktree:" + thread["worktreePath"], lkey) == lkey:
                 workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
             else:
                 base = (pr or attached_pr or {}).get("headRefName") or "main"
@@ -1293,18 +1293,21 @@ def unstick(repo, ledger, excl=frozenset()):
             if not best:
                 continue
             key = f"continue:{repo}#{n}:{best[1]}"
-            if key in ledger:
-                continue
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
                 continue
-            if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
+            thread = t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
+            if not thread:
                 if DRY:
                     return f"DRY start #{n}"
                 out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
                 ledger[f"relaunch:{repo}#{n}"] = out
                 print(f"SEND REROUTE {best[1]}: {out}")
                 return f"start #{n}: {out}"
+            if key in ledger:
+                if model_list.is_blocked({"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}):
+                    continue
+                del ledger[key]
             if DRY:
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
