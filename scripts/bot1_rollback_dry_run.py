@@ -10,6 +10,7 @@ run. The only external call is one ``railway deployment list``.
 """
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -58,13 +59,18 @@ def plan(deployments):
         deployments, key=lambda d: d.get("createdAt", ""), reverse=True
     )
     production = next(
-        (d for d in deployments if d.get("status") == "SUCCESS" and deployment_sha(d)),
+        (d for d in deployments if d.get("status") == "SUCCESS"),
         None,
     )
     if production is None:
         raise RollbackRecordError(
             "no successful Bot 1 production deployment is in the history"
         )
+    if not isinstance(production.get("id"), str) or not production["id"].strip():
+        raise RollbackRecordError("the production deployment has no ID")
+    current_sha = deployment_sha(production)
+    if not isinstance(current_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", current_sha):
+        raise RollbackRecordError("the production deployment has no valid commit SHA")
     rollback = next(
         (
             deployment_sha(d)
@@ -79,6 +85,8 @@ def plan(deployments):
         raise RollbackRecordError(
             "no earlier Bot 1 deployment ran a different commit, so no rollback SHA is recorded"
         )
+    if not isinstance(rollback, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", rollback):
+        raise RollbackRecordError("the rollback deployment has no valid commit SHA")
     return production, rollback
 
 
