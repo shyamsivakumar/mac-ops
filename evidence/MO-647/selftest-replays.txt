@@ -6,6 +6,7 @@ PASS start-routing
 PASS dead-run-recovery
 PASS gate-pipeline
 PASS merged-restart
+PASS pending-fast-forward
 PASS gate-round-cap
 PASS decisions-board-guard
 PASS no-parking
