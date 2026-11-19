@@ -262,7 +262,7 @@ def call(tool, args, rules=None):
             if rules is None:
                 return 1, "agent rules were not loaded"
             args = with_rules(args, rules)
-        args = {key: value for key, value in args.items() if key != "taskType"}
+    args = {key: value for key, value in args.items() if key != "taskType"}
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
