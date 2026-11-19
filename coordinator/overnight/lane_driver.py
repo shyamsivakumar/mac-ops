@@ -496,7 +496,8 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False,
+         task_type="fix"):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
     With `worktree_only` the work belongs in a worktree of its own: a
@@ -513,20 +514,26 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     if lkey in ledger:
         return f"already done {lkey}"
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
-    fixer = model_list.first_available("fix")
+    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+    blocked = model_list.is_blocked(thread_model)
+    list_name = "build" if blocked and task_type == "standard" else "fix"
+    fixer = model_list.first_available(list_name)
     if fixer is None:
-        return f"skip {lkey}: every fix model is blocked"
+        return f"skip {lkey}: every {list_name} model is blocked"
+    attached_pr = None
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
-            _, skip = pr_action_skip(repo, attached["number"])
+            attached_pr, skip = pr_action_skip(repo, attached["number"])
             if skip:
                 return skip
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
-    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if not model_list.same_selection(thread_model, fixer["selection"]):
+    if blocked:
+        sendable = False
+        reroute = "model is blocked"
+    elif not model_list.same_selection(thread_model, fixer["selection"]):
         if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
@@ -548,7 +555,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute == "model is not first available" and not root_workspace(thread):
+        if reroute == "model is blocked":
+            head = ((pr or attached_pr) or {}).get("headRefName")
+            if not head or not branch_on_origin(repo, head):
+                ledger[f"needs-you:{lkey}"] = "model is blocked and no PR branch on origin to start from"
+                return f"needs-you {lkey}: model is blocked, no PR branch on origin to start from"
+            workspace = {"type": "worktree", "baseRef": "origin/" + head, "startFromOrigin": True}
+        elif reroute == "model is not first available" and not root_workspace(thread):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
@@ -559,7 +572,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "taskType": "fix", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
+                "taskType": "fix" if list_name == "fix" else "standard", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message,
                 "clientRequestId": lkey}
         options = ["--priority", str(priority)]
@@ -1296,18 +1309,26 @@ def unstick(repo, ledger, excl=frozenset()):
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
                 continue
-            if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
+            thread = t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
+            if not thread:
                 if DRY:
                     return f"DRY start #{n}"
                 out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
                 ledger[f"relaunch:{repo}#{n}"] = out
                 print(f"SEND REROUTE {best[1]}: {out}")
                 return f"start #{n}: {out}"
+            key = f"continue:{repo}#{n}:{best[1]}"
+            if key in ledger:
+                if model_list.is_blocked({"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}):
+                    continue
+                del ledger[key]
             if DRY:
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
-                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900)
+                       ledger, key, repo=repo, priority=900, task_type="standard")
+            if "model is blocked" not in out:
+                ledger.pop(key, None)
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
