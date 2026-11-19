@@ -346,6 +346,9 @@ class CoordqGateTest(unittest.TestCase):
         from tests.test_gatekeep_backstop_reviewer import load_coordq
         self.coordq = load_coordq()
         self.coordq._base_pins.clear()
+        patcher = patch.object(self.coordq, "load", return_value={"gatedHeads": {}})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_the_queue_reads_the_same_list(self):
         with patch.object(self.coordq, "gh_json",
