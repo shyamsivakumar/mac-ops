@@ -570,6 +570,25 @@ def undispatchable_tool(item):
     return None
 
 
+def gate_reviewer_blocked(item):
+    """Whether a queued gate names a reviewer the block store has blocked.
+
+    Only a gate is held back: a builder and an ordinary review are never
+    held back here. A store that cannot be read defers the gate, not the
+    queue.
+    """
+    args = item.get("args") or {}
+    if item.get("tool") != "t3_thread_launch":
+        return False
+    if not str(args.get("clientRequestId") or "").startswith("gate:"):
+        return False
+    selection = args.get("modelSelection")
+    try:
+        return bool(selection) and model_list.is_blocked(selection)
+    except model_list.ModelsError:
+        return True
+
+
 def drain():
     statuses = {}
     while True:
@@ -612,7 +631,9 @@ def drain():
         if n + len(queue["reserved"]) >= cap():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
-        item = ready[0]
+        item = next((i for i in ready if not gate_reviewer_blocked(i)), None)
+        if item is None:
+            return
         try:
             steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
                      for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
