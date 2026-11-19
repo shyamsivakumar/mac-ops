@@ -2,6 +2,8 @@
 
 The controller publishes heavy capacity and updates the board admission limit on each five second tick. A fresh, noncritical sample restores the heavy floor of two slots in that tick. Separately, valid noncritical board readings restore a board floor of `min(board ceiling, max(6, active tasks + 1))`. Heavy capacity above two grows one slot after a 60 second healthy window and only when the next slot fits the CPU and memory budgets. Compressor growth vetoes heavy growth only after three consecutive high-growth samples when free memory is at or below the warning threshold. Board capacity above its floor grows one slot after a continuous healthy window and only when all pending board slots fit.
 
+Each tick first calls the heavy registry reap. A job whose supervisor is gone is logged as `job-dead` and its slot is freed before the census runs.
+
 ## Heavy capacity
 
 ```mermaid

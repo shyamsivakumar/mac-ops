@@ -102,6 +102,9 @@ def main():
                 context["calls"].append("critical_pause_request")
                 return []
 
+            def reap_dead_jobs(self):
+                return 0
+
         helper = Helper()
 
         def command(argv):
