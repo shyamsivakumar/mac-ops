@@ -49,10 +49,15 @@ Three tiers. A path can sit in more than one tier, and the highest tier that
 matches wins. A pull request that touches no protected path is tier 0 and
 reads exactly as it reads today.
 
+A tier can only add a restriction. It never removes one: tier 0 keeps the
+repository's existing merge rule, so a repository that already stops at the
+verdict (an Ascend repository) or that already merges by hand
+(`merge: manual` in the coordinator config) stays that way.
+
 | Tier | Name | What it covers | What the gate requires | Merge |
 | --- | --- | --- | --- | --- |
-| 0 | routine | every file not matched by a higher tier | today's gate bar; the proof file is optional; missing proof does not block | the gate merges a personal repository on `VERDICT: PASS`, as today |
-| 1 | protected | lane, gate, permission and deploy code | the full local check must have run on the exact head (the proof file must exist and every row in it must be `passed`; a `not run` row is a finding, and a missing proof file is a finding); the gate states the tier and the matched paths in its one-line bar statement; the tier-1 checklist applies | no automatic merge: the brief ends with the existing manual ending, "Do not merge or close; Shyam merges passed PRs himself", so Shyam reads and merges |
+| 0 | routine | every file not matched by a higher tier | today's gate bar; the proof file is optional; missing proof does not block | the repository's existing rule, unchanged: a personal repository merges on `VERDICT: PASS`, a repository that already stops at the verdict still stops there |
+| 1 | protected | lane, gate, permission, deploy and policy code | the full local check must have run on the exact head (the proof file must exist and every row in it must be `passed`; a `not run` row is a finding, and a missing proof file is a finding); the gate states the tier and the matched paths in its one-line bar statement; the tier-1 checklist applies | no automatic merge: the brief ends with the existing manual ending, "Do not merge or close; Shyam merges passed PRs himself", so Shyam reads and merges |
 | 2 | critical | SRW order and trading paths, and any future live-execution path | everything tier 1 requires, plus: the full proof bar of the gate bar's trade-execution exception applies (every proof the ticket asks for is required, and missing proof is a major finding); the gate brief names every matched order or trading path before the reviewer reads the diff; the tier-2 checklist applies | the gate stops at the verdict in every repository, including the ones that merge on a pass; Shyam reviews and merges |
 
 Two words carry the whole design:
@@ -60,6 +65,34 @@ Two words carry the whole design:
 - **stronger checks** is tier 1: the proof must exist and every check in it
   must have run and passed, and the machine does not merge.
 - **or Shyam** is tier 2: the machine never merges, and Shyam reads the diff.
+
+### The checklists the tiers name
+
+Tier 1 checklist (protected). The gate checks each of these and reports the
+result in its one line:
+
+- The proof file for the pull request exists, at `evidence/<KEY>-<issue>/check-proof.md`
+  for a ticket, and every row in it reads `passed`.
+- The proof file names the head of the pull request, or an ancestor of it
+  whose only later change is the proof file itself.
+- The brief names the tier and every matched path, and the gate says which
+  bar it applied.
+
+Tier 2 checklist (critical). Everything in tier 1, plus:
+
+- Every proof the ticket asks for is present. The trade-execution exception
+  of the gate bar already requires this; tier 2 makes it explicit.
+- Every order or trading path the brief names is in the pull request's file
+  list, and every path in the pull request's file list that tier 2 matches
+  is in the brief. The two lists are the same list, so a name cannot be
+  left out on one side.
+- The gate stops at the verdict, in every repository.
+
+What the tiers change about the bar: the gate bar says missing proof does
+not block. Tier 1 and tier 2 override that sentence. On those tiers a
+missing proof file, a `failed` row and a `not run` row are major findings,
+and a major finding is a `VERDICT: FAIL`. On tier 0 the bar reads as it
+reads today.
 
 ### Why the tiers stop the machine from merging
 
@@ -129,6 +162,14 @@ Deploy files:
 - `scripts/shared_npm_install.py`
 - `formal/install-if-behind/`
 
+Policy code, the file that holds the tiers themselves:
+
+- `coordinator/config/risk-tiers.json`
+
+A pull request that changes the policy file is tier 1 at the lowest, and
+its tier is computed from the live policy on the machine, not from the copy
+the pull request carries. A pull request cannot lower its own bar.
+
 ### SRW (strategy-replay-workbench), tier 2 (critical)
 
 Order and trading paths, checked against that repository's tracked files:
@@ -149,10 +190,23 @@ Order and trading paths, checked against that repository's tracked files:
 - `telegram_trade_update.js`
 - `config/railway_trader_staging.json`
 
-A path added to SRW later is tier 2 by the rule, not by this list: the list
-is the paths, and the rule is "a file under the order and trading code is
-critical". The build ticket can therefore add a new order file to the list
-without a rule change.
+A path added to SRW later is not tier 2 until the list says so. The tier-2
+list is exact file names, so a new order implementation is tier 0 (routine)
+until Shyam adds it to the config. That is a real gap, and the note states
+it rather than hiding it:
+
+- The list is the authority. A new order file that nobody added is reviewed
+  like any other file.
+- Two things narrow the gap without closing it. The build ticket adds a
+  check that every path in the config still exists, so a renamed or deleted
+  order file shows up instead of quietly dropping out of the tier. And the
+  tier-2 exception in the gate bar (a diff that changes trade execution
+  keeps the full proof bar) already catches a new order file that changes
+  execution, whatever the list says.
+- Closing it properly needs a rule, not a longer list: a path pattern that
+  covers the order and trading code of SRW wherever it lives. The design
+  ticket for that belongs with the build ticket, because a pattern that is
+  too wide would put ordinary SRW code into tier 2.
 
 ### mac-ops, tier 2
 
@@ -165,10 +219,14 @@ the list is the place to say so.
 
 One file, next to the other coordinator config files:
 
-- source of truth: `coordinator/config/risk-tiers.json` in this repository
-- live copy: `~/.coordinator/risk-tiers.json`, installed by
-  `install_coordinator.py` the same way `tickets.json` is installed today
-  (`CONFIG_FILES` gains one name)
+- seed in this repository: `coordinator/config/risk-tiers.json`
+- live copy: `~/.coordinator/risk-tiers.json`, on the Mac the coordinator
+  runs on. The live copy is the policy the gate reads, the same arrangement
+  as `tickets.json`: `install_coordinator.py` seeds the file when the
+  machine has none (`LOCAL_CONFIG_FILES` gains one name) and never writes
+  over it afterwards, so a policy edit on the Mac is not install drift.
+  The repository copy is the seed for a new machine and the reviewable
+  source of the list.
 
 Shape:
 
@@ -176,7 +234,7 @@ Shape:
 {
   "version": 1,
   "tiers": {
-    "routine": { "merge": "auto" },
+    "routine": { "merge": "repository-default" },
     "protected": { "merge": "manual", "require": ["proof-file-all-passed"] },
     "critical": { "merge": "stop", "require": ["proof-file-all-passed", "full-proof-bar"] }
   },
@@ -214,10 +272,24 @@ Matching rules:
 - The tier of a pull request is the highest tier among the entries its
   changed files match. Tier order is `routine` < `protected` < `critical`.
 - A file that matches nothing is tier 0.
+- The tier is computed from the live config on the machine, so a pull
+  request that edits the config cannot lower its own tier.
 
 The `require` list is what a tier adds to the brief. It stays a list of short
 names in the config so the gate can turn each name into a sentence, and so a
 future tier can add a requirement without a new code path in the gate.
+
+The `merge` value is a cap on what the gate may do, never a grant:
+
+- `repository-default`: the gate does what it does today for that
+  repository. A repository that merges manually still merges manually.
+- `manual`: the gate stops at the verdict and Shyam merges.
+- `stop`: the gate stops at the verdict and Shyam merges, and the gate says
+  so in its one line, so the reviewer sees that this pull request was
+  never going to merge itself.
+
+A tier can only lower the cap. The effective cap is the lowest of the
+repository's own rule and the tier's.
 
 ## Where it plugs in
 
@@ -225,14 +297,15 @@ The change is small and lands in two places.
 
 1. `coordinator/bin/gate_policy.py`. `build_gate_brief` takes a tier and
    the list of changed paths, and writes two lines into the brief: the tier
-   with its requirements, and the matched paths. When the tier is `protected`
-   or `critical` the ending switches to the manual ending that already
-   exists; when the tier is `critical` the ending stops at the verdict
-   instead.
+   with its checklist, and the matched paths. The tier's `merge` cap is
+   compared with the repository's own rule, and the lower one wins. The
+   `manual` cap reuses the existing manual ending that is already in this
+   file ("Do not merge or close; Shyam merges passed PRs himself"); the
+   `stop` cap uses the ending that stops at the verdict.
 2. The callers. `coordinator/bin/coordq` (the `gatekeep` path) and
    `coordinator/bin/ticket` (the manual `ticket gate` path) read the pull
-   request's changed files, read the config, compute the tier, and pass it
-   in. The two callers use one shared function, so the manual path and the
+   request's changed files, read the live config, compute the tier, and pass
+   it in. The two callers use one shared function, so the manual path and the
    scheduled path cannot drift apart.
 
 The changed-file list comes from the pull request itself
@@ -242,14 +315,16 @@ gate may run on a machine that never cloned the pull request.
 ## When the tier cannot be computed, it fails closed
 
 The gate never treats an unknown situation as tier 0. Tier 0 is the only tier
-that merges by machine, so every unknown becomes at least tier 1.
+that merges by machine, so every unknown becomes at least tier 1. The one
+exception is a file that the config matches nothing in: an unmatched file
+is tier 0 by definition, and that is a known answer, not an unknown one.
 
 | Situation | Tier | What the brief says |
 | --- | --- | --- |
 | The config file is missing | 1 | "the risk-tier config is missing, so this pull request is reviewed as protected" |
 | The config file does not parse | 1 | the same, with the parse error named |
 | The pull request's file list cannot be read | 1 | the read error named; the gate never merges on a pull request whose files it could not read |
-| The repository is not in the config | 0 | "this repository is not in the risk-tier config", so Shyam can see that the list needs a repository added |
+| The repository is not in the config | 1 | "this repository is not in the risk-tier config, so this pull request is reviewed as protected"; the config must list every repository the gate runs on |
 | A path is listed in two tiers | the higher one | the tier named with both tiers' paths |
 
 ## What this does not change
@@ -268,9 +343,8 @@ that merges by machine, so every unknown becomes at least tier 1.
 
 **A pull request that changes `coordinator/overnight/lane_driver.py`** in
 mac-ops. The lane driver is a tier-1 path. The brief carries the tier, the
-matched path, the requirement that the proof file exists with every check
-`passed`, and the manual ending. The gate reads the diff, gives a verdict,
-and stops. Shyam merges.
+matched path, the tier-1 checklist, and the manual ending. The gate reads
+the diff, gives a verdict, and stops. Shyam merges.
 
 **A pull request that changes `docs/risk-tiers-design.md`.** No tier-1 path
 matches, so the tier is routine. The brief is today's brief. The gate merges
@@ -280,6 +354,11 @@ it on a pass, as it would have today.
 `bot2/trade_machine.js`.** That path is tier 2. The brief names the path,
 requires the full proof bar, and stops at the verdict in a repository that
 would otherwise merge on a pass. Shyam reads the diff before it lands.
+
+**A pull request that changes `coordinator/config/risk-tiers.json`** in
+mac-ops. The policy file is a tier-1 path, and the tier of that pull request
+is computed from the live policy on the machine, so removing a path from a
+tier does not remove it from the tier the pull request is reviewed under.
 
 ## Open points for the build ticket
 
@@ -300,4 +379,6 @@ would otherwise merge on a pass. Shyam reads the diff before it lands.
   and the tests.
 - A check that the config's paths still exist, so a renamed file does not
   silently drop out of a tier.
+- A rule that puts a new SRW order file into tier 2 without a list edit, and
+  a way to keep that rule from swallowing ordinary SRW code.
 - Tier 2 for mac-ops, if a mac-ops file ever places an order.
