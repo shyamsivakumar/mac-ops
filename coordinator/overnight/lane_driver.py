@@ -547,7 +547,10 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             # worktree of its own: on the pull request's branch, or on
             # main when the work has no pull request yet.
             if pr is not None:
-                if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+                # The branch has to be on origin, or the worktree cannot
+                # start there and the work would fall back to the shared
+                # checkout of the repository.
+                if not branch_on_origin(repo, pr["headRefName"]):
                     return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
                 branch = pr["headRefName"]
             else:
