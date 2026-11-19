@@ -421,6 +421,20 @@ class HookTest(unittest.TestCase):
         self.assertIsNone(self.run_hook(payload("claudeAgentGate"), role="gate"))
         self.assertIsNone(self.run_hook(payload("pi")))
 
+    def test_a_command_in_or_moving_into_the_ascend_tree_is_denied(self):
+        ascend = Path.home() / "Code/slash-eureka/x"
+
+        def at(command, cwd):
+            payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
+            return self.run_hook(payload)
+
+        self.assertEqual(at("cat README.md", ascend)["permissionDecision"], "deny")
+        self.assertIsNone(at("cat README.md", ROOT))
+        for command in ("cd ~/Code/slash-eureka/x && ls", "cd $HOME/Code/slash-eureka && ls", "cd ../slash-eureka/x && ls"):
+            cwd = Path.home() / "Code/mac-ops"
+            self.assertEqual(at(command, cwd)["permissionDecision"], "deny", command)
+        self.assertIsNone(at("cd src && ls", ROOT))
+
     def test_other_tools_and_missing_input_are_ignored(self):
         self.assertIsNone(
             self.run_hook({"tool_name": "Read", "tool_input": {"path": "/x"}})

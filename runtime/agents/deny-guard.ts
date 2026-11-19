@@ -43,8 +43,8 @@ function underAscend(a) {
   return SPEC.ascend_roots.some((root) => a === root || a.startsWith(root + path.sep));
 }
 
-function hookReason(command, env) {
-  const payload = JSON.stringify({ tool_name: "Bash", tool_input: { command } });
+function hookReason(command, env, cwd) {
+  const payload = JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd });
   const proc = spawnSync("python3", [SPEC.hook_path], { input: payload, env, encoding: "utf8", timeout: 10000 });
   if (proc.error || proc.status !== 0) return "the shell command guard did not run, so the command is blocked";
   if (!proc.stdout.trim()) return undefined;
@@ -52,9 +52,7 @@ function hookReason(command, env) {
 }
 
 function checkBash(command, env, cwd) {
-  const here = abs(cwd, cwd);
-  if (underAscend(here) || underAscend(real(here))) return SPEC.ascend_bash_reason;
-  const decided = hookReason(command, env);
+  const decided = hookReason(command, env, cwd);
   if (decided) return decided;
   if (ASCEND_TEXT_RES.some((re) => re.test(command))) return SPEC.ascend_bash_reason;
   if (!SINGLE_LS.test(command) && SECRET_TEXT_RE.test(command)) return SPEC.secret_bash_reason;

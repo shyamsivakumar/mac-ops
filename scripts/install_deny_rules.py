@@ -23,7 +23,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import time
 from pathlib import Path
 
@@ -31,6 +30,7 @@ ROOT_REPO = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT_REPO / "runtime/agents/deny-rules.json"
 GUARD_TEMPLATE = ROOT_REPO / "runtime/agents/deny-guard.ts"
 GUARD_MARKER = "/*__MAC_OPS_DENY_SPEC__*/{}"
+HOOK_ROOTS_LINE = 'ASCEND_ROOTS = ["~/Code/slash-eureka"]'
 OWNER = "mac-ops/deny-rules.v1"
 BEGIN = "<!-- BEGIN mac-ops deny-rules -->"
 END = "<!-- mac-ops deny-rules END -->"
@@ -94,6 +94,14 @@ def render_guard(spec: dict, root: Path) -> str:
         "hook_path": expand(spec["claude_code"]["hook"]["target"], root),
     }
     return template.replace(GUARD_MARKER, json.dumps(embedded, indent=2))
+
+
+def render_hook(spec: dict, root: Path) -> str:
+    text = (ROOT_REPO / spec["claude_code"]["hook"]["source"]).read_text()
+    if text.count(HOOK_ROOTS_LINE) != 1:
+        raise RuntimeError("deny-merge-guard.py must contain the roots line exactly once")
+    roots = [expand(p, root) for p in spec["ascend_roots"]]
+    return text.replace(HOOK_ROOTS_LINE, "ASCEND_ROOTS = " + json.dumps(roots))
 
 
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
@@ -346,9 +354,7 @@ class Installer:
         self.claim(hook, prior_files)
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.unlink(missing_ok=True)
-        source = ROOT_REPO / spec["claude_code"]["hook"]["source"]
-        shutil.copyfile(source, hook)
-        os.chmod(hook, os.stat(source).st_mode | stat.S_IXUSR)
+        atomic_write(hook, render_hook(spec, self.root), 0o700)
         t3_prior = self.merge_t3_gate(spec, enabled)
         guard = render_guard(spec, self.root)
         for target in self.guard_targets(spec):
