@@ -163,8 +163,11 @@ class DryRunTests(unittest.TestCase):
             rollbackCommands=[["touch", str(self.sentinel)]],
         ))
         os.environ["BOT1_HEALTH_URL"] = "https://bot1.example.test"
+        self.real_push_history = bot_rollback.push_history
+        bot_rollback.push_history = lambda repo, branch: [(self.repo.first, self.repo.second)]
 
     def tearDown(self):
+        bot_rollback.push_history = self.real_push_history
         os.environ.pop("BOT1_HEALTH_URL", None)
 
     def _write(self, *entries):
@@ -188,7 +191,8 @@ class DryRunTests(unittest.TestCase):
             output,
         )
         self.assertIn(f"step rollback: touch {self.sentinel} {self.repo.first}", output)
-        self.assertIn("step health check: curl -fsS https://bot1.example.test/health", output)
+        self.assertIn("step health check: curl -fsS '$BOT1_HEALTH_URL/health'", output)
+        self.assertNotIn("bot1.example.test", output)
 
     def test_the_dry_run_changes_nothing(self):
         self._run()
@@ -213,7 +217,7 @@ class DryRunTests(unittest.TestCase):
         self.repo.git("update-ref", "refs/remotes/origin/paper-live", other)
         code, output = self._run()
         self.assertEqual(code, 1)
-        self.assertIn("the records disagree, so pin the rollback SHA in the config", output)
+        self.assertIn("fetch the ref or pin the rollback SHA in the config", output)
 
     def test_the_dry_run_reports_a_sha_the_checkout_does_not_hold(self):
         self._write(_entry(repository=str(self.repo.path), rollbackSha=OTHER_SHA))
@@ -257,8 +261,11 @@ class ExecuteTests(unittest.TestCase):
         self.config = self.repo.path / "config.json"
         self.order = self.repo.path / "order.txt"
         os.environ["BOT1_HEALTH_URL"] = "https://bot1.example.test"
+        self.real_push_history = bot_rollback.push_history
+        bot_rollback.push_history = lambda repo, branch: [(self.repo.first, self.repo.second)]
 
     def tearDown(self):
+        bot_rollback.push_history = self.real_push_history
         os.environ.pop("BOT1_HEALTH_URL", None)
 
     def _write(self, *entries):
@@ -319,7 +326,7 @@ class ExecuteTests(unittest.TestCase):
     def test_the_health_check_passes_when_it_reports_the_rollback_sha(self):
         self._write(_entry(
             repository=str(self.repo.path),
-            rollbackCommands=[["/bin/sh", "-c", f"echo {self.repo.first} >> {self.order}"]],
+            rollbackCommands=[["/bin/sh", "-c", f"echo '{{\"sourceSha\": \"{self.repo.first}\"}}' > {self.order}"]],
             healthCommand=["/bin/cat", str(self.order)],
             healthMustShowSha=True,
         ))

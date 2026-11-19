@@ -2,10 +2,11 @@
 """Roll Bot 1 and Bot 2 back to their recorded rollback SHA, then check them.
 
 The promotion path records what it moved each bot from. For a bot whose live
-commit is carried by a git ref, that record is the ref's own history: the
-promotion path pushes the new commit to the ref, so the commit before it is
-the rollback target the path moved from. The command reads that record and
-prints the exact steps for every bot: the precheck, the rollback and the
+commit is carried by a git ref, that record is GitHub's push history for the
+ref: every promotion is a push, and the push keeps the commit the ref held
+before it (``before``). The command reads the push that produced the live
+commit and takes its ``before`` as the rollback target. It prints the exact
+steps for every bot: the live-ref fetch, the precheck, the rollback and the
 health check. The dry run is the default and reads only. With ``--execute`` it
 runs the rollback and the health check; that is the operator's decision and
 this ticket does not run it.
@@ -18,7 +19,7 @@ A rollback command holds the token ``{sha}`` where the recorded SHA goes. A
 command without that token gets the SHA as its last argument.
 
 The rollback SHA is taken from the config when the config pins one, and from
-the ref's history otherwise. A bot whose rollback SHA cannot be read is
+the ref's push history otherwise. A bot whose rollback SHA cannot be read is
 reported as unresolved and stops the run: a rollback to a guessed commit is
 worse than no rollback.
 """
@@ -48,7 +49,7 @@ class Bot:
 
     def __init__(self, bot_id, label, repository, live_ref, rollback_sha,
                  rollback_commands, health_url_env, health_path, health_command,
-                 health_must_show_sha, health_timeout_seconds):
+                 health_must_show_sha, health_sha_field, health_timeout_seconds):
         self.id = bot_id
         self.label = label
         self.repository = repository
@@ -59,6 +60,7 @@ class Bot:
         self.health_path = health_path
         self.health_command = health_command
         self.health_must_show_sha = health_must_show_sha
+        self.health_sha_field = health_sha_field
         self.health_timeout_seconds = health_timeout_seconds
 
 
@@ -157,6 +159,7 @@ def parse_config(raw):
                 _text(entry, "healthPath", bot_id, required=False) or "/health",
                 _command_list(entry, "healthCommand", bot_id, required=False),
                 health_must_show_sha,
+                _text(entry, "healthShaField", bot_id, required=False) or "sourceSha",
                 health_timeout_seconds,
             )
         )
@@ -211,38 +214,52 @@ def ref_commit(repo, ref):
     return sha if SHA_PATTERN.match(sha) else None
 
 
-def recorded_rollback_sha(bot, repo):
-    """The SHA the promotion path moved the bot from, or None when it is not recorded.
+def push_history(repo, branch):
+    """GitHub's push records for a branch, newest first, as (before, after) pairs.
 
-    A ref that the promotion path pushes to keeps its own history: the entry
-    before the last one is the commit the path moved the bot from.
+    Returns None when the history cannot be read.
+    """
+    code, output = run(
+        ["gh", "api", f"repos/{{owner}}/{{repo}}/activity?ref=refs/heads/{branch}&per_page=1",
+         "--jq", '.[] | "\(.before) \(.after)"'],
+        cwd=repo,
+    )
+    if code != 0:
+        return None
+    pairs = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and all(SHA_PATTERN.match(part) for part in parts):
+            pairs.append((parts[0], parts[1]))
+    return pairs
+
+
+def live_branch(bot):
+    """The branch name behind the live ref, e.g. paper-live for origin/paper-live."""
+    return bot.live_ref.split("/", 1)[-1] if bot.live_ref else None
+
+
+def recorded_rollback_sha(bot, repo, live_sha):
+    """The SHA the promotion path moved the bot from, and why it is missing if it is.
+
+    Returns (sha, problem). The promotion is the latest push to the live
+    branch; the commit that branch held before that push is the SHA it moved
+    the bot from, however many commits the push advanced.
     """
     if bot.rollback_sha:
-        return bot.rollback_sha
-    if not bot.live_ref:
-        return None
-    code, output = git(repo, "rev-parse", "--verify", f"{bot.live_ref}@{{1}}^{{commit}}")
-    if code != 0:
-        return None
-    sha = output.strip().splitlines()[-1].strip() if output.strip() else ""
-    return sha if SHA_PATTERN.match(sha) else None
-
-
-def live_parent_sha(bot, repo):
-    """The commit the live commit was built on, or None when it cannot be read.
-
-    A promotion that moves the bot by one commit leaves that commit as the
-    parent of the live commit. When the checkout's history disagrees with the
-    ref's history, the two records say different things and the command says
-    so instead of choosing one.
-    """
-    if not bot.live_ref:
-        return None
-    code, output = git(repo, "rev-parse", "--verify", f"{bot.live_ref}^^{{commit}}")
-    if code != 0:
-        return None
-    sha = output.strip().splitlines()[-1].strip() if output.strip() else ""
-    return sha if SHA_PATTERN.match(sha) else None
+        return bot.rollback_sha, None
+    if not bot.live_ref or not live_sha:
+        return None, None
+    history = push_history(repo, live_branch(bot))
+    if not history:
+        return None, f"the push history of {live_branch(bot)} cannot be read"
+    before, after = history[0]
+    if after != live_sha:
+        return None, (
+            f"the latest recorded push to {live_branch(bot)} ends at {after}, not at the live "
+            f"commit {live_sha}; fetch the ref or pin the rollback SHA in the config"
+        )
+    return before, None
 
 
 def health_url(bot):
@@ -255,12 +272,51 @@ def health_url(bot):
     return value.rstrip("/") + bot.health_path
 
 
-def health_command(bot):
-    """The health check for a bot, as the command that runs it."""
+def health_command(bot, reveal=False):
+    """The health check for a bot, as the command that runs it.
+
+    The printed form names the variable that holds the URL and never its
+    value, because the value may carry credentials. Only the run form
+    expands it.
+    """
     if bot.health_command:
         return list(bot.health_command)
-    url = health_url(bot)
+    url = health_url(bot) if reveal else None
     return ["curl", "-fsS", url if url else f"${bot.health_url_env}{bot.health_path}"]
+
+
+def redact(bot, text):
+    """The text with the bot's health URL and any URL credentials taken out."""
+    value = os.environ.get(bot.health_url_env, "").strip() if bot.health_url_env else ""
+    if value:
+        text = text.replace(value, f"${bot.health_url_env}")
+    return re.sub(r"(?<=://)[^/@\s]+@", "", text)
+
+
+def reported_sha(output, field):
+    """The revision the health output reports in the named field, or None."""
+    try:
+        value = json.loads(output)
+    except ValueError:
+        return None
+    for key in field.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return value if isinstance(value, str) else None
+
+
+def fetch_command(plan):
+    """The command that refreshes the live ref from its remote, or None."""
+    bot = plan.bot
+    if not bot.live_ref or "/" not in bot.live_ref:
+        return None
+    remote, branch = bot.live_ref.split("/", 1)
+    code, output = git(plan.repo, "remote")
+    if code != 0 or remote not in output.split():
+        return None
+    return ["git", "-C", str(plan.repo), "fetch", "-q", remote,
+            f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"]
 
 
 def rollback_command(command, sha):
@@ -277,7 +333,7 @@ class Plan:
         self.bot = bot
         self.repo = repo
         self.live_sha = ref_commit(repo, bot.live_ref) if bot.live_ref else None
-        self.rollback_sha = recorded_rollback_sha(bot, repo)
+        self.rollback_sha, history_problem = recorded_rollback_sha(bot, repo, self.live_sha)
         self.problems = []
         if not bot.live_ref:
             self.problems.append("no live ref is recorded for this bot")
@@ -285,7 +341,9 @@ class Plan:
             self.problems.append(f"the live ref {bot.live_ref} cannot be read")
         if not bot.rollback_commands:
             self.problems.append("no rollback command is recorded for this bot")
-        if not self.rollback_sha:
+        if history_problem:
+            self.problems.append(history_problem)
+        elif not self.rollback_sha:
             self.problems.append("no rollback SHA is recorded for this bot")
         elif not self.known(self.rollback_sha):
             self.problems.append(f"the checkout does not hold {self.rollback_sha}")
@@ -298,12 +356,6 @@ class Plan:
             self.problems.append(
                 f"the recorded rollback SHA {self.rollback_sha} is not an ancestor of the live commit"
             )
-        parent = live_parent_sha(bot, repo)
-        if parent and self.rollback_sha and not bot.rollback_sha and parent != self.rollback_sha:
-            self.problems.append(
-                f"the ref history says {self.rollback_sha} and the live commit's parent says {parent}; "
-                "the records disagree, so pin the rollback SHA in the config"
-            )
 
     def known(self, sha):
         code, _ = git(self.repo, "cat-file", "-e", f"{sha}^{{commit}}")
@@ -314,8 +366,11 @@ class Plan:
         return code == 0
 
     def steps(self):
-        """The exact steps for this bot: precheck, rollback, health check."""
+        """The exact steps for this bot; a step that is not recorded has no command."""
         steps = []
+        fetch = fetch_command(self)
+        if fetch:
+            steps.append(("fetch live ref", fetch))
         if self.live_sha and self.rollback_sha:
             steps.append(
                 (
@@ -324,9 +379,13 @@ class Plan:
                      self.rollback_sha, self.live_sha],
                 )
             )
+        else:
+            steps.append(("precheck", None))
         if self.rollback_sha and self.bot.rollback_commands:
             for command in self.bot.rollback_commands:
                 steps.append(("rollback", rollback_command(command, self.rollback_sha)))
+        else:
+            steps.append(("rollback", None))
         steps.append(("health check", health_command(self.bot)))
         return steps
 
@@ -343,7 +402,8 @@ def describe(plan):
         lines.append("  live ref:              not recorded")
     lines.append(f"  recorded rollback SHA: {plan.rollback_sha or 'not recorded'}")
     for name, command in plan.steps():
-        lines.append(f"  step {name}: {shlex.join(command)}")
+        shown = shlex.join(command) if command else "not recorded"
+        lines.append(f"  step {name}: {shown}")
     for problem in plan.problems:
         lines.append(f"  problem: {problem}")
     return lines
@@ -391,35 +451,38 @@ def run_health(plan):
     """Run the health check and wait for the bot to report the rollback SHA.
 
     A health check that answers before the rollback has landed says nothing
-    about the rollback. When the config asks for the SHA to show up in the
-    health output, the command keeps asking until the bot reports it or the
-    timeout runs out.
+    about the rollback. When the config asks for it, the command keeps asking
+    until the bot's deployed-revision field equals the rollback SHA or the
+    timeout runs out. Only that field counts: the SHA appearing anywhere else
+    in the output, such as a ``previous`` field, proves nothing.
     """
-    command = health_command(plan.bot)
+    command = health_command(plan.bot, reveal=True)
+    must_match = plan.bot.health_must_show_sha and plan.rollback_sha
     deadline = time.time() + plan.bot.health_timeout_seconds
     code, output = run(command, cwd=plan.repo)
-    while (
-        plan.bot.health_must_show_sha
-        and plan.rollback_sha
-        and plan.rollback_sha not in output
-        and time.time() < deadline
-    ):
+    while must_match and reported_sha(output, plan.bot.health_sha_field) != plan.rollback_sha \
+            and time.time() < deadline:
         time.sleep(5)
         code, output = run(command, cwd=plan.repo)
-    if plan.bot.health_must_show_sha and plan.rollback_sha and plan.rollback_sha not in output:
-        return 1, output or f"the health check did not report {plan.rollback_sha}"
+    if must_match and reported_sha(output, plan.bot.health_sha_field) != plan.rollback_sha:
+        return 1, output or f"the health check did not report {plan.rollback_sha} in {plan.bot.health_sha_field}"
     return code, output
 
 
 def execute(plans):
-    """Roll each bot back and then check that it is healthy."""
+    """Roll each resolved bot back and then check that it is healthy.
+
+    A bot with an unresolved problem is skipped and the run exits non-zero;
+    the other bots still run. A failed step stops the run.
+    """
+    skipped = False
     for plan in plans:
         if plan.problems:
+            skipped = True
             for problem in plan.problems:
                 print(f"bot-rollback: {plan.bot.id}: {problem}", file=sys.stderr)
             print(f"bot-rollback: {plan.bot.id}: nothing was rolled back", file=sys.stderr)
-            return 1
-    for plan in plans:
+            continue
         for name, command in plan.steps():
             print(f"bot-rollback: {plan.bot.id}: {name}: {shlex.join(command)}")
             if name == "health check":
@@ -427,11 +490,20 @@ def execute(plans):
             else:
                 code, output = run(command, cwd=plan.repo)
             if output:
-                print(output)
+                print(redact(plan.bot, output))
+            if code == 0 and name == "fetch live ref":
+                live = ref_commit(plan.repo, plan.bot.live_ref)
+                if live != plan.live_sha:
+                    print(
+                        f"bot-rollback: {plan.bot.id}: the live ref moved from {plan.live_sha} to "
+                        f"{live} after the plan was made; nothing was rolled back",
+                        file=sys.stderr,
+                    )
+                    return 1
             if code != 0:
                 print(f"bot-rollback: {plan.bot.id}: {name} failed with exit {code}", file=sys.stderr)
                 return 1
-    return 0
+    return 1 if skipped else 0
 
 
 if __name__ == "__main__":
