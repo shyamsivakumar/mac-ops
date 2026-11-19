@@ -633,24 +633,26 @@ export default class Board extends View {
 
   columns(t, now) {
     const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [], lanes: Object.fromEntries(Object.keys(COLUMN_OF).filter((lane) => COLUMN_OF[lane] === k).map((lane) => [lane, 0])) }]));
-    const live = this.groups();
+    const everyLive = this.groups(true);
+    const live = everyLive.filter((g) => !this.hides(g));
     const replaced = new Set(this.issueGroups.map((g) => g.key));
-    const liveKeys = new Set(live.map((g) => g.key));
+    const liveKeys = new Set(everyLive.map((g) => g.key));
     const everyQueued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))].filter((g) => !liveKeys.has(g.key));
     const queued = everyQueued.filter((g) => !this.hides(g));
-    this.projects = tally([...this.groups(true), ...everyQueued]);
+    this.projects = tally([...everyLive, ...everyQueued]);
     const inProject = (g) => !this.project || g.project === this.project;
     const matches = this.filterOf();
     const searching = Boolean(this.query.trim());
     const keep = (g) => inProject(g) && matches(g) && (!g.asleep || searching);
-    const placed = this.place(live, now);
+    const everyPlaced = this.place(everyLive, now);
+    const placed = everyPlaced.filter(([g]) => !this.hides(g));
     this.asleepCount = live.filter((g) => g.asleep).length;
-    this.pruneSnoozed(live, now);
-    this.pruneSent(live);
-    this.pruneMarks([...live, ...queued]);
+    this.pruneSnoozed(everyLive, now);
+    this.pruneSent(everyLive);
+    this.pruneMarks([...everyLive, ...everyQueued]);
     for (const [, lane] of placed) cols[COLUMN_OF[lane]].total += 1;
     this.needKeys = new Set(placed.filter(([g, lane]) => COLUMN_OF[lane] === "needs" && !g.asleep).map(([g]) => g.key));
-    if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
+    if (!this.pop && !this.unsure()) this.trackColumns(everyPlaced, now);
     for (const [g, lane] of placed) if (keep(g)) cols[COLUMN_OF[lane]].groups.push(g);
     cols.run.groups.push(...queued.filter(keep).map((g) => Object.assign(g, { lane: "backlog" })));
     for (const key of COLUMN_KEYS) cols[key].groups = cols[key].groups.map((g) => [LANE_RANK[g.lane], g.lane === "needs" || g.lane === "stuck" ? this.enteredAt(g.lane, g) : 0, g]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , g]) => g);
