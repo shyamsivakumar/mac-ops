@@ -1,0 +1,110 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "01a1f1b5-d1a8-704d-b8b7-40f5c100f77f",
+  "agent": {
+    "name": "pi",
+    "version": "1.5.2",
+    "model_name": "harbor-endpoint/MiniMax-M3.1-Flash"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-19T02:49:47.216Z",
+      "source": "user",
+      "message": "Create a file named `hello.txt` in `/app` that contains exactly one line:\n\n```\nhello harbor\n```\n\nDo not print the contents of the file back to me. The file is the whole answer.",
+      "extra": {
+        "pi_event_id": "94f27c30",
+        "pi_parent_id": "b017935f"
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-19T02:49:48.716Z",
+      "source": "agent",
+      "model_name": "harbor-endpoint/MiniMax-M3.1-Flash",
+      "message": "I'll create the file directly.",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_43a8cc073c2f401493ab4050",
+          "function_name": "write",
+          "arguments": {
+            "path": "/app/hello.txt",
+            "content": "hello harbor\n"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_43a8cc073c2f401493ab4050",
+            "content": "Successfully wrote to /app/hello.txt",
+            "extra": {
+              "tool_name": "write",
+              "is_error": false
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 1637,
+        "completion_tokens": 47,
+        "cached_tokens": 256,
+        "extra": {
+          "cache_write_tokens": 0,
+          "reasoning_tokens": 0,
+          "pi_total_tokens": 1684
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "pi_event_id": "11cd0afd",
+        "pi_parent_id": "94f27c30",
+        "provider": "harbor-endpoint",
+        "api": "anthropic-messages",
+        "response_id": "074d96cbe8d615a172bb74d791331df2",
+        "response_model": null,
+        "stop_reason": "toolUse",
+        "raw_stop_reason": "tool_use"
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-19T02:49:49.603Z",
+      "source": "agent",
+      "model_name": "harbor-endpoint/MiniMax-M3.1-Flash",
+      "message": "Created `/app/hello.txt`.",
+      "metrics": {
+        "prompt_tokens": 1707,
+        "completion_tokens": 9,
+        "cached_tokens": 1536,
+        "extra": {
+          "cache_write_tokens": 0,
+          "reasoning_tokens": 0,
+          "pi_total_tokens": 1716
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "pi_event_id": "4a8586b6",
+        "pi_parent_id": "233e56bb",
+        "provider": "harbor-endpoint",
+        "api": "anthropic-messages",
+        "response_id": "074d96cc55e53d2da15766df284b26a8",
+        "response_model": null,
+        "stop_reason": "stop",
+        "raw_stop_reason": "end_turn"
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 3344,
+    "total_completion_tokens": 56,
+    "total_cached_tokens": 1792,
+    "total_steps": 3,
+    "extra": {
+      "cache_write_tokens": 0,
+      "reasoning_tokens": 0,
+      "pi_total_tokens": 3400
+    }
+  }
+}
