@@ -206,6 +206,20 @@ def pr_item(repo, pr):
     return f"{repo}!pr{pr.get('number')}", ""
 
 
+def issue_record(snapshot, repo, number):
+    issues = ((snapshot.get("repos") or {}).get(repo) or {}).get("issues") or []
+    return next((i for i in issues if i["number"] == int(number)), None)
+
+
+def issue_held(record):
+    return any(label["name"] in ("stage:backlog", "stage:hold") for label in record["labels"])
+
+
+def ticket_held(snapshot, repo, number):
+    record = issue_record(snapshot, repo, number) if number else None
+    return record is not None and issue_held(record)
+
+
 def stall_receipts():
     """Return the queue's dispatch receipts, or none when they cannot be read.
 
@@ -251,6 +265,8 @@ def stall_markers(snapshot, receipts):
                 # one either.
                 continue
             key, issue = pr_item(repo, pr)
+            if ticket_held(snapshot, repo, issue):
+                continue
             attempt = receipt_attempt(repo, issue, receipts)
             if not pr.get("headRefOid") and not attempt:
                 continue
@@ -268,6 +284,8 @@ def stall_markers(snapshot, receipts):
         if repo not in LANE_REPOS or not number:
             continue
         if (ticket.get("stage") or "") not in ("todo", "started"):
+            continue
+        if ticket_held(snapshot, repo, number):
             continue
         key = f"{repo}#{number}"
         entry = markers.get(key)
@@ -312,13 +330,17 @@ def board_keys(snapshot):
         for pr in data.get("prs") or []:
             if pr.get("isDraft"):
                 continue
-            keys.add(pr_item(repo, pr)[0])
+            key, issue = pr_item(repo, pr)
+            if not ticket_held(snapshot, repo, issue):
+                keys.add(key)
     for ticket in snapshot.get("tickets") or []:
         repo = ticket.get("repo") or ""
         number = ticket.get("number")
         if repo not in LANE_REPOS or not number:
             continue
         if (ticket.get("stage") or "") not in ("todo", "started"):
+            continue
+        if ticket_held(snapshot, repo, number):
             continue
         keys.add(f"{repo}#{number}")
     return keys
@@ -759,10 +781,8 @@ def act_on_pr(repo, number, ledger):
         return f"skip #{number}: superseded by a newer pull request for #{issue}"
     proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
-        issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
-        if issue_record is None:
-            return None
-        if any(label["name"] in ("stage:backlog", "stage:hold") for label in issue_record["labels"]):
+        record = issue_record(SNAPSHOT, repo, issue)
+        if record is None or issue_held(record):
             return None
     agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
                    for c in pr.get("statusCheckRollup") or [])
