@@ -30,7 +30,7 @@ whole list applies in order.
 | Task types | Order |
 | --- | --- |
 | quick, chore, standard, ui, research | router (`task/standard`: DeepSeek, Kimi), Cursor, Terra |
-| rca, risky, design, hard | router (`task/rca`, `task/risky`, `task/design`: Kimi, DeepSeek), Cursor, Sol |
+| rca, risky, design, hard | router (`task/rca`, `task/risky`, `task/design`; `hard` uses the rca chain: Kimi, DeepSeek), Cursor, Sol |
 | fix | router (`task/standard`), Cursor, Sol at max reasoning (`sol-max`) |
 
 `sol-max` carries `options: [{"id": "reasoningEffort", "value": "max"}]` in its
@@ -38,7 +38,9 @@ selection. `models.py` and `coordq` pass a selection through unchanged, and T3
 stores it in that shape. A router entry's selection is resolved for the task
 type, so `coordq` and `ticket start` send `{instanceId: router, model:
 task/<chain>}`. A payload that still names a direct `pi` Morph model is mapped
-to the router entry instead of refused. Reviews are Astra, then Opus. Fable
+to the router entry instead of refused, and a `builder:kimi` or
+`builder:deepseek` label on an older ticket is read as `builder:router`.
+Reviews are Astra, then Opus. Fable
 runs only when Shyam asks for it. `coordq` and `ticket start` pass the task
 type to `models.py`, and the installer builds each `ROUTES` row from the same
 order (the router entry's chains), so one file holds the preference. When a

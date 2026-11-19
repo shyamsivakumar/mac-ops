@@ -136,7 +136,7 @@ def start_routing():
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
     for kind, label, expected in [("standard", None, "task/standard"), ("risky", None, "task/risky"),
-                                  ("chore", "router", "task/standard"), ("chore", None, "task/standard")]:
+                                  ("chore", "cursor", "default"), ("chore", "kimi", "task/standard")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
         item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
@@ -158,6 +158,13 @@ def start_routing():
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
                                        print_brief=False, dry_run=False))
         exact(len(commands), 1)
+    # A ticket labelled before the router entry existed still starts.
+    exact(ticket.builder_alias("kimi"), "router")
+    exact(ticket.builder_alias("deepseek"), "router")
+    exact(ticket.builder_alias("cursor"), "cursor")
+    labels_cfg = {"labels": {"stage": ["todo"], "type": ["standard"], "priority": ["1"]}}
+    exact(ticket.label_problems(labels_cfg, {"stage": ["todo"], "type": ["standard"],
+                                             "priority": ["1"], "builder": ["kimi"], "reviewer": []}), [])
     morph = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
     for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["cursor", "sol"])]:
         blocked = set(morph)
@@ -3434,10 +3441,22 @@ def router_build():
                                           "modelSelection": {"instanceId": "router", "model": "task/standard"}})
     exact(refusal, None)
     exact(resolved["modelSelection"], {"instanceId": "router", "model": "task/rca"})
+    # A route the entry does not configure is refused, not silently defaulted.
+    _, refusal = queue.with_model({"taskType": "standard",
+                                   "modelSelection": {"instanceId": "router", "model": "task/bogus"}})
+    exact(refusal is not None, True)
+    # A model of another instance is not mapped to the router.
+    _, refusal = queue.with_model({"taskType": "standard",
+                                   "modelSelection": {"instanceId": "cursor", "model": "morph/morph-kimik31"}})
+    exact(refusal is not None, True)
     # The router entry is blocked only when every Morph identity it covers is.
     router = lane.model_list.router_entry("build")
     exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash"}), False)
     exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash", "pi:morph-kimik31"}), True)
+    exact(lane.model_list.selection_identities({"instanceId": "router", "model": "task/standard"}),
+          {"pi:morph-dsv41flash", "pi:morph-kimik31"})
+    # The installer still builds the hard route Kimi first.
+    exact(lane.model_list.pi_routes("hard"), ["morph/morph-kimik31", "morph/morph-dsv41flash"])
     # A review launch still refuses a builder model.
     _, refusal = queue.with_model({"taskType": "review",
                                    "modelSelection": {"instanceId": "pi", "model": "morph/morph-dsv41flash"}})
@@ -3460,6 +3479,13 @@ def router_blocked():
     exact(lane.model_list.first_available("build", None, {"pi:morph-dsv41flash"}, "standard")["id"], "router")
     # A quick task still ends on Terra once Cursor is out too.
     exact(lane.model_list.first_available("build", None, both | {"cursor:default"}, "quick")["id"], "terra")
+    # The CLI lookup behind `models.py first build` skips a blocked router too.
+    with patch.object(lane.model_list, "blocked_identities", return_value=both):
+        exact(lane.model_list.first_other("build")["id"], "cursor")
+    # A dead run on a usage limit skips the router entry, so Cursor gets the next attempt.
+    thread = {"providerInstanceId": "router", "model": "task/standard"}
+    exact(lane.dead_run_model(thread, True), {"instanceId": "cursor", "model": "default"})
+    exact(lane.dead_run_model(thread, False), {"instanceId": "router", "model": "task/standard"})
     # The same payload resolves to Cursor from a temp providers-blocked.json.
     with tempfile.TemporaryDirectory() as scratch:
         store = Path(scratch) / lane.model_list.BLOCKED_FILE

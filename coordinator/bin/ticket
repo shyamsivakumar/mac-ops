@@ -152,6 +152,17 @@ def builder_ids():
     return [e["id"] for e in model_list.entries("build")]
 
 
+# A ticket labelled before the router entry existed names the Morph model it
+# wanted. Both Morph models now run through the router entry, so the retired
+# labels are read as that entry instead of refused.
+LEGACY_BUILDER_ALIASES = {"deepseek": "router", "kimi": "router"}
+
+
+def builder_alias(name):
+    """The builder entry a label names, with the retired Morph labels read as the router."""
+    return LEGACY_BUILDER_ALIASES.get(name, name)
+
+
 def reviewer_ids():
     return [e["id"] for e in model_list.entries("review")]
 
@@ -282,7 +293,7 @@ def label_problems(cfg, groups):
         HOLD_FAMILY: {HOLD_FAMILY},
         "priority": set(cfg["labels"]["priority"]),
         "type": set(cfg["labels"]["type"]),
-        "builder": set(builder_ids()),
+        "builder": set(builder_ids()) | set(LEGACY_BUILDER_ALIASES),
         "reviewer": set(reviewer_ids()),
     }
     for family, values in groups.items():
@@ -325,7 +336,7 @@ def normalize_issue(cfg, repo, raw):
         "stage": one(groups["stage"]),
         "priority": int(priority) if priority and priority.isdigit() else None,
         "type": one(groups["type"]),
-        "builder": one(groups["builder"]),
+        "builder": builder_alias(one(groups["builder"])),
         "reviewer": one(groups["reviewer"]),
         "problems": problems,
         "updatedAt": raw["updatedAt"],
@@ -1055,7 +1066,7 @@ def parse_ticket(cfg, repo, issue):
         "stage": one(groups["stage"]),
         "type": one(groups["type"]),
         "priority": one(groups["priority"]),
-        "builder": one(groups["builder"]),
+        "builder": builder_alias(one(groups["builder"])),
         "reviewer": one(groups["reviewer"]),
     }
 
