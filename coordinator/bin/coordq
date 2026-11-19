@@ -1490,6 +1490,28 @@ def gate_changed_count(repo, number):
     return count if isinstance(count, int) else None
 
 
+BASE_PIN_TTL = 60
+_base_pins = {}
+
+
+def pinned_base(repo, base):
+    """The commit a base branch points at, read once a minute per branch.
+
+    A compare that names the branch moves with the branch and can never be
+    cached. A compare of two commits cannot move, so the branch is pinned to
+    its commit first and the compare is kept on disk.
+    """
+    pin = _base_pins.get((repo, base))
+    if pin and time.time() - pin[1] < BASE_PIN_TTL:
+        return pin[0]
+    rows = gh_json(f"repos/{repo}/git/ref/heads/{base}")
+    sha = ((rows[0] if rows else {}).get("object") or {}).get("sha")
+    if not isinstance(sha, str) or not sha:
+        raise RuntimeError(f"cannot read the commit of {repo} {base}")
+    _base_pins[(repo, base)] = (sha, time.time())
+    return sha
+
+
 def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
 
@@ -1507,7 +1529,11 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
     and a truncated or short one is UNKNOWN, never CLEAR.
     """
     if base and head:
-        return prompt_paths.scan_diff(gh_json, repo, base, head, attempts)
+        try:
+            pinned = pinned_base(repo, base)
+        except RuntimeError:
+            return prompt_paths.UNKNOWN
+        return prompt_paths.scan_diff(gh_json, repo, pinned, head, attempts)
     count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         try:
