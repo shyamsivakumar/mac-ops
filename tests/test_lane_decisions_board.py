@@ -17,7 +17,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -82,30 +82,41 @@ class DecisionsBoardTests(unittest.TestCase):
         self.assertEqual(items, [{"id": "other"}])
         self.assertEqual(len(calls), 2)
 
-    def test_the_stuck_file_keeps_both_kinds_of_entry_and_drops_a_cleared_one(self):
+    def test_the_stuck_file_keeps_both_kinds_of_entry_and_clearing_brings_back_a_shadowed_row(self):
         coordq = load_coordq()
-        with tempfile.TemporaryDirectory() as scratch, redirect_stdout(io.StringIO()):
+
+        def skip(head, reason):
+            return {"head": head, "count": coordq.STUCK_COUNT, "reason": reason}
+
+        def gatekeep_run(counts):
+            stuck = [(pr, value["head"], value["reason"]) for pr, value in sorted(counts.items())]
+            coordq.write_counts(counts, set(counts), stuck, False)
+
+        def status_stuck():
+            return coordq.stuck_lines(coordq.load())
+
+        with tempfile.TemporaryDirectory() as scratch, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             coordq.DIR = scratch
             stuck_file = Path(scratch) / "gatekeep-stuck.txt"
             coordq.save({"next": 1, "items": []})
+            counts = {"fixture/repo#20": skip("a", "no check"), "fixture/repo#21": skip("b", "no check")}
+            gatekeep_run(counts)
+            skips_only = stuck_file.read_text()
             coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#20", head="a", clear=False))
-            coordq.write_counts({}, set(), [("fixture/repo#21", "b", "no check")], False)
-            both = stuck_file.read_text()
-            self.assertEqual(list(coordq.load()["roundsStuck"]), ["fixture/repo#20"])
+            shadowed = stuck_file.read_text()
+            gatekeep_run(counts)
+            rewritten = stuck_file.read_text()
             coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#22", head="c", clear=False))
             kept = stuck_file.read_text()
             coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#20", head="", clear=True))
             cleared = stuck_file.read_text()
-            stuck_file.write_text("fixture/repo#20 a no check\n")
-            coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#20", head="a", clear=False))
-            shadowed = stuck_file.read_text()
-            coordq.write_counts({}, set(), [("fixture/repo#20", "a", "no check")], False)
-            rewritten = stuck_file.read_text()
-        self.assertEqual(shadowed, "fixture/repo#20 a rounds\nfixture/repo#22 c rounds\n")
-        self.assertEqual(rewritten, "fixture/repo#20 a rounds\nfixture/repo#22 c rounds\n")
-        self.assertEqual(both, "fixture/repo#21 b no check\nfixture/repo#20 a rounds\n")
+            from_status = "".join(line + "\n" for line in status_stuck())
+        self.assertEqual(skips_only, "fixture/repo#20 a no check\nfixture/repo#21 b no check\n")
+        self.assertEqual(shadowed, "fixture/repo#21 b no check\nfixture/repo#20 a rounds\n")
+        self.assertEqual(rewritten, shadowed)
         self.assertEqual(kept, "fixture/repo#21 b no check\nfixture/repo#20 a rounds\nfixture/repo#22 c rounds\n")
-        self.assertEqual(cleared, "fixture/repo#21 b no check\nfixture/repo#22 c rounds\n")
+        self.assertEqual(cleared, "fixture/repo#20 a no check\nfixture/repo#21 b no check\nfixture/repo#22 c rounds\n")
+        self.assertEqual(from_status, cleared)
 
     def test_a_pass_retires_the_item_of_a_pr_capped_before_the_stuck_list(self):
         item_id = "lane-gate-rounds-fixture-repo-20"
