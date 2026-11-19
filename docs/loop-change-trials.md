@@ -92,7 +92,10 @@ down. It measures how far the arm moves with no change at all.
 - Stage 1, screen: 20 tasks. Accept the pass-rate claim when p is at most 0.10.
 - Stage 2, confirm: 40 tasks, which are the original 20 plus 20 new ones. The
   stage 2 decision uses all 40 and requires p of at most 0.05, because the
-  second look at the same data raises the chance of a false accept.
+  second look at the same data raises the chance of a false accept. Before
+  the stage 2 decision, the A/A run is extended to the 20 new tasks (3 runs
+  each of the baseline arm, a second time). Every stage 2 comparison against
+  A/A, in claims A and B, then uses A/A numbers over the same 40 tasks.
 
 Smallest accepting number of ups for each number of downs, from the exact
 calculation.
@@ -254,7 +257,7 @@ flowchart TD
     E --> F[compare writes table and proof file]
     F --> G{Accept rule met?}
     G -- yes --> H[Merge with proof file in PR]
-    G -- "borderline" --> I[Stage 2: grow to 40 tasks, rerun both arms]
+    G -- "borderline" --> I[Stage 2: grow to 40 tasks, extend A/A to the new tasks, rerun both arms]
     G -- no --> R[Revert or close PR]
     I --> F
 ```
@@ -270,11 +273,13 @@ times divide by that concurrency, and the build ticket measures it.
 | Trial | Runs | Serial time at 8 minutes a run |
 | --- | --- | --- |
 | Stage 1, both arms | 120 | 16 hours |
-| A/A baseline | 60 | 8 hours |
-| Stage 2, both arms | 240 | 32 hours |
+| A/A baseline over the first 20 tasks | 60 | 8 hours |
+| Stage 2, both arms over 40 tasks | 240 | 32 hours |
+| Stage 2, A/A extension over the 20 new tasks | 60 | 8 hours |
 
 A stage 1 trial with a fresh A/A is about 24 hours serial, so it is a
-multi-night job, not an overnight one. A change with no claim worth that time
+multi-night job, not an overnight one. A stage 2 confirmation adds 40 hours
+(300 runs). A change with no claim worth that time
 should not be trialed. Reuse one A/A baseline across all changes made on the
 same `main`.
 
