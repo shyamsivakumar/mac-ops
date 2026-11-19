@@ -1,0 +1,290 @@
+"""Tests for the retry limit and backoff of a gate that dies without a verdict.
+
+`coordq` is a script without a .py suffix, so it is loaded by path. The queue
+directory is a temporary one, so a proof never touches the live queue.
+"""
+import argparse
+import importlib.util
+import io
+import json
+import os
+import tempfile
+import time
+import types
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+REPO = "o/r"
+HEAD = "a" * 40
+OTHER_HEAD = "b" * 40
+CONFIG = {"repos": {REPO: {"key": "T", "projectId": "P"}}}
+RECEIPT = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+COMMENT = {"user": {"login": "me"},
+           "body": "attempt 1\n<!-- coordinator-ticket "
+                   + json.dumps(RECEIPT)
+                   + " -->"}
+BUILDER_THREAD = {"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
+BUILDER_RUNS = [{"executedModel": "minimax/MiniMax-M3.1-Flash"}]
+# The gate died for a reviewer-side reason: no message, so no verdict.
+DEAD_GATE = {"thread": {"status": "failed"},
+             "items": [{"type": "user_message", "text": "review"}],
+             "recentRuns": [{"executedModel": None}]}
+
+coordq = None
+QUEUE_DIR = None
+SAVED_COORDQ_DIR = None
+
+
+def load_coordq():
+    path = ROOT / "coordinator" / "bin" / "coordq"
+    loader = SourceFileLoader("coordq_retry_limit", str(path))
+    spec = importlib.util.spec_from_loader("coordq_retry_limit", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def setUpModule():
+    global coordq, QUEUE_DIR, SAVED_COORDQ_DIR
+    SAVED_COORDQ_DIR = os.environ.get("COORDQ_DIR")
+    QUEUE_DIR = tempfile.mkdtemp(prefix="coordq-retry-limit-")
+    os.environ["COORDQ_DIR"] = QUEUE_DIR
+    coordq = load_coordq()
+
+
+def tearDownModule():
+    if SAVED_COORDQ_DIR is None:
+        os.environ.pop("COORDQ_DIR", None)
+    else:
+        os.environ["COORDQ_DIR"] = SAVED_COORDQ_DIR
+
+
+class FakeRun:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+class RetryLimitBase(unittest.TestCase):
+    """One open pull request whose gate died without a verdict."""
+
+    def setUp(self):
+        self.saved = {name: getattr(coordq, name)
+                      for name in ("gh_json", "load_receipts", "read_builder_thread",
+                                   "router_chain", "subprocess", "call", "gate_request")}
+        self.addCleanup(lambda: [setattr(coordq, name, value)
+                                 for name, value in self.saved.items()])
+        self.pr = {"draft": False, "number": 7, "head": {"sha": HEAD},
+                   "body": f"Refs #9\nBuilder check: PASS {HEAD}\n"}
+        self.key = f"gate:{REPO}#7:{HEAD}"
+        coordq.subprocess = types.SimpleNamespace(
+            run=lambda *a, **k: FakeRun("me\n"))
+        coordq.load_receipts = lambda: {RECEIPT["requestId"]: "builder-1", self.key: "gate-1"}
+        coordq.read_builder_thread = lambda thread_id: (BUILDER_THREAD, BUILDER_RUNS)
+        coordq.router_chain = lambda route: []
+        coordq.gh_json = self.fake_gh
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_GATE))
+        self.config = os.path.join(QUEUE_DIR, "gatekeep-config.json")
+        with open(self.config, "w") as f:
+            json.dump(CONFIG, f)
+
+    def fake_gh(self, endpoint):
+        if endpoint.startswith(f"repos/{REPO}/pulls"):
+            return [self.pr]
+        if "/issues/" in endpoint and "/comments" in endpoint:
+            return [COMMENT]
+        if endpoint.startswith(f"repos/{REPO}/commits/"):
+            return []
+        raise AssertionError(f"unexpected endpoint {endpoint}")
+
+    def write_queue(self, heads=None, items=None):
+        payload = {"next": 1, "items": items or [],
+                   "gatedHeads": heads if heads is not None else {}}
+        with open(os.path.join(QUEUE_DIR, "queue.json"), "w") as f:
+            json.dump(payload, f)
+
+    def read_queue(self):
+        with open(os.path.join(QUEUE_DIR, "queue.json")) as f:
+            return json.load(f)
+
+    def gate_items(self):
+        return [item for item in self.read_queue()["items"]
+                if item["tool"] == "t3_thread_launch"]
+
+    def run_gatekeep(self, dry_run=False):
+        args = argparse.Namespace(config=self.config, dry_run=dry_run)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            coordq.cmd_gatekeep(args)
+        return out.getvalue(), err.getvalue()
+
+
+class FirstRetryTest(RetryLimitBase):
+    """A gate that died without a verdict still gets its first retry."""
+
+    def test_a_legacy_head_is_retried(self):
+        self.write_queue(heads={self.key: 4})
+        out, _ = self.run_gatekeep()
+        self.assertIn("regating o/r#7: aaaaaaaa (gate died without a verdict)", out)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
+
+    def test_a_head_with_no_retry_yet_is_retried(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 0, "at": None, "givenUp": False}})
+        out, _ = self.run_gatekeep()
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
+
+    def test_a_gate_that_never_ran_is_queued_once(self):
+        self.write_queue()
+        out, _ = self.run_gatekeep()
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertNotIn("regating", out)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 0)
+
+    def test_a_gate_with_a_verdict_is_not_retried(self):
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": "completed"},
+                           "items": [{"type": "assistant_message", "text": "VERDICT: PASS"}]}))
+        self.write_queue(heads={self.key: 4})
+        out, _ = self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+        self.assertNotIn("regating", out)
+
+
+class BackoffTest(RetryLimitBase):
+    """The second retry waits, so a reviewer that cannot run is not
+    relaunched on every run."""
+
+    def test_a_second_retry_waits_for_the_backoff(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time(), "givenUp": False}})
+        out, _ = self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+        self.assertNotIn("regating", out)
+
+    def test_a_second_retry_happens_after_the_backoff(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time() - coordq.GATE_RETRY_BACKOFF - 1,
+                                          "givenUp": False}})
+        out, _ = self.run_gatekeep()
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 2)
+
+
+class GiveUpTest(RetryLimitBase):
+    """A head retried to the limit is given up once and left alone."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_queue(heads={self.key: {"id": 4, "retries": coordq.GATE_RETRY_LIMIT,
+                                          "at": time.time(), "givenUp": False}})
+
+    def test_the_dry_run_prints_one_give_up_line_and_no_queue_line(self):
+        before = self.read_queue()
+        out, _ = self.run_gatekeep(dry_run=True)
+        self.assertNotIn("would queue gate:", out)
+        lines = [line for line in out.splitlines() if line.startswith("gave up ")]
+        self.assertEqual(len(lines), 1)
+        self.assertIn(self.key, lines[0])
+        self.assertIn(f"after {coordq.GATE_RETRY_LIMIT} retries without a verdict", lines[0])
+        self.assertEqual(self.read_queue(), before)
+
+    def test_an_odd_record_does_not_stop_the_run(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": "x", "at": "yesterday",
+                                          "givenUp": False}})
+        out, _ = self.run_gatekeep(dry_run=True)
+        self.assertIn("would queue " + self.key, out)
+
+    def test_the_give_up_is_written_and_announced_once(self):
+        out, _ = self.run_gatekeep()
+        self.assertEqual(len([line for line in out.splitlines() if line.startswith("gave up ")]), 1)
+        self.assertEqual(self.gate_items(), [])
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+        again, _ = self.run_gatekeep()
+        self.assertNotIn("gave up", again)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_changed_head_is_retried_again(self):
+        self.run_gatekeep()
+        self.pr["head"]["sha"] = OTHER_HEAD
+        self.pr["body"] = f"Refs #9\nBuilder check: PASS {OTHER_HEAD}\n"
+        out, _ = self.run_gatekeep()
+        changed = f"gate:{REPO}#7:{OTHER_HEAD}"
+        self.assertIn("queued " + changed, out)
+        heads = self.read_queue()["gatedHeads"]
+        self.assertTrue(heads[self.key]["givenUp"])
+        self.assertEqual(heads[changed]["retries"], 0)
+
+
+class ExplicitGateTest(RetryLimitBase):
+    """An operator asking for a gate explicitly still gets it."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_queue(heads={self.key: {"id": 4, "retries": coordq.GATE_RETRY_LIMIT,
+                                          "at": time.time(), "givenUp": True}})
+        self.gate = {"projectId": "P", "title": "T-9 review #7 aaaaaaaa",
+                     "modelSelection": {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
+                     "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+                     "clientRequestId": self.key, "message": "review"}
+        coordq.gate_request = lambda *a, **k: (self.key, self.gate)
+        self.pull = {"state": "open", "draft": False, "number": 7, "head": {"sha": HEAD},
+                     "body": "Refs #9"}
+
+        def fake_run(command, **kwargs):
+            if command[:2] == ["gh", "api"] and command[2] == "user":
+                return FakeRun("me\n")
+            return FakeRun(json.dumps(self.pull))
+
+        coordq.subprocess = types.SimpleNamespace(run=fake_run)
+
+    def gate_once(self):
+        args = argparse.Namespace(ref=f"{REPO}#7", config=self.config)
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            coordq.cmd_gate(args)
+        return out.getvalue()
+
+    def test_a_given_up_head_is_queued(self):
+        out = self.gate_once()
+        self.assertIn("queued " + self.key, out)
+        self.assertEqual(len(self.gate_items()), 1)
+        # The retry budget is not reopened, because the reviewer has not changed.
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"],
+                         coordq.GATE_RETRY_LIMIT)
+        self.assertEqual(self.gate_items()[0]["args"]["clientRequestId"], self.key)
+
+    def test_a_second_explicit_gate_is_refused(self):
+        self.gate_once()
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(io.StringIO()):
+                self.gate_once()
+        self.assertEqual(len(self.gate_items()), 1)
+
+    def test_a_given_up_head_that_dies_again_is_given_up_in_one_line(self):
+        self.gate_once()
+        out, _ = self.run_gatekeep()
+        self.assertEqual(len([line for line in out.splitlines()
+                              if line.startswith("gave up ")]), 1)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+
+    def test_a_live_head_is_still_refused(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time(), "givenUp": False}})
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(io.StringIO()):
+                self.gate_once()
+        self.assertEqual(self.gate_items(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

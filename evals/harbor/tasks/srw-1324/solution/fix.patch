@@ -1,0 +1,439 @@
+diff --git a/Dockerfile.alarm b/Dockerfile.alarm
+index 212953a2..6668e45e 100644
+--- a/Dockerfile.alarm
++++ b/Dockerfile.alarm
+@@ -26,7 +26,8 @@ COPY discord_owner_dm.js paper_health.js ./
+ # SRW-534: the missed-post alarm reads every Bot 1 notice through the shared reader.
+ COPY discord_reply_format.js ./
+ COPY scripts/srw641_missed_post_alarm.cjs scripts/srw659_alarm_service.cjs \
+-  scripts/srw659_service_health_watch.js scripts/srw659_alarm_state.cjs ./scripts/
++  scripts/srw659_service_health_watch.js scripts/srw659_alarm_state.cjs \
++  scripts/srw1322_exit_watchdog.cjs ./scripts/
+ 
+ ENV NODE_ENV=production
+ EXPOSE 8080
+diff --git a/evidence/SRW-1322/check-proof.md b/evidence/SRW-1322/check-proof.md
+new file mode 100644
+index 00000000..2b9948b4
+--- /dev/null
++++ b/evidence/SRW-1322/check-proof.md
+@@ -0,0 +1,54 @@
++# SRW-1322 check proof
++
++Exit watchdog: page the owner once per position when an exit that was due
++never reached the broker. PR: #1324, branch `t3/exit-watchdog-paging`.
++
++Checked commit: `bf537825c5d27b58fa499b2c91a8ea8c34f98433`, the last commit
++that changes code. The PR head differs from it by this file only
++(`git diff bf537825c5d27b58fa499b2c91a8ea8c34f98433 HEAD --stat` lists
++`evidence/SRW-1322/check-proof.md` and nothing else).
++
++| Check | Command | Result |
++| --- | --- | --- |
++| Watchdog proof | `node test_srw1322_exit_watchdog.js` | 24 cases passed, 0 failed |
++| Alarm proofs | `node scripts/srw703_alarm_ci_proof.cjs` | 11 commands passed |
++| Alarm service | `node test_srw659_alarm_service.js` | 36 cases passed, 0 failed |
++| Docker copy coverage | `node scripts/check_dockerfile_copy.cjs` | passed (alarm image: 8 reachable modules) |
++| Syntax | `node --check` on every changed JS file | passed |
++| Boot smoke | `node scripts/srw703_alarm_ci_proof.cjs` (includes the boot and Monday proofs) | passed: the alarm service boots, clean shutdown |
++| Repository check | `srw/agent-check` on the exact head | published by the Mac check publisher (the merge authority) |
++| Device / handset tests | not run | **waived** (Shyam 2026-11-14: "no testing is needed lets just finish backlog building everything") |
++| Live-service tests | not run | **waived** (same waiver; the watchdog was not run against the live broker or the live Discord channels) |
++
++Nothing failed. The device and live cases were waived, not failed.
++
++Covered by the proof: the 2026-11-18 replay (both missed trades page within
++60 s of the card, one page each, the normal exit pages nothing); the caller
++is told when a decision is due; an undelivered page is retried and only spent
++when it lands; a restart does not page the same position again; a position
++paged by a CLOSE card is not paged again by the 0DTE backstop after a
++restart; the 0DTE backstop waits its 60 s window and answers to a sell that
++is still working; a sell that arrived late does not answer; a sell for
++another trade in the same contract does not answer; a Bot 2 exit decision
++with no sell and no CLOSE card pages; with paper credentials the service's
++own wiring reads the broker without throwing; the broker adapter only
++issues GET. Added in this round: a late sell that is still open, or that the
++ledger names by order id, does not answer; a sell for trade A does not answer
++trade B or an unnamed trade C on the same contract; a position is paged once
++after its opening fill leaves the latest 200 orders (keys are the trade id and
++the 0DTE contract and day, not the order history); the wake starts the reads
++early so a 5 s read ends on the deadline; a Bot 1 exit trigger with no CLOSE
++card pages and the page names its bot. Added in round 2: two trades on one 0DTE
++contract are each paged once; one sell answers one of two overlapping
++decisions, not both; the broker snapshot is judged at the instant it was read,
++not when the decisions finished reading; the 0DTE window counts from 15:50:00 ET,
++so an open sell sent at 15:51:30 does not answer at 15:51:45. The four new cases
++fail on the previous module and pass on this one. Added in round 3: the broker
++lists a working sell in both the recent and the open orders, so the adapter
++merges them by order id; without that one sell answered two decisions. The polling interval default
++is 60 s (the ticket), with the early wake on each deadline kept. Added in round 4: a CLOSE card and a trader trigger for one trade merge into one decision (counted from the earlier), so a timely sell answers it and a missing sell pages once; the broker adapter reports when its two order reads finished and the watchdog judges at that instant, so a slower positions read does not move the snapshot past a sell the orders never saw. Both new cases fail on the previous module and pass on this one.
++
++Known trade-off: a sell the broker accepts in the few hundred milliseconds
++between the broker answering and the page going out is not in the snapshot and
++can produce one page for an exit that was in time. A confirming re-read before
++paging would close that and delay every page by one read.
+diff --git a/scripts/srw1322_exit_watchdog.cjs b/scripts/srw1322_exit_watchdog.cjs
+new file mode 100644
+index 00000000..0ce5cc32
+--- /dev/null
++++ b/scripts/srw1322_exit_watchdog.cjs
+@@ -0,0 +1,243 @@
++'use strict';
++
++/**
++ * SRW-1322: the exit watchdog — page the owner once per position when an
++ * exit that was due never reached the broker.
++ *
++ * Read-only: the broker adapter issues GET and nothing here can place an
++ * order. The sources are injected, so the proof (test_srw1322_exit_watchdog.js)
++ * replays a day offline.
++ *
++ * The rules it holds:
++ *   - one page per trade: the key is the trade id, which no order history can
++ *     change, so two trades on one contract are two pages; a trade's page also
++ *     covers the 0DTE backstop for its contract, and a restart keeps both;
++ *   - the broker's window is 60 s from the decision: a sell inside that
++ *     window answers one decision, a sell outside it does not, a sell is
++ *     matched to its own trade by order id when the ledger names one, and a
++ *     sell that is still working at the deadline answers the 0DTE backstop;
++ *   - everything is judged at the instant the broker was read, never later;
++ *   - a page is spent only when the owner was reached; an undelivered page
++ *     is retried on the next check;
++ *   - only what could be read is evaluated.
++ */
++
++const fs = require('node:fs');
++const path = require('node:path');
++
++const GRACE_MS = 60_000;
++const ZERO_DTE_MINUTE = 15 * 60 + 50; // 15:50 ET
++const ALPACA_PAPER_BASE = 'https://paper-api.alpaca.markets';
++
++/** The ET clock of an instant: its day, its minute of the day and the second inside that minute. */
++function etClock(ms) {
++  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms));
++  const read = type => parts.find(part => part.type === type)?.value;
++  return { day: `${read('year')}-${read('month')}-${read('day')}`, minutes: Number(read('hour')) % 24 * 60 + Number(read('minute')), seconds: Number(read('second')) };
++}
++
++/** OCC-21 symbol: root + YYMMDD + C/P + strike, so the expiry is inside the id. */
++function occExpiry(symbol) {
++  const match = /^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})[CP]/.exec(String(symbol || '').replace(/\s+/g, '').toUpperCase());
++  return match ? `${2000 + Number(match[2])}-${match[3]}-${match[4]}` : null;
++}
++
++/** Bot 1's exit decisions: a queued CLOSE card. The OPEN card names the contract. */
++function closeDecisions(cards, symbols) {
++  for (const card of cards) {
++    const symbol = card.doc?.option?.symbol ?? card.doc?.option?.occ21;
++    if (card.type === 'OPEN' && card.tradeId && symbol) symbols.set(card.tradeId, String(symbol));
++  }
++  return cards
++    .filter(card => card.type === 'CLOSE' && card.tradeId && Number.isFinite(card.atMs) && symbols.has(card.tradeId))
++    .map(card => ({ bot: 'bot1', tradeId: card.tradeId, symbol: symbols.get(card.tradeId), decidedAtMs: card.atMs, reason: String(card.doc?.exit_ref ?? 'close_card') }));
++}
++
++/** Bot 1's own exit decisions: the trigger its trader logged on a trade that still holds quantity, whether or not a CLOSE card was published. */
++function traderDecisions(trades) {
++  return Object.values(trades || {}).flatMap(trade => {
++    const symbol = trade?.intent?.optionSymbol;
++    const trigger = (trade?.events || []).filter(event => event?.op === 'exit_trigger').pop();
++    if (!symbol || !trigger || !(trade.qtyLeft > 0) || !Number.isFinite(Date.parse(trigger.at))) return [];
++    return [{ bot: 'bot1', tradeId: String(trade.tradeId), symbol, decidedAtMs: Date.parse(trigger.at), reason: String(trigger.ref ?? 'exit_trigger') }];
++  });
++}
++
++/**
++ * Bot 2's exit decisions: a trade the machine decided to exit (it has an
++ * exit reason) while its ledger still holds the position. The ledger has no
++ * timestamp for the decision, so the window starts when the watchdog first
++ * sees it: the page can never land before the broker had its 60 s.
++ */
++function botDecisions(trades) {
++  return (Array.isArray(trades) ? trades : [])
++    .filter(trade => trade?.exit_reason && (trade.qty_left == null || trade.qty_left > 0) && (trade.contract || trade.ticker))
++    .map(trade => ({
++      bot: 'bot2', tradeId: String(trade.trade_id || trade.contract), symbol: String(trade.contract || trade.ticker),
++      decidedAtMs: null, exitOrderId: trade.exit_order_id || trade.exit_client_order_id || null,
++      reason: String(trade.exit_reason),
++    }));
++}
++
++/**
++ * The sell order that answers this decision, if one reached the broker in time.
++ * A decision that names its exit order is answered by that order and no other.
++ * One that does not is answered by a sell inside its window that no other
++ * decision claims and that no earlier decision already used, so two exits on
++ * one contract need two sells. A sell that was already working at the deadline
++ * answers the 0DTE backstop. No order answers a decision when it was submitted
++ * after the window closed.
++ */
++function answeringSell(orders, decision, from, until, claimed, used) {
++  return (orders || []).find(order => {
++    if (order?.symbol !== decision.symbol || String(order.side).toLowerCase() !== 'sell') return false;
++    const ids = [order.id, order.clientOrderId].filter(Boolean);
++    const inTime = order.submittedAtMs <= until;
++    if (decision.exitOrderId) return ids.includes(decision.exitOrderId) && inTime;
++    if (decision.backstop && order.open === true) return inTime;
++    if (ids.some(id => claimed.has(id)) || (!decision.backstop && used.has(order))) return false;
++    return order.submittedAtMs >= from && inTime;
++  });
++}
++
++/** One trade is one decision: a CLOSE card and a trader trigger for the same trade merge, counted from the earlier one. */
++function oncePerTrade(candidates) {
++  const byKey = new Map();
++  for (const decision of candidates) {
++    const key = decision.key ?? `trade:${decision.tradeId}`;
++    const known = byKey.get(key);
++    const earlier = known && !(Number.isFinite(decision.decidedAtMs) && decision.decidedAtMs < (known.decidedAtMs ?? Infinity)) ? known : decision;
++    byKey.set(key, { ...earlier, key, exitOrderId: known?.exitOrderId ?? decision.exitOrderId });
++  }
++  return [...byKey.values()];
++}
++
++/** How long to sleep before the next check: early by the last check's reads, so they end on the deadline. */
++function wakeDelayMs({ dueMs, nowMs, intervalMs, lastCheckMs }) {
++  return Math.max(250, Math.min(intervalMs, Number.isFinite(dueMs) ? dueMs - nowMs - lastCheckMs : Infinity));
++}
++
++/**
++ * The watchdog. It keeps the paged positions, the pages that have not landed
++ * yet and the first time it saw each decision, so one position is paged once
++ * — across restarts too, when a state file is given.
++ */
++function createExitWatchdog({ readBroker, readDecisions, page, now = Date.now, graceMs = GRACE_MS, stateFile = null, log = () => {} }) {
++  const paged = new Set();
++  const seen = new Map();
++  const deadlines = new Map();
++  if (stateFile) {
++    try {
++      for (const key of JSON.parse(fs.readFileSync(stateFile, 'utf8'))) paged.add(String(key));
++    } catch (error) {
++      log('NOTE', `exit watchdog state unreadable, starting empty: ${error.message}`);
++    }
++  }
++  function persist(pages) {
++    if (!stateFile || !pages.length) return;
++    // A state file that cannot be written must not break the check: the page
++    // went out, the restart protection is what is lost.
++    try {
++      fs.mkdirSync(path.dirname(stateFile), { recursive: true });
++      fs.writeFileSync(stateFile, JSON.stringify([...paged]));
++    } catch (error) { log('NOTE', `exit watchdog state not saved: ${error.message}`); }
++  }
++  /** The earliest moment a decision becomes due, so the caller can wake on it. */
++  function nextDeadlineAtMs() {
++    let earliest = null;
++    for (const deadline of deadlines.values()) if (earliest === null || deadline < earliest) earliest = deadline;
++    return earliest;
++  }
++  async function check() {
++    const timed = async read => ({ value: await read(), at: now() });
++    const [brokerRead, decisionRead] = await Promise.all([timed(readBroker), timed(readDecisions)]);
++    const broker = brokerRead.value;
++    const at = broker.readAtMs ?? brokerRead.at; // the orders snapshot ends here: a sell that came later is not in it, so nothing is judged at a later instant
++    const clock = etClock(at);
++    const candidates = [...decisionRead.value];
++    const zeroKey = symbol => `zero_dte:${symbol}@${clock.day}`;
++    // The 0DTE backstop: a position that expires today and is still open
++    // after 15:50 ET has an exit that is due, queued card or not.
++    if (clock.minutes >= ZERO_DTE_MINUTE) {
++      const dueAt = at - (clock.minutes - ZERO_DTE_MINUTE) * 60_000 - clock.seconds * 1000 - at % 1000; // 15:50:00 ET today
++      for (const position of broker.positions) {
++        if (occExpiry(position.symbol) !== clock.day) continue;
++        candidates.push({ bot: null, tradeId: position.symbol, symbol: position.symbol, decidedAtMs: dueAt, backstop: true, reason: 'zero_dte_1550', key: zeroKey(position.symbol) });
++      }
++    }
++    const decisions = oncePerTrade(candidates);
++    const claimed = new Set(decisions.map(decision => decision.exitOrderId).filter(Boolean));
++    // The broker's window is 60 s from the decision. A decision with a
++    // timestamp (a CLOSE card, a trigger, the 0DTE deadline) counts from it;
++    // one without (Bot 2's ledger) counts from the first time it was seen, so
++    // the page can never land before the broker had its window.
++    const windows = decisions
++      .map(decision => ({ decision, key: decision.key }))
++      .filter(({ decision, key }) => !paged.has(key) && broker.positions.some(position => position.symbol === decision.symbol))
++      .map(({ decision, key }) => {
++        const firstSeen = seen.get(key) ?? decisionRead.at;
++        seen.set(key, firstSeen);
++        const from = Number.isFinite(decision.decidedAtMs) ? decision.decidedAtMs : firstSeen;
++        return { decision, key, from, until: from + graceMs };
++      })
++      .sort((a, b) => Number(a.decision.backstop === true) - Number(b.decision.backstop === true) || a.from - b.from);
++    const pages = [];
++    const used = new Set();
++    deadlines.clear();
++    for (const { decision, key, from, until } of windows) {
++      const sell = answeringSell(broker.orders, decision, from, until, claimed, used);
++      if (sell && !decision.backstop) used.add(sell);
++      if (at < until) { deadlines.set(key, until); continue; }
++      if (sell) continue;
++      const delivered = await page({ ...decision, key, decidedAtMs: from }).catch(error => { log('ALERT', `exit watchdog page failed for ${decision.tradeId}: ${error.message}`); return false; });
++      if (delivered === true) {
++        paged.add(key);
++        if (!decision.backstop && occExpiry(decision.symbol) === clock.day) paged.add(zeroKey(decision.symbol));
++        pages.push({ ...decision, key });
++      }
++    }
++    persist(pages);
++    return pages;
++  }
++  return { check, paged, seen, nextDeadlineAtMs };
++}
++
++/** The broker, read only: open positions, the recent orders and the open orders. Every call is a GET. */
++function createAlpacaBrokerSource({ key, secret, base = ALPACA_PAPER_BASE, fetchImpl = fetch, now = Date.now }) {
++  const getJson = async pathname => {
++    const response = await fetchImpl(`${base}${pathname}`, { headers: { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret }, signal: AbortSignal.timeout(15_000) });
++    if (!response.ok) throw new Error(`alpaca_http_${response.status}`);
++    return response.json();
++  };
++  const timed = async pathname => ({ rows: await getJson(pathname), at: now() });
++  return async () => {
++    const [{ rows: positions }, { rows: recent, at: recentAt }, { rows: open, at: openAt }] = await Promise.all([
++      timed('/v2/positions'), timed('/v2/orders?status=all&limit=200&direction=desc'), timed('/v2/orders?status=open&limit=200&direction=desc'),
++    ]);
++    const toOrder = (row, working) => ({
++      id: row.id, clientOrderId: row.client_order_id, symbol: row.symbol, side: String(row.side || '').toLowerCase(),
++      submittedAtMs: Date.parse(row.submitted_at), filledQty: Number(row.filled_qty), open: working === true,
++    });
++    return {
++      // Sells are judged at the earlier of the two order reads: a slower positions read must not move the snapshot past a sell the orders never saw.
++      readAtMs: Math.min(recentAt, openAt),
++      positions: positions.filter(row => Number(row.qty) > 0).map(row => ({ symbol: row.symbol, qty: Number(row.qty) })),
++      // The open orders are read next to the recent ones: a working sell that
++      // 200 newer orders pushed out of the recent list is still open.
++      // One entry per order id, so a working sell listed twice answers one decision, not two.
++      orders: [...new Map([...recent.map(row => toOrder(row, false)), ...open.map(row => toOrder(row, true))].map(order => [order.id, order])).values()],
++    };
++  };
++}
++
++function renderExitMiss(miss) {
++  return [
++    miss.reason === 'zero_dte_1550'
++      ? 'A 0DTE position was still open after 15:50 ET and no sell order reached the broker in time.'
++      : `${miss.bot === 'bot2' ? 'Bot 2 (TradingView)' : 'Bot 1 (Discord cards)'} decided an exit (${miss.reason}) and no sell order reached the broker in time.`,
++    `Trade: ${miss.tradeId}.`, `Contract: ${miss.symbol}.`, `Decided: ${new Date(miss.decidedAtMs).toISOString()}.`,
++    'Action: check the exit path and the broker orders for this position.',
++  ].join('\n');
++}
++
++module.exports = { closeDecisions, traderDecisions, botDecisions, createExitWatchdog, createAlpacaBrokerSource, renderExitMiss, wakeDelayMs, etClock, occExpiry };
+diff --git a/scripts/srw659_alarm_service.cjs b/scripts/srw659_alarm_service.cjs
+index ba77bcf0..3a5eeea2 100644
+--- a/scripts/srw659_alarm_service.cjs
++++ b/scripts/srw659_alarm_service.cjs
+@@ -72,8 +72,55 @@
+  */
+ 
+ const http = require('node:http');
++const path = require('node:path');
+ const alarm641 = require('./srw641_missed_post_alarm.cjs');
+ const healthWatch = require('./srw659_service_health_watch.js');
++const exitWatch = require('./srw1322_exit_watchdog.cjs');
++
++/** SRW-1322: the exit watchdog on the sources this service has. Off without a read-only paper key. */
++function createExitWatchdogForService({ token, publisherId, channels, bots, alerter, trader = null, log = alarm641.line }) {
++  const key = process.env.SRW1322_PAPER_KEY || process.env.APCA_API_KEY_ID || '';
++  const secret = process.env.SRW1322_PAPER_SECRET || process.env.APCA_API_SECRET_KEY || '';
++  if (!key || !secret || !channels.length) { log('NOTE', 'exit watchdog off: needs the read-only paper key (SRW1322_PAPER_KEY/SRW1322_PAPER_SECRET) and the trade channels (SRW659_CHANNELS)'); return null; }
++  const readers = channels.map(channel => alarm641.createDiscordReader({ token, channelId: channel.channelId, publisherId }));
++  const bot2 = (bots || []).find(bot => bot.name === 'bot2');
++  const symbols = new Map();
++  let traderRead = { at: -Infinity, decisions: [] };
++  return exitWatch.createExitWatchdog({
++    readBroker: exitWatch.createAlpacaBrokerSource({ key, secret }),
++    readDecisions: async () => {
++      const cards = [];
++      for (const reader of readers) {
++        const { posts, truncated } = await alarm641.collectPosts(reader, { day: alarm641.ptDay(Date.now()), maxPages: 4 });
++        if (truncated) log('ALERT', 'exit watchdog: the trade feed read was cut short, older cards of the day are unseen');
++        cards.push(...posts.filter(post => !post.excluded));
++      }
++      const decisions = exitWatch.closeDecisions(cards, symbols);
++      // Bot 1 decides exits in its trader too, and a failed CLOSE publication leaves no card: the trader is read at its own 30 s floor.
++      if (trader) {
++        if (Date.now() - traderRead.at >= TRADER_POLL_FLOOR_MS) {
++          try { traderRead = { at: Date.now(), decisions: exitWatch.traderDecisions((await trader.read(alarm641.ptDay(Date.now()))).trades) }; }
++          catch (error) { log('ALERT', `exit watchdog: the Bot 1 trader could not be read, exits with no CLOSE card are not checked: ${error?.message || error}`); }
++        }
++        decisions.push(...traderRead.decisions);
++      }
++      // Bot 2 decides its exits in its own ledger; its trades say so.
++      if (bot2?.healthUrl) {
++        try {
++          const base = String(bot2.healthUrl).replace(/\/+$/, '').replace(/\/health$/, '');
++          const response = await fetch(`${base}/trades`, { headers: bot2.secret ? { 'x-bot2-secret': bot2.secret } : {}, signal: AbortSignal.timeout(15_000) });
++          if (!response.ok) throw new Error(`bot2_trades_http_${response.status}`);
++          decisions.push(...exitWatch.botDecisions((await response.json())?.trades));
++        } catch (error) { log('ALERT', `exit watchdog: the Bot 2 trades could not be read, its exits are not checked: ${error?.message || error}`); }
++      }
++      return decisions;
++    },
++    // A failed delivery is not recorded by the DM route and, with retryExternally, not queued to the digest: the next cycle retries it.
++    page: async miss => Boolean((await alerter.alert('ALERT', exitWatch.renderExitMiss(miss), { key: `exit-watch:${miss.tradeId}`, dedupMs: 86_400_000, retryExternally: true }))?.route),
++    stateFile: process.env.SRW1322_STATE_FILE || path.join(path.dirname(process.env.SRW659_STATE_FILE || '/data/srw659/alarm-state.json'), 'exit-watchdog.json'),
++    log,
++  });
++}
+ 
+ const DEFAULT_CHANNELS_SPEC = 'botalerts_test=1564736042756743281,botalerts=1564741003930378421';
+ const TRADER_POLL_FLOOR_MS = 30_000; // task rule: never poll the trader harder than every 30 s
+@@ -361,7 +408,11 @@ function envInt(name, fallback, { min = 0 } = {}) {
+ async function main() {
+     const args = new Set(process.argv.slice(2).map((arg) => arg.replace(/^--/, '')));
+     const healthOnly = args.has('health-only') || (!args.has('full') && process.env.SRW659_HEALTH_ONLY !== '0');
+-    const channels = healthOnly ? [] : parseChannels(process.env.SRW659_CHANNELS || DEFAULT_CHANNELS_SPEC);
++    // The trade channels are read for the exit watchdog even in health-only
++    // mode; the missed-post monitor itself still needs --full.
++    let channels = [];
++    try { channels = parseChannels(process.env.SRW659_CHANNELS || DEFAULT_CHANNELS_SPEC); }
++    catch (error) { if (!healthOnly) throw error; }
+     const token = process.env.SRW641_DISCORD_TOKEN || process.env.DISCORD_BOT_TOKEN;
+     if (!token) throw new Error('discord_token_missing (set SRW641_DISCORD_TOKEN or DISCORD_BOT_TOKEN)');
+     const publisherId = process.env.SRW641_PUBLISHER_ID || '1564763863604265060';
+@@ -423,6 +474,21 @@ async function main() {
+     const service = healthOnly ? null : createAlarmService({
+       channelReaders, reader, deadlineMs, cycleMs, traderIntervalMs: Math.max(TRADER_POLL_FLOOR_MS, traderIntervalMs), alert: dmAlerter.alert, drainDigest: dmAlerter.drainDigest,
+     });
++    const exitTrader = traderUrl && internalToken ? createTraderOutcomeReader({ baseUrl: traderUrl, token: internalToken, minSpacingMs: TRADER_POLL_FLOOR_MS }) : null;
++    const exitWatchdog = createExitWatchdogForService({ token, publisherId, channels, bots, alerter: dmAlerter, trader: exitTrader });
++    const exitIntervalMs = envInt('SRW1322_INTERVAL_MS', 60_000, { min: 10_000 });
++    if (exitWatchdog) void (async () => {
++      let lastCheckMs = 0;
++      for (;;) {
++        const sessionOpen = () => Boolean(healthWatch.regularSessionFor(Date.now())?.open);
++        await defaultWait(sessionOpen() ? exitWatch.wakeDelayMs({ dueMs: exitWatchdog.nextDeadlineAtMs(), nowMs: Date.now(), intervalMs: exitIntervalMs, lastCheckMs }) : exitIntervalMs);
++        if (!sessionOpen()) continue;
++        const startedAt = Date.now();
++        try { await exitWatchdog.check(); }
++        catch (error) { alarm641.line('ALERT', `exit watchdog check failed, nothing was evaluated: ${error?.message || error}`); }
++        lastCheckMs = Date.now() - startedAt;
++      }
++    })();
+     const port = Number(process.env.PORT) || 8080;
+     const healthServer = http.createServer((request, response) => {
+       if (request.url === '/health') {
+@@ -470,6 +536,7 @@ if (process.argv[1] && process.argv[1].endsWith('srw659_alarm_service.cjs')) {
+ }
+ 
+ module.exports = {
++  createExitWatchdogForService,
+   createTraderOutcomeReader,
+   createDmAlerter,
+   createHealthIncidentNotifier,
+diff --git a/scripts/srw703_alarm_ci_proof.cjs b/scripts/srw703_alarm_ci_proof.cjs
+index e3c73863..bbda1d41 100644
+--- a/scripts/srw703_alarm_ci_proof.cjs
++++ b/scripts/srw703_alarm_ci_proof.cjs
+@@ -8,7 +8,7 @@ const proofs = [
+   'scripts/srw703_alarm_boot_proof.cjs', 'scripts/srw703_alarm_watch_proof.cjs',
+   'scripts/srw703_discord_dm_proof.cjs', 'scripts/srw703_monday_alarm_proof.cjs',
+   'scripts/srw703_telegram_retired_proof.cjs', 'scripts/srw713_startup_alarm_proof.cjs',
+-  'test_srw659_alarm_service.js',
++  'test_srw659_alarm_service.js', 'test_srw1322_exit_watchdog.js',
+ ];
+ for (const file of proofs) {
+   const result = spawnSync(process.execPath, [path.join(root, file)], { cwd: root, stdio: 'inherit' });

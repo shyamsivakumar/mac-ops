@@ -1,0 +1,36 @@
+schema_version = "1.4"
+artifacts = []
+
+[task]
+name = "ladder/srw-1324"
+version = "1.0.0"
+description = "srw PR 1324"
+keywords = ["ladder", "feature"]
+[[task.authors]]
+name = "Shyam Sivakumar"
+email = "shyam@example.com"
+
+[metadata]
+repo = "srw"
+pr = 1324
+type = "feature"
+
+[verifier]
+timeout_sec = 600.0
+environment_mode = "shared"
+collect = []
+
+[verifier.env]
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 900.0
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]

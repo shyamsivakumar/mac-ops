@@ -1,0 +1,540 @@
+diff --git a/README.md b/README.md
+index 0f80673d..ee6ae6fb 100644
+--- a/README.md
++++ b/README.md
+@@ -130,6 +130,14 @@ Admission also checks fresh CPU, memory, pressure, load and swap readings.
+ Missing capacity or telemetry holds new work. Environment variables cannot raise
+ the safety thresholds.
+ 
++No job keeps its slot past 45 minutes, counting time spent paused or asleep. The job's own
++watchdog and every heavy command (including `heavy status`) terminate an
++overdue job. `HEAVY_MAX_RUNTIME_SECONDS` may lower the ceiling and never raises
++it. The terminated command prints `heavy: terminated: wall-clock limit 45m` and
++exits 76. After install, any heavy call ends builds already past the ceiling, and
++records created before the change get the 45-minute default counted from their
++creation.
++
+ Direct xcodebuild commands use shared DerivedData and background scheduling.
+ Review commands keep ordinary scheduling. Pause and resume preserve work, but a
+ stopped command retains memory. User interruption and watchdog cleanup remain
+diff --git a/docs/state-charts/heavy.md b/docs/state-charts/heavy.md
+index 5f947807..fe4585cd 100644
+--- a/docs/state-charts/heavy.md
++++ b/docs/state-charts/heavy.md
+@@ -31,12 +31,30 @@ stateDiagram-v2
+     PauseRequested --> PauseRequested: verification or signal fails, retry
+     Paused --> Running: 10 healthy seconds at the resume headroom, free active slot, positive fresh capacity, verified SIGCONT
+     Paused --> Paused: capacity is zero or verification or signal fails, retry
+-    Running --> Terminating: user interrupt, explicit curtail, or watchdog failure
+-    PauseRequested --> Terminating: user interrupt, explicit curtail, or watchdog failure
+-    Paused --> Terminating: user interrupt, explicit curtail, or watchdog failure
++    Running --> Terminating: user interrupt, explicit curtail, watchdog failure, or wall-clock limit
++    PauseRequested --> Terminating: user interrupt, explicit curtail, watchdog failure, or wall-clock limit
++    Paused --> Terminating: user interrupt, explicit curtail, watchdog failure, or wall-clock limit
+     Terminating --> Complete: verified group exits and registry cleanup finishes
+ ```
+ 
++## Runtime limit
++
++Every job has a wall-clock ceiling of 45 minutes for every role, stored in its registry record when it is admitted. `HEAVY_MAX_RUNTIME_SECONDS` may lower the ceiling and never raises it. The ceiling counts from the moment the workload starts and includes time spent paused and time the Mac spends asleep, because it is measured on `CLOCK_MONOTONIC`, which keeps counting during sleep on Darwin. A record without a stored ceiling or start time uses 45 minutes from its creation. After install, any heavy call therefore ends builds already past the ceiling, and records created before the change get the 45-minute default counted from their creation. A job whose workload boot identity differs from the current boot is skipped.
++
++Two independent processes enforce the ceiling. Each job's own watchdog enforces its job, so a wedged supervisor cannot hold a slot. Every `heavy` command, including `status` and `request-curtail`, also enforces it for all records. A supervisor never terminates other jobs inline, because the SIGTERM grace period would stall its own heartbeat and the watchdog would then kill a healthy job. Enforcement is best effort: a bad or vanished record, a failed `ps`, or a lock timeout is skipped and never fails the heavy command.
++
++The enforcer claims the termination under the registry lock with `_claim_termination` (reason `wall-clock limit`), signals the verified process group with SIGTERM and then SIGKILL after the grace period, and marks the record complete only after the kill is confirmed, which frees the slot. A job left `terminating` by a failed kill is retried with takeover when its claim is older than 30 seconds or its claimant process is dead. A second enforcer that finds a fresh claim does nothing, and takeover is a compare-and-swap on the claimant and claim times it observed. The watchdog's stale-heartbeat recovery, and its fallback kill, also defer to a limit claim whose claimant is alive and younger than 30 seconds, and exit once the record is complete.
++
++The supervisor of a terminated job prints `heavy: terminated: wall-clock limit 45m` and exits with code 76. Other heavy codes are 75 (refused or timed out waiting), 74 (local state failure), 125 (curtailed) and 130 (interrupted).
++
++```mermaid
++stateDiagram-v2
++    Running --> Terminating: age at least the ceiling
++    Paused --> Terminating: age at least the ceiling
++    Terminating --> Terminating: kill failed, claim older than 30 s or claimant dead, retry with takeover
++    Terminating --> Complete: verified group exits, slot freed, caller exits 76
++```
++
+ Memory headroom (free, inactive and speculative pages) has a dead band so a job does not flip near one line. A running job counts headroom as low only below `max(host headroom, 12.5% RAM)`. A paused job resumes only at `max(host headroom, 15% RAM)` or more. The host headroom is 6 GiB unless the installed `board_governor.json` names this host in `min_headroom_bytes_by_host`: the 16 GB MacBook Pro uses 2 GiB, so it needs 2.4 GiB to start or resume and pauses below 2 GiB, while the 48 GB Mac keeps the 6 GiB floor. Host names in that map are matched without regard to case, and two names that differ only by case are ambiguous and rejected, so that host keeps the default floor. A short-name fallback is allowed only when either the configured name or the observed hostname is unqualified, so `builder.lab` never lowers the floor of `builder.office`. On this 48 GB Mac that is 6.0 GiB to pause and 7.2 GiB to resume; the previous single line was 9.6 GiB, and measured headroom at normal load was 7.8 to 9.8 GiB, so jobs flipped. Critical kernel pressure, swap growth and a level 2 reading at or below 30% free still count as pressure at either state, and critical pressure still pauses at once.
+ 
+ Only the registered workload's own isolated process group receives pause, resume, or termination signals. The supervisor stays outside that group and keeps the watchdog heartbeat current while the workload is paused. Host pressure and missing telemetry never trigger termination. Capacity zero blocks admission and resume, and capacity zero alone does not trigger a pause. Paused jobs remain in admission accounting. A resume also waits until the verified count of active nonpaused jobs is below the fresh slot limit.
+diff --git a/evidence/heavy-runtime-limit/check-proof.md b/evidence/heavy-runtime-limit/check-proof.md
+new file mode 100644
+index 00000000..e5119d8f
+--- /dev/null
++++ b/evidence/heavy-runtime-limit/check-proof.md
+@@ -0,0 +1,25 @@
++# Check proof
++
++Command: `python3 scripts/mac_ops_fast_check.py`
++Checked commit: `071f33357541126edc150d039da7fda58ca509d1`
++Working tree clean when the checks ran: yes
++Run result: passed
++
++| Check | Command | Result | Detail |
++| --- | --- | --- | --- |
++| lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
++| overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
++| python syntax: heavy.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' heavy.py` | passed |  |
++| python syntax: tests/test_heavy_review_slots.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_heavy_review_slots.py` | passed |  |
++| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 86 findings, all in the baseline |
++| mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
++| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-pwelylo8 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-pwelylo8/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
++| heavy help | `python3 heavy.py --help` | passed |  |
++| tests: tests.test_agent_heavy_wait_pause | `python3 -m unittest tests.test_agent_heavy_wait_pause` | passed |  |
++| tests: tests.test_heavy_host_headroom | `python3 -m unittest tests.test_heavy_host_headroom` | passed |  |
++| tests: tests.test_heavy_review_slots | `python3 -m unittest tests.test_heavy_review_slots` | passed |  |
++
++A result is `passed`, `failed` or `not run`. A failed check stopped the run,
++so every check after it is `not run`. A tool that is not on this machine
++is recorded as `not run` too, and leaves the run incomplete: the run is
++then not a pass.
+diff --git a/formal/heavy-queue/README.md b/formal/heavy-queue/README.md
+index ff494203..91a9e4c2 100644
+--- a/formal/heavy-queue/README.md
++++ b/formal/heavy-queue/README.md
+@@ -4,7 +4,7 @@
+ 
+ The model checks that admission counts both reservations and running jobs, and happens only below the current slot limit. Capacity may fall below the active count without killing jobs. It checks priority for unaged jobs, and a stale lock-file marker does not disable admission. A stale marker is not a live held lock: `flock` releases the lock when its owner exits. The model assumes a safe registry and does not cover a live holder, unsafe files, process identity failures, legacy draining, task locks, host telemetry, pauses, launch failure, queue aging or multiple deploy jobs.
+ 
+-The liveness check assumes the finite initial queue receives no new jobs, slots eventually remain positive, the job does not time out, and enabled admissions, starts and completions are weakly fair. It cannot establish starvation freedom under an endless stream of higher-priority jobs or intermittent capacity. Capacity is bounded to zero through two slots. Queued jobs can time out; running jobs can finish or be explicitly killed. The model abstracts the governor's reasons for capacity changes rather than checking its policy.
++The liveness check assumes the finite initial queue receives no new jobs, slots eventually remain positive, the job does not time out, and enabled admissions, starts and completions are weakly fair. It cannot establish starvation freedom under an endless stream of higher-priority jobs or intermittent capacity. Capacity is bounded to zero through two slots. Queued jobs can time out; running jobs can finish or be killed, which also covers termination for the wall-clock and no-progress limits (see Runtime limit in the state chart). The model abstracts the governor's reasons for capacity changes rather than checking its policy.
+ 
+ Run `heavy python3 scripts/mac_ops_fast_check.py`. The check requires Java 17 and the existing `~/Code/llmwiki/runtime/tla/tla2tools.jar`; `MAC_OPS_JAVA_BIN` and `MAC_OPS_TLA_JAR` override those paths. TLC scratch files use `TMPDIR` when set, otherwise the system temporary directory. Linux CI takes TLC 1.8.0 (revision 090e85c) from the checksum-pinned TLA+ VS Code extension 2026.10.301552 on Open VSX, because each rolling build replaces the GitHub v1.8.0 release asset.
+ 
+diff --git a/heavy.py b/heavy.py
+index 1f1dcb01..11383c95 100755
+--- a/heavy.py
++++ b/heavy.py
+@@ -51,6 +51,11 @@ _SWAP_BASELINE = None
+ _SWAP_SAMPLE_LOCK = threading.Lock()
+ CRITICAL_PRESSURE_LEVEL = 4
+ TERM_GRACE_SECONDS = 5.0
++MAX_RUNTIME_SECONDS = 45 * 60
++LIMIT_RETRY_NS = 30_000_000_000
++LIMIT_EXIT_CODE = 76
++WALL_CLOCK_REASON = "wall-clock limit"
++RUNTIME_LIMIT_ENV = "HEAVY_MAX_RUNTIME_SECONDS"
+ WATCHDOG_INTERVAL = 2.0
+ WATCHDOG_STALE_SECONDS = 6.0
+ REGISTRY_NAME = "heavy-jobs"
+@@ -1459,6 +1464,7 @@ def _claim_termination(
+     claimant_pid: int,
+     expected_workload: Optional[Dict[str, Any]] = None,
+     takeover: bool = False,
++    observed_termination: Optional[Dict[str, Any]] = None,
+ ) -> Optional[Dict[str, Any]]:
+     with registry.lock():
+ 
+@@ -1479,6 +1485,15 @@ def _claim_termination(
+             existing = record.get("termination")
+             if existing and not takeover:
+                 return None
++            if (
++                existing
++                and observed_termination is not None
++                and any(
++                    existing.get(key) != observed_termination.get(key)
++                    for key in ("claimant_pid", "requested_ns", "takeover_ns")
++                )
++            ):
++                return None
+             if existing:
+                 existing["claimant_pid"] = claimant_pid
+                 existing["takeover_ns"] = monotonic_ns()
+@@ -1920,6 +1935,7 @@ def _reserve_job(
+     *,
+     queue_id: Optional[str] = None,
+     role: str = "ordinary",
++    max_runtime_seconds: Optional[float] = None,
+ ) -> Tuple[Optional[str], Optional[str]]:
+     ephemeral_queue = queue_id is None
+     snapshot_started_ns = deps.monotonic_ns()
+@@ -2030,6 +2046,7 @@ def _reserve_job(
+             "workload": None,
+             "curtail_request": None,
+             "termination": None,
++            "max_runtime_seconds": max_runtime_seconds,
+         }
+         registry.create(record)
+         registry.write_heartbeat(job_id, deps.monotonic_ns())
+@@ -2052,12 +2069,13 @@ def _reserve_job(
+ 
+ 
+ def _update_workload(
+-    registry: Registry, job_id: str, workload: Dict[str, Any]
++    registry: Registry, job_id: str, workload: Dict[str, Any], started_ns: int
+ ) -> Dict[str, Any]:
+     with registry.lock():
+ 
+         def change(record: Dict[str, Any]) -> Dict[str, Any]:
+             record["workload"] = workload
++            record["workload_started_ns"] = started_ns
+             record["state"] = "running"
+             return record
+ 
+@@ -2657,6 +2675,163 @@ def _resume_current(
+     return True
+ 
+ 
++def _runtime_ceiling_from_environment() -> float:
++    raw = os.environ.get(RUNTIME_LIMIT_ENV, "").strip()
++    if not raw:
++        return float(MAX_RUNTIME_SECONDS)
++    try:
++        value = float(raw)
++    except ValueError:
++        value = math.nan
++    if not math.isfinite(value) or value <= 0:
++        raise HeavyError(RUNTIME_LIMIT_ENV + " must be a positive number of seconds")
++    return min(value, float(MAX_RUNTIME_SECONDS))
++
++
++def _record_ceiling(record: Dict[str, Any]) -> float:
++    return float(record.get("max_runtime_seconds") or MAX_RUNTIME_SECONDS)
++
++
++def _format_duration(seconds: float) -> str:
++    whole = int(seconds)
++    if whole == seconds and whole % 60 == 0:
++        return str(whole // 60) + "m"
++    return "{:g}s".format(seconds)
++
++
++def _limit_notice(record: Dict[str, Any]) -> Optional[str]:
++    if (record.get("termination") or {}).get("reason") != WALL_CLOCK_REASON:
++        return None
++    return "terminated: {} {}".format(
++        WALL_CLOCK_REASON, _format_duration(_record_ceiling(record))
++    )
++
++
++def _pid_alive(pid: Any) -> bool:
++    try:
++        os.kill(int(pid), 0)
++    except ProcessLookupError:
++        return False
++    except (PermissionError, TypeError, ValueError):
++        return True
++    return True
++
++
++def _limit_action(
++    record: Dict[str, Any],
++    now_ns: int,
++    boot_reader: Callable[[], str],
++) -> Optional[bool]:
++    """Return None when the job is within its ceiling, else whether to take over an earlier claim."""
++    workload = _workload_identity(record)
++    if workload is None or record.get("state") in ("starting", "complete", "removed"):
++        return None
++    started_ns = int(record.get("workload_started_ns") or record.get("created_ns") or now_ns)
++    if now_ns - started_ns < int(_record_ceiling(record) * 1_000_000_000):
++        return None
++    if workload.get("boot_id") != boot_reader():
++        return None
++    termination = record.get("termination")
++    if not termination:
++        return False
++    claimed_ns = int(termination.get("takeover_ns") or termination.get("requested_ns") or 0)
++    if termination.get("reason") == WALL_CLOCK_REASON and (
++        now_ns - claimed_ns >= LIMIT_RETRY_NS
++        or not _pid_alive(termination.get("claimant_pid"))
++    ):
++        return True
++    return None
++
++
++def _limit_claim_active(record: Dict[str, Any], now_ns: int) -> bool:
++    termination = record.get("termination") or {}
++    claimed_ns = int(termination.get("takeover_ns") or termination.get("requested_ns") or 0)
++    return (
++        termination.get("reason") == WALL_CLOCK_REASON
++        and now_ns - claimed_ns < LIMIT_RETRY_NS
++        and _pid_alive(termination.get("claimant_pid"))
++    )
++
++
++def _terminate_for_limit(
++    registry: Registry,
++    record: Dict[str, Any],
++    *,
++    takeover: bool,
++    terminate: Callable[..., bool],
++    table_reader: Callable[[], Dict[int, ProcessInfo]],
++    boot_reader: Callable[[], str],
++) -> bool:
++    workload = _workload_identity(record)
++    claimed = _claim_termination(
++        registry,
++        record["job_id"],
++        WALL_CLOCK_REASON,
++        claimant_pid=os.getpid(),
++        expected_workload=workload,
++        takeover=takeover,
++        observed_termination=record.get("termination") if takeover else None,
++    )
++    if claimed is None:
++        return False
++    success = terminate(
++        workload,
++        reason=WALL_CLOCK_REASON,
++        table_reader=table_reader,
++        boot_reader=boot_reader,
++    )
++    _log_event(
++        registry.directory,
++        "limit-terminated" if success else "limit-terminate-failed",
++        claimed,
++        detail=WALL_CLOCK_REASON,
++    )
++    if success:
++        try:
++            _mark_complete(registry, record["job_id"])
++        except (OSError, HeavyError):
++            pass
++    return success
++
++
++def enforce_runtime_limits(
++    registry: Registry, deps: Optional[SupervisorDeps] = None
++) -> List[str]:
++    """Terminate every job past the wall-clock ceiling and return their job ids."""
++    dependencies = deps or SupervisorDeps()
++    with registry.lock(exclusive=False):
++        job_ids = registry._job_ids()
++    now_ns = dependencies.monotonic_ns()
++    terminated = []
++    for job_id in job_ids:
++        try:
++            if job_id == PROTOCOL_RECORD_ID:
++                continue
++            record = _record(registry, job_id)
++            takeover = _limit_action(record, now_ns, dependencies.boot_reader)
++            if takeover is None:
++                continue
++            if _terminate_for_limit(
++                registry,
++                record,
++                takeover=takeover,
++                terminate=dependencies.terminate,
++                table_reader=dependencies.process_table_reader,
++                boot_reader=dependencies.boot_reader,
++            ):
++                terminated.append(job_id)
++        except Exception:
++            continue
++    return terminated
++
++
++def _reap_over_limit(registry: Registry, deps: Optional[SupervisorDeps] = None) -> None:
++    try:
++        enforce_runtime_limits(registry, deps)
++    except Exception:
++        pass
++
++
+ def _supervise_running(
+     registry: Registry,
+     job_id: str,
+@@ -2677,6 +2852,11 @@ def _supervise_running(
+     root_exit_code: Optional[int] = None
+     while True:
+         if watchdog is not None and watchdog.poll() is not None:
++            if _normal_completion(workload, deps):
++                notice = _limit_notice(_record(registry, job_id))
++                if notice:
++                    print("heavy: " + notice, file=sys.stderr)
++                    return LIMIT_EXIT_CODE
+             _curtail_current(
+                 registry, job_id, workload, "watchdog-failure", deps, workload_process
+             )
+@@ -2691,6 +2871,10 @@ def _supervise_running(
+         if root_exit_code is None:
+             root_exit_code = workload_process.poll()
+         if root_exit_code is not None and _normal_completion(workload, deps):
++            notice = _limit_notice(_record(registry, job_id))
++            if notice:
++                print("heavy: " + notice, file=sys.stderr)
++                return LIMIT_EXIT_CODE
+             return int(root_exit_code)
+         current = _record(registry, job_id)
+         request = current.get("curtail_request") or {}
+@@ -2826,6 +3010,7 @@ def _launch_job(
+     started = deps.clock()
+     last_message = 0.0
+     job_id = None
++    max_runtime_seconds = _runtime_ceiling_from_environment()
+     queue_id = _enqueue_job(
+         registry,
+         task_key=task_key,
+@@ -2839,6 +3024,7 @@ def _launch_job(
+         while job_id is None:
+             if stop_event():
+                 return 130
++            _reap_over_limit(registry, deps)
+             next_sample = deps.clock() + SAMPLE_INTERVAL
+             try:
+                 sample = deps.sample()
+@@ -2862,6 +3048,7 @@ def _launch_job(
+                     deps,
+                     queue_id=queue_id,
+                     role=role,
++                    max_runtime_seconds=max_runtime_seconds,
+                 )
+             except Exception as exc:
+                 raise HeavyError("cannot safely reserve a heavy job") from exc
+@@ -2908,7 +3095,9 @@ def _launch_job(
+             getpgid=deps.getpgid,
+             getsid=deps.getsid,
+         )
+-        record = _update_workload(registry, job_id, workload)
++        record = _update_workload(
++            registry, job_id, workload, deps.monotonic_ns()
++        )
+         registry.write_heartbeat(job_id, deps.monotonic_ns())
+         watchdog_launch = deps.launch_watchdog or _default_launch_watchdog
+         watchdog = watchdog_launch(job_id)
+@@ -3000,6 +3189,16 @@ def _launch_job(
+                     os.close(project_fd)
+ 
+ 
++def _job_directory_absent(registry: Registry, job_id: str) -> bool:
++    try:
++        os.lstat(str(registry.directory / job_id))
++    except FileNotFoundError:
++        return True
++    except OSError:
++        return False
++    return False
++
++
+ def watchdog_loop(
+     job_id: str,
+     registry: Registry,
+@@ -3019,6 +3218,9 @@ def watchdog_loop(
+         except Exception:
+             if cached is None:
+                 return 1
++            if not _job_directory_absent(registry, job_id):
++                sleep(WATCHDOG_INTERVAL)
++                continue
+             try:
+                 if terminate(
+                     cached["workload"],
+@@ -3078,6 +3280,24 @@ def watchdog_loop(
+                 members = None
+             if members == []:
+                 return 0
++        try:
++            takeover = _limit_action(record, clock_ns(), boot_reader)
++            if takeover is not None:
++                _terminate_for_limit(
++                    registry,
++                    record,
++                    takeover=takeover,
++                    terminate=terminate,
++                    table_reader=table_reader,
++                    boot_reader=boot_reader,
++                )
++                sleep(WATCHDOG_INTERVAL)
++                continue
++        except Exception:
++            pass
++        if _limit_claim_active(record, clock_ns()):
++            sleep(WATCHDOG_INTERVAL)
++            continue
+         heartbeat_age = clock_ns() - (heartbeat or 0)
+         stale = heartbeat is None or heartbeat_age > int(
+             WATCHDOG_STALE_SECONDS * 1_000_000_000
+@@ -3095,17 +3315,32 @@ def watchdog_loop(
+                     claimant_pid=os.getpid(),
+                     expected_workload=cached["workload"],
+                     takeover=bool(termination),
++                    observed_termination=termination or None,
+                 )
+             except Exception:
+                 claimed = None
+             if claimed is None:
+                 try:
+                     claimed = _takeover_termination(
+-                        registry, job_id, cached["workload"], os.getpid()
++                        registry,
++                        job_id,
++                        cached["workload"],
++                        os.getpid(),
++                        termination,
+                     )
+                 except Exception:
+                     claimed = None
+             if claimed is None:
++                try:
++                    latest = _record(registry, job_id)
++                except Exception:
++                    sleep(WATCHDOG_INTERVAL)
++                    continue
++                if latest.get("termination") != (termination or None) or (
++                    _limit_claim_active(latest, clock_ns())
++                ):
++                    sleep(WATCHDOG_INTERVAL)
++                    continue
+                 try:
+                     success = terminate(
+                         cached["workload"],
+@@ -3138,11 +3373,19 @@ def watchdog_loop(
+ 
+ 
+ def _watchdog_takeover_record(
+-    record: Dict[str, Any], workload: Dict[str, Any], claimant_pid: int
++    record: Dict[str, Any],
++    workload: Dict[str, Any],
++    claimant_pid: int,
++    observed: Dict[str, Any],
+ ) -> Optional[Dict[str, Any]]:
+     if _workload_identity(record) != workload or not record.get("termination"):
+         return None
+     termination = record["termination"]
++    if any(
++        termination.get(key) != observed.get(key)
++        for key in ("claimant_pid", "requested_ns", "takeover_ns")
++    ):
++        return None
+     termination["claimant_pid"] = claimant_pid
+     termination["takeover_ns"] = monotonic_ns()
+     record["termination"] = termination
+@@ -3151,12 +3394,18 @@ def _watchdog_takeover_record(
+ 
+ 
+ def _takeover_termination(
+-    registry: Registry, job_id: str, workload: Dict[str, Any], claimant_pid: int
++    registry: Registry,
++    job_id: str,
++    workload: Dict[str, Any],
++    claimant_pid: int,
++    observed: Dict[str, Any],
+ ) -> Optional[Dict[str, Any]]:
+     with registry.lock():
+         return registry.update(
+             job_id,
+-            lambda current: _watchdog_takeover_record(current, workload, claimant_pid),
++            lambda current: _watchdog_takeover_record(
++                current, workload, claimant_pid, observed
++            ),
+         )
+ 
+ 
+@@ -3316,7 +3565,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
+             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
+             "Admission requires stable swap, CPU and memory below 95%, and at least max(per-host headroom, 15% RAM) headroom to start or resume (a running job pauses only below max(per-host headroom, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
+-            "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
++            "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job.\n"
++            "Every job has a 45 minute wall-clock ceiling (HEAVY_MAX_RUNTIME_SECONDS may only lower it), enforced by the job's own watchdog and by every heavy call. A job terminated this way makes its heavy command exit 76."
+         )
+         return 0
+     try:
+@@ -3327,6 +3577,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
+         if role_flag and arguments[:1] in (["status"], ["request-curtail"]):
+             raise HeavyError("priority role requires a workload command")
+         registry = _safe_registry_for_cli()
++        _reap_over_limit(registry)
+         if arguments[:1] == ["status"]:
+             if len(arguments) != 1:
+                 raise HeavyError("usage: heavy status")
