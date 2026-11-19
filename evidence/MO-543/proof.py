@@ -285,8 +285,8 @@ def board_reconcile():
                 with patch.object(lane, "read_json", return_value=view), \
                         patch.object(lane, "DRY", False), \
                         patch.object(lane, "withdraw_decision",
-                                     lambda item_id: (settled.append((view["state"], item_id)),
-                                                      "wrote")[1]):
+                                     lambda item_id, view=view: (
+                                         settled.append((view["state"], item_id)), "wrote")[1]):
                     lane.act_on_pr("shyamsivakumar/mac-ops", 544, {})
         finally:
             lane.SNAPSHOT = SNAPSHOT_BACKUP[0]

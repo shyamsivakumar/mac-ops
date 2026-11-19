@@ -72,6 +72,21 @@ def exact(actual, expected):
         raise AssertionError(f"expected {expected!r}, got {actual!r}")
 
 
+@contextlib.contextmanager
+def scratch_board(scratch):
+    """Point the lane's decisions board at a scratch file.
+
+    The lane raises one item on the decisions board when a pull request
+    uses its review rounds. A test must never write the board Shyam
+    reads, so the board path is a scratch file for the whole eval.
+    """
+    import lane_driver as lane
+    board = Path(scratch) / "decisions.json"
+    board.write_text(json.dumps({"items": []}))
+    with patch.object(lane, "DECISIONS_PATH", str(board)):
+        yield board
+
+
 def start_routing():
     import lane_driver as lane
     ticket = load_ticket()
@@ -395,7 +410,8 @@ def gate_pipeline():
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
-        def command(cmd, timeout=150):
+        def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
+                    head=head, reply=reply, verdict=verdict):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
@@ -458,7 +474,7 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args):
+        def threads(tool, args, head=head, verdict=verdict, reply=reply):
             if tool == "t3_thread_list":
                 exact(head[:8] in args["titleContains"], True)
                 return {"threads": [] if verdict == "absent" else [
@@ -469,7 +485,7 @@ def gate_pipeline():
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
-        def decision(item):
+        def decision(item, actions=actions):
             # The board write is the one live file this eval must not touch.
             exact(item["id"], "prompt-merge-FIX-20")
             exact(item["group"], "Coordinator")
@@ -479,7 +495,9 @@ def gate_pipeline():
             return "wrote"
 
         try:
-            with patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
+            with tempfile.TemporaryDirectory() as scratch, \
+                 scratch_board(scratch), \
+                 patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "publish_decision", decision), \
@@ -587,7 +605,12 @@ def no_parking(status="interrupted"):
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
-    ledger = {f"fix:{repo}#20:old1": "sent", f"fix:{repo}#20:old2": "sent"}
+    # Earlier lane work on this pull request that was not a review round:
+    # the lane nudged the builder twice and the builder answered. A fix
+    # round would be a review round, and two of those are the reviews
+    # the convergence rule leaves for this pull request, so the capped
+    # case is asserted in the gate-round-cap eval and not here.
+    ledger = {f"continue:{repo}#20:old1": "sent", f"continue:{repo}#20:old2": "sent"}
     snapshot = {"repos": {repo: {"prs": [dict(number=20, state="OPEN", headRefOid=head,
         body=f"Builder check: PASS {head}", mergeable="MERGEABLE")],
         "issues": [dict(number=10, labels=[])]}}}
@@ -605,7 +628,9 @@ def no_parking(status="interrupted"):
         actions.append("continue" if payload["message"].startswith("Continue") else "fix")
         return "sent"
 
-    with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+    with tempfile.TemporaryDirectory() as scratch, \
+         scratch_board(scratch), \
+         patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
          patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
@@ -623,8 +648,10 @@ def no_parking(status="interrupted"):
         lane.act_on_pr(repo, 20, ledger)
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix", "continue", "fix", "continue"])
-        exact(sorted(ledger), sorted([f"fix:{repo}#20:{h}" for h in ["old1", "old2", head, "b" * 40]] +
-                                    [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]]))
+        exact(sorted(ledger), sorted([f"continue:{repo}#20:{h}" for h in ["old1", "old2"]] +
+                                    [f"fix:{repo}#20:{h}" for h in [head, "b" * 40]] +
+                                    [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]] +
+                                    [f"rounds:{repo}#20"]))
     try:
         exact(actions + ["park"], ["fix", "continue", "fix", "continue"])
     except AssertionError:
@@ -1539,6 +1566,157 @@ def consolidation_guard():
     message = json.loads(launches[0][2])["message"]
     exact("at most 2 ordered tickets" in message, True)
     exact("never create a third ticket" in message, True)
+
+
+def gate_round_cap():
+    """The convergence rule in the lane: three failed reviews, then one item.
+
+    The convergence rule (Shyam, 2026-11-18): after 3 review rounds
+    without PASS the pull request is re-cut or brought to Shyam, and it is
+    not reviewed a 4th time as it is. The first review of a pull request
+    is round 1, so the lane sends two fix rounds (the answers to rounds 1
+    and 2) and the third failed review raises one decisions item instead
+    of a third fix round.
+    """
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
+    sent = []
+    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
+
+        def command(cmd, timeout=150):
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd[:2] == ["gh", "api"]:
+                # The prompt classification this branch adds reads the pinned
+                # trees; every head here is code-only against its base.
+                endpoint = cmd[-1]
+                if "/compare/" in endpoint:
+                    return json.dumps({"merge_base_commit": {"sha": "base"}})
+                if endpoint.endswith("/git/trees/base?recursive=1"):
+                    return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]})
+                if "/git/trees/" in endpoint:
+                    return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]})
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def threads(tool, args):
+            raise AssertionError(f"unexpected T3 tool: {tool}")
+
+        def send(thread_id, message, title, ledger, lkey, **kwargs):
+            sent.append(lkey)
+            # The real send records the message in the ledger, and the
+            # ledger is where the lane counts the fix rounds of a pull
+            # request.
+            ledger[lkey] = "sent"
+            return "sent"
+
+        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")):
+            """Run the lane over one pull request at one head."""
+            pr = dict(number=number, state="OPEN", headRefOid=head,
+                      body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
+            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+            with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
+                 patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                 patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "gate_verdict", return_value=verdict), \
+                 patch.object(lane, "read_json", return_value=dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
+                 patch.object(lane, "send", send):
+                return lane.act_on_pr(repo, number, ledger)
+
+        ledger = {}
+        for head in heads:
+            act(20, head, ledger)
+        # Two fix rounds: the answers to the first and the second review.
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # The third failed review and the fourth raise one decisions item
+        # between them, and the board holds that one item.
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["kind"], "ask")
+        exact(items[0]["title"].startswith("Shyam,"), True)
+        exact(len(items[0]["options"]), 2)
+        # The fix rounds of the pull request are its failed reviews before
+        # the one in hand.
+        exact(lane.failed_reviews(repo, 20, ledger), (4, heads[3]))
+        # A new head after the cap gets no 4th review. The lane asks no
+        # reviewer for a model or for a brief, so no such command runs,
+        # and no fix round is sent.
+        result = act(20, "e" * 40, ledger, verdict=("absent", None, ""))
+        exact(result, "#20: no fix round, the decisions item is on the board")
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        exact(len(json.loads(board.read_text())["items"]), 1)
+        # A pull request that two earlier lane sessions already sent two
+        # fix rounds to has had two reviews. The third failed review
+        # raises the decisions item, and no third fix round is sent.
+        earlier = {f"fix:{repo}#21:{heads[0]}": "sent", f"fix:{repo}#21:{heads[1]}": "sent"}
+        result = act(21, heads[2], earlier)
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        exact(lane.failed_reviews(repo, 21, earlier), (3, heads[2]))
+        exact(result.endswith("one decisions item is on the board"), True)
+        # A pull request with three historical fix rounds, a new head and
+        # no item on the board reaches the cap before any verdict. The lane
+        # publishes the item then, and it does not report an item that was
+        # never written.
+        history = {f"fix:{repo}#22:{head}": "sent" for head in heads[:3]}
+        result = act(22, "f" * 40, history, verdict=("absent", None, ""))
+        exact(result, f"#22: no fix round after {lane.GATE_ROUND_CAP} failed reviews, one decisions item is on the board")
+        exact(sorted(item["id"] for item in json.loads(board.read_text())["items"]),
+              [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (20, 21, 22)])
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # A pull request with three historical fix rounds whose current
+        # head is the third one, a FAIL verdict and an interrupted builder
+        # reaches the cap before the same-head retry. The lane raises the
+        # item and sends no "Continue fixing".
+        same_head = {f"fix:{repo}#23:{head}": "sent" for head in heads[:3]}
+        result = act(23, heads[2], same_head)
+        exact(result, f"#23: no fix round after {lane.GATE_ROUND_CAP} failed reviews, one decisions item is on the board")
+        exact(sorted(item["id"] for item in json.loads(board.read_text())["items"])[-1],
+              "lane-gate-rounds-shyamsivakumar-mac-ops-23")
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # A capped pull request that later passes while the board removal
+        # fails is not merged: the command stub raises on any merge call.
+        # The ledger key stays, so the next pass retries the removal.
+        passing = ("PASS", {"threadId": "gate"}, "VERDICT: PASS")
+        with patch.object(lane.alarms, "board_update", return_value="failed"):
+            result = act(20, heads[3], ledger, verdict=passing)
+        exact("no merge until it is" in result, True)
+        exact(f"rounds-decision:{repo}#20" in ledger, True)
+        exact(len(json.loads(board.read_text())["items"]), 4)
+        exact(lane.clear_gate_round_decision(repo, 20, ledger), True)
+        exact(f"rounds-decision:{repo}#20" in ledger, False)
+        exact(len(json.loads(board.read_text())["items"]), 3)
+
+
+def decisions_board_guard():
+    """A test run never writes the board Shyam reads.
+
+    The lane raises one item on the decisions board when a pull request
+    uses its review rounds. The board path comes from the environment, so
+    a test points it at a scratch file. This eval runs the path that
+    raises the item and checks that every write names the scratch file as
+    its destination. The board Shyam reads is not compared before and
+    after, because the coordinator may publish to it while this runs.
+    """
+    import lane_driver as lane
+    targets = []
+    real_update = lane.alarms.board_update
+
+    def record(target, *args, **kwargs):
+        targets.append(str(target))
+        return real_update(target, *args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        board = Path(scratch) / "decisions.json"
+        board.write_text(json.dumps({"items": []}))
+        with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                patch.object(lane.alarms, "board_update", record):
+            lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
+            lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
+        items = json.loads(board.read_text())["items"]
+        exact(targets, [str(board)] * 2)
+        exact(len(items), 1)
+        exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
 
 
 def send_integrity():
@@ -2763,7 +2941,7 @@ def alarm_mute():
 
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():

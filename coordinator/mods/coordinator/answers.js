@@ -52,3 +52,17 @@ export const restored = (draft, typed, saved, shown) => {
   }
   return { text, bound };
 };
+
+export const decisionLine = ({ id, q, text }) => `- ${id} (${q}): ${text.replace(/\s+/g, " ").trim()}`;
+
+export const decisionsMessage = (answers) => `Decisions:\n${answers.map(decisionLine).join("\n")}`;
+
+export const boardAnswer = (id, request, items, decided) => {
+  const ask = items.find((a) => a.id === id);
+  if (!ask) return { dropped: "The decision is gone." };
+  if (decided[id]) return { dropped: "The decision was already answered." };
+  if (request.title !== ask.text || (request.cause ?? "") !== ask.cause) return { dropped: "The decision changed after the card showed it." };
+  const choice = ask.choices.find((c) => c.kind === "option" && c.text === request.label);
+  if (!choice) return { dropped: "The decision no longer offers that option." };
+  return { answer: { id, q: ask.text, cause: ask.cause, text: choice.text } };
+};
