@@ -1,8 +1,8 @@
 {
-  "attributed_cost_usd": 215.38226880100004,
-  "cost_per_pr_usd": 2.504444986058139,
+  "attributed_cost_usd": 214.39211837500002,
+  "cost_per_pr_usd": 2.552287123511905,
   "day": "2026-11-17",
-  "generated_at": "2026-11-19T01:46:38.354612Z",
+  "generated_at": "2026-11-19T01:51:18.683304Z",
   "measured_days": [
     "2026-11-10",
     "2026-11-11",
@@ -16,7 +16,7 @@
     "2026-11-19",
     "2026-11-20"
   ],
-  "pr_count": 86,
+  "pr_count": 84,
   "prs": [
     {
       "cost_usd": 30.595001684999986,
@@ -161,30 +161,6 @@
       "url": "https://github.com/digitized/Concerning/pull/102"
     },
     {
-      "cost_usd": 5.03915117,
-      "kinds": {
-        "branch": 4,
-        "pr": 1,
-        "review": 1,
-        "ticket": 3
-      },
-      "merged_at": "2026-11-18T19:05:29Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "claude-opus-4-5",
-        "glm-5.3",
-        "gpt-6-astra"
-      ],
-      "number": 27,
-      "pr": "shyamsivakumar/tunerise#27",
-      "repo": "shyamsivakumar/tunerise",
-      "sessions": 9,
-      "state": "MERGED",
-      "title": "docs: reconcile release documentation with the merged M1 app [orb] (Refs #25)",
-      "tokens": 28970373,
-      "url": "https://github.com/shyamsivakumar/tunerise/pull/27"
-    },
-    {
       "cost_usd": 4.97396675,
       "kinds": {
         "pr": 2,
@@ -203,6 +179,30 @@
       "title": "OPN-12: import page images into a document",
       "tokens": 5887676,
       "url": "https://github.com/shyamsivakumar/openscan/pull/11"
+    },
+    {
+      "cost_usd": 4.874075450000001,
+      "kinds": {
+        "branch": 4,
+        "pr": 1,
+        "review": 1,
+        "ticket": 2
+      },
+      "merged_at": "2026-11-18T19:05:29Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "claude-opus-4-5",
+        "glm-5.3",
+        "gpt-6-astra"
+      ],
+      "number": 27,
+      "pr": "shyamsivakumar/tunerise#27",
+      "repo": "shyamsivakumar/tunerise",
+      "sessions": 8,
+      "state": "MERGED",
+      "title": "docs: reconcile release documentation with the merged M1 app [orb] (Refs #25)",
+      "tokens": 20917382,
+      "url": "https://github.com/shyamsivakumar/tunerise/pull/27"
     },
     {
       "cost_usd": 4.8475304800000005,
@@ -632,6 +632,27 @@
       "url": "https://github.com/shyamsivakumar/scripture-scroll/pull/33"
     },
     {
+      "cost_usd": 1.6326619999999998,
+      "kinds": {
+        "branch": 1,
+        "review": 1,
+        "ticket": 1
+      },
+      "merged_at": null,
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
+      ],
+      "number": 30,
+      "pr": "shyamsivakumar/tunerise#30",
+      "repo": "shyamsivakumar/tunerise",
+      "sessions": 3,
+      "state": "OPEN",
+      "title": "[orb] TNR-24: prevent repeated Save from creating duplicate sources",
+      "tokens": 7911678,
+      "url": "https://github.com/shyamsivakumar/tunerise/pull/30"
+    },
+    {
       "cost_usd": 1.591805,
       "kinds": {
         "review": 1
@@ -688,26 +709,6 @@
       "title": "Refs #1251: report rejected audit exports without crashing the queue",
       "tokens": 4216362,
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1259"
-    },
-    {
-      "cost_usd": 1.53332534,
-      "kinds": {
-        "branch": 1,
-        "review": 1
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6-astra"
-      ],
-      "number": 30,
-      "pr": "shyamsivakumar/tunerise#30",
-      "repo": "shyamsivakumar/tunerise",
-      "sessions": 2,
-      "state": "OPEN",
-      "title": "[orb] TNR-24: prevent repeated Save from creating duplicate sources",
-      "tokens": 4068659,
-      "url": "https://github.com/shyamsivakumar/tunerise/pull/30"
     },
     {
       "cost_usd": 1.5226633840000001,
@@ -1015,27 +1016,6 @@
       "url": "https://github.com/shyamsivakumar/recoup/pull/46"
     },
     {
-      "cost_usd": 1.207463745,
-      "kinds": {
-        "branch": 1,
-        "review": 1,
-        "ticket": 1
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6-astra"
-      ],
-      "number": 31,
-      "pr": "shyamsivakumar/tunerise#31",
-      "repo": "shyamsivakumar/tunerise",
-      "sessions": 3,
-      "state": "OPEN",
-      "title": "TNR-23: Report file import failures without losing the form [orb] (Refs #22)",
-      "tokens": 9280791,
-      "url": "https://github.com/shyamsivakumar/tunerise/pull/31"
-    },
-    {
       "cost_usd": 1.189652,
       "kinds": {
         "review": 1
@@ -1070,6 +1050,26 @@
       "title": "fix(ui): make the error retry control accessible",
       "tokens": 353566,
       "url": "https://github.com/shyamsivakumar/CineJar/pull/71"
+    },
+    {
+      "cost_usd": 1.074905835,
+      "kinds": {
+        "branch": 1,
+        "review": 1
+      },
+      "merged_at": null,
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
+      ],
+      "number": 31,
+      "pr": "shyamsivakumar/tunerise#31",
+      "repo": "shyamsivakumar/tunerise",
+      "sessions": 2,
+      "state": "OPEN",
+      "title": "TNR-23: Report file import failures without losing the form [orb] (Refs #22)",
+      "tokens": 4105775,
+      "url": "https://github.com/shyamsivakumar/tunerise/pull/31"
     },
     {
       "cost_usd": 1.073661,
@@ -1175,11 +1175,11 @@
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/529"
     },
     {
-      "cost_usd": 0.6281520119999999,
+      "cost_usd": 0.48839253599999993,
       "kinds": {
         "pr": 4,
         "review": 1,
-        "ticket": 4
+        "ticket": 2
       },
       "merged_at": "2026-11-18T02:11:03Z",
       "models": [
@@ -1190,31 +1190,11 @@
       "number": 36,
       "pr": "shyamsivakumar/tunerise#36",
       "repo": "shyamsivakumar/tunerise",
-      "sessions": 9,
+      "sessions": 7,
       "state": "MERGED",
       "title": "TNR-35: point empty-home acceptance at the shipped shell (Refs #35)",
-      "tokens": 33043138,
+      "tokens": 23762219,
       "url": "https://github.com/shyamsivakumar/tunerise/pull/36"
-    },
-    {
-      "cost_usd": 0.5308879950000001,
-      "kinds": {
-        "pr": 3,
-        "ticket": 1
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "deepseek-flash"
-      ],
-      "number": 33,
-      "pr": "shyamsivakumar/tunerise#33",
-      "repo": "shyamsivakumar/tunerise",
-      "sessions": 4,
-      "state": "CLOSED",
-      "title": "TNR-25: show failed live playback with a retry action (Refs #24)",
-      "tokens": 25061202,
-      "url": "https://github.com/shyamsivakumar/tunerise/pull/33"
     },
     {
       "cost_usd": 0.4506441149999998,
@@ -1314,6 +1294,25 @@
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1296"
     },
     {
+      "cost_usd": 0.282086775,
+      "kinds": {
+        "pr": 3
+      },
+      "merged_at": null,
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "deepseek-flash"
+      ],
+      "number": 33,
+      "pr": "shyamsivakumar/tunerise#33",
+      "repo": "shyamsivakumar/tunerise",
+      "sessions": 3,
+      "state": "CLOSED",
+      "title": "TNR-25: show failed live playback with a retry action (Refs #24)",
+      "tokens": 13421721,
+      "url": "https://github.com/shyamsivakumar/tunerise/pull/33"
+    },
+    {
       "cost_usd": 0.2541968,
       "kinds": {
         "pr": 1,
@@ -1350,24 +1349,6 @@
       "title": "Keep exactly one stage label on a started ticket (Refs #533)",
       "tokens": 16783072,
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/535"
-    },
-    {
-      "cost_usd": 0.23418396000000002,
-      "kinds": {
-        "ticket": 2
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash"
-      ],
-      "number": 34,
-      "pr": "shyamsivakumar/tunerise#34",
-      "repo": "shyamsivakumar/tunerise",
-      "sessions": 2,
-      "state": "CLOSED",
-      "title": "[orb] TNR-24: prevent duplicate sources on repeated Save (Refs #23)",
-      "tokens": 10144398,
-      "url": "https://github.com/shyamsivakumar/tunerise/pull/34"
     },
     {
       "cost_usd": 0.23283069599999992,
@@ -1463,24 +1444,6 @@
       "title": "JAR-21: PickSession: per-attempt archive",
       "tokens": 7903726,
       "url": "https://github.com/shyamsivakumar/CineJar/pull/37"
-    },
-    {
-      "cost_usd": 0.16910880000000003,
-      "kinds": {
-        "ticket": 1
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash"
-      ],
-      "number": 16,
-      "pr": "shyamsivakumar/openscan#16",
-      "repo": "shyamsivakumar/openscan",
-      "sessions": 1,
-      "state": "OPEN",
-      "title": "docs(audit): TestFlight readiness audit for the iOS app",
-      "tokens": 8466172,
-      "url": "https://github.com/shyamsivakumar/openscan/pull/16"
     },
     {
       "cost_usd": 0.149341572,
@@ -1689,27 +1652,26 @@
     {
       "after": {
         "days": [
+          "2026-11-14",
           "2026-11-15",
-          "2026-11-16",
-          "2026-11-17"
+          "2026-11-16"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 2.8178466111219516,
-        "prs": 44,
-        "total_cost_usd": 115.531711056
+        "mean_cost_per_pr_usd": 0.1944827099,
+        "prs": 30,
+        "total_cost_usd": 5.834481297
       },
       "after_days": 3,
       "before": {
         "days": [
           "2026-11-10",
           "2026-11-11",
-          "2026-11-12",
-          "2026-11-13"
+          "2026-11-12"
         ],
-        "days_with_sessions": 2,
-        "mean_cost_per_pr_usd": 0.2365643962258065,
-        "prs": 31,
-        "total_cost_usd": 7.3334962830000014
+        "days_with_sessions": 0,
+        "mean_cost_per_pr_usd": null,
+        "prs": 0,
+        "total_cost_usd": 0
       },
       "before_days": 7,
       "merged_at": "2026-11-14T02:14:35Z",
@@ -1725,9 +1687,9 @@
           "2026-11-17"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 2.8178466111219516,
-        "prs": 44,
-        "total_cost_usd": 115.531711056
+        "mean_cost_per_pr_usd": 2.6647814806046513,
+        "prs": 43,
+        "total_cost_usd": 114.585603666
       },
       "after_days": 3,
       "before": {
@@ -1737,10 +1699,10 @@
           "2026-11-12",
           "2026-11-13"
         ],
-        "days_with_sessions": 2,
-        "mean_cost_per_pr_usd": 0.2365643962258065,
-        "prs": 31,
-        "total_cost_usd": 7.3334962830000014
+        "days_with_sessions": 1,
+        "mean_cost_per_pr_usd": 0.28644177675,
+        "prs": 12,
+        "total_cost_usd": 3.437301321
       },
       "before_days": 7,
       "merged_at": "2026-11-14T18:49:37Z",
@@ -1751,29 +1713,30 @@
     {
       "after": {
         "days": [
+          "2026-11-18",
           "2026-11-19",
           "2026-11-20"
         ],
-        "days_with_sessions": 0,
-        "mean_cost_per_pr_usd": null,
-        "prs": 0,
-        "total_cost_usd": 0
+        "days_with_sessions": 1,
+        "mean_cost_per_pr_usd": 0.8658468018499998,
+        "prs": 20,
+        "total_cost_usd": 17.316936036999998
       },
       "after_days": 3,
       "before": {
         "days": [
+          "2026-11-10",
           "2026-11-11",
           "2026-11-12",
           "2026-11-13",
           "2026-11-14",
           "2026-11-15",
-          "2026-11-16",
-          "2026-11-17"
+          "2026-11-16"
         ],
-        "days_with_sessions": 6,
-        "mean_cost_per_pr_usd": 1.7383900168333337,
-        "prs": 75,
-        "total_cost_usd": 125.16408121200003
+        "days_with_sessions": 4,
+        "mean_cost_per_pr_usd": 0.24399427942105256,
+        "prs": 38,
+        "total_cost_usd": 9.271782617999998
       },
       "before_days": 7,
       "merged_at": "2026-11-18T01:31:41Z",
@@ -1784,29 +1747,30 @@
     {
       "after": {
         "days": [
+          "2026-11-18",
           "2026-11-19",
           "2026-11-20"
         ],
-        "days_with_sessions": 0,
-        "mean_cost_per_pr_usd": null,
-        "prs": 0,
-        "total_cost_usd": 0
+        "days_with_sessions": 1,
+        "mean_cost_per_pr_usd": 0.8658468018499998,
+        "prs": 20,
+        "total_cost_usd": 17.316936036999998
       },
       "after_days": 3,
       "before": {
         "days": [
+          "2026-11-10",
           "2026-11-11",
           "2026-11-12",
           "2026-11-13",
           "2026-11-14",
           "2026-11-15",
-          "2026-11-16",
-          "2026-11-17"
+          "2026-11-16"
         ],
-        "days_with_sessions": 6,
-        "mean_cost_per_pr_usd": 1.7383900168333337,
-        "prs": 75,
-        "total_cost_usd": 125.16408121200003
+        "days_with_sessions": 4,
+        "mean_cost_per_pr_usd": 0.24399427942105256,
+        "prs": 38,
+        "total_cost_usd": 9.271782617999998
       },
       "before_days": 7,
       "merged_at": "2026-11-18T01:48:33Z",
@@ -1822,7 +1786,7 @@
           "2026-11-18"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 1.2070571793469391,
+        "mean_cost_per_pr_usd": 1.1374192651538466,
         "prs": 52,
         "total_cost_usd": 59.14580178800002
       },
@@ -1835,10 +1799,10 @@
           "2026-11-13",
           "2026-11-14"
         ],
-        "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 0.4717736960526316,
-        "prs": 19,
-        "total_cost_usd": 8.963700225
+        "days_with_sessions": 2,
+        "mean_cost_per_pr_usd": 0.11339038537499997,
+        "prs": 8,
+        "total_cost_usd": 0.9071230829999998
       },
       "before_days": 7,
       "merged_at": "2026-11-15T21:44:32Z",
@@ -1867,9 +1831,9 @@
       "repo": "digitized/Concerning"
     },
     {
-      "cost_usd": 11.941781542,
-      "mean_cost_per_pr_usd": 1.49272269275,
-      "prs": 8,
+      "cost_usd": 11.120739916,
+      "mean_cost_per_pr_usd": 1.5886771308571428,
+      "prs": 7,
       "repo": "shyamsivakumar/tunerise"
     },
     {
@@ -1879,9 +1843,9 @@
       "repo": "shyamsivakumar/CineJar"
     },
     {
-      "cost_usd": 9.892254229999999,
-      "mean_cost_per_pr_usd": 1.9784508459999999,
-      "prs": 5,
+      "cost_usd": 9.723145429999999,
+      "mean_cost_per_pr_usd": 2.4307863574999997,
+      "prs": 4,
       "repo": "shyamsivakumar/openscan"
     },
     {
@@ -1919,20 +1883,20 @@
     "pi_root": "/Users/shyamsivakumar/.pi"
   },
   "total_cost_usd": 231.44693892799987,
-  "unattributed_cost_usd": 16.06467012699983,
+  "unattributed_cost_usd": 17.054820552999843,
   "unattributed_sessions": [
     {
       "cost_usd": 3.180714969,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-63e68ccf-a7a81e80537cb8cf",
       "name": "MO-1062 \u00b7 Alarms stay quiet for 4 hours once acknowledged, unless the cause changes",
-      "reason": "branch t3/merge-520-496 has no pull request",
+      "reason": "no pull request for MO-1062 existed when the session ran",
       "session_id": "01a1ebb6-d4d5-71cc-b3d0-6e29dcf00cdc"
     },
     {
       "cost_usd": 1.7836758300000006,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-ed0cc1ab-dd469dc6a2dc50a9",
       "name": "MO-1060 \u00b7 heavy on the M1: admit one iOS build beside its simulator; recover from telemetry errors",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1060 existed when the session ran",
       "session_id": "01a1eb7c-73b5-73f7-92c8-e032d839bcd4"
     },
     {
@@ -1946,14 +1910,14 @@
       "cost_usd": 0.7992622230000003,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-6b9ca1d9-f51f2d85975aa1d7",
       "name": "MO-1057 \u00b7 Tick finishes even when GitHub calls hang",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1057 existed when the session ran",
       "session_id": "01a1ea56-ca78-7597-8715-ff0e21684cb3"
     },
     {
       "cost_usd": 0.7944088800000001,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-0db4daf5-72f7508fca6a60e2",
       "name": "LMW-70 \u00b7 Verification layer rules in runtime contracts",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for LMW-70 existed when the session ran",
       "session_id": "01a1ecfc-078f-7565-88f0-b342c514f29b"
     },
     {
@@ -1967,43 +1931,50 @@
       "cost_usd": 0.38986259999999995,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-41f840ea-fc407a1806411a05",
       "name": "OPN-12 \u00b7 Import page images into a document",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for OPN-12 existed when the session ran",
       "session_id": "01a1eb24-b0ff-766f-afef-ac72fe2dcf93"
     },
     {
       "cost_usd": 0.3791261399999997,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-476eaa32-4334740b00a41288",
       "name": "MO-1074 \u00b7 Lane fix-check skips herdr/* and merged PRs and never works in a repo root",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1074 existed when the session ran",
       "session_id": "01a1ec85-149c-712a-9d7d-8299ddf28c0f"
     },
     {
       "cost_usd": 0.37370157000000015,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/concerning/t3-1bd9b9e6-95c92394691f3ea2",
       "name": "NING-15 \u00b7 Transactional invite redemption and audit linkage",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for NING-15 existed when the session ran",
       "session_id": "01a1e954-fac5-7717-a9a7-957054801992"
     },
     {
       "cost_usd": 0.36971733600000006,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-ded6acbb-0f4627a17f56af87",
       "name": "TNR-26 \u00b7 Reconcile release documentation with the merged M1 app",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for TNR-26 existed when the session ran",
       "session_id": "01a1ea2e-93aa-73b5-b53e-9fad5ac0d9a6"
     },
     {
       "cost_usd": 0.2853983400000001,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-01840a17-a6adffc2c53c0641",
       "name": "MO-1056 \u00b7 Watchdog measures log silence, not whether gatekeep is alive",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1056 existed when the session ran",
       "session_id": "01a1e966-df6f-7141-a08b-953e3fa3d265"
     },
     {
       "cost_usd": 0.2765156999999999,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-61f123a5-69fc9a10c4fb5aa8",
       "name": "MO-1065 \u00b7 Proof file per PR: every check passed, failed or not run, with commands",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1065 existed when the session ran",
       "session_id": "01a1ec3c-9f3a-7351-9534-09d8a2ff40a8"
+    },
+    {
+      "cost_usd": 0.24880122000000005,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-19a4b3ae-9c56076728b57709",
+      "name": "TNR-24 \u00b7 Prevent repeated Save from creating duplicate sources",
+      "reason": "no pull request for TNR-24 existed when the session ran",
+      "session_id": "01a1ea2e-ea7c-7663-acd4-b8db040d8100"
     },
     {
       "cost_usd": 0.24719235,
@@ -2016,42 +1987,42 @@
       "cost_usd": 0.24239324999999995,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-c03096a0-47d8a249e6d3e037",
       "name": "OPN-12 \u00b7 Import page images into a document",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for OPN-12 existed when the session ran",
       "session_id": "01a1eb6d-33e3-7177-9f88-8a12f1969241"
     },
     {
       "cost_usd": 0.22233166499999998,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-b0403464-2d79187186b26f5f",
       "name": "MO-1057 \u00b7 Tick finishes even when GitHub calls hang",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1057 existed when the session ran",
       "session_id": "01a1ea43-d1b5-72ce-ad6b-c10c3de2e181"
     },
     {
       "cost_usd": 0.215245872,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/concerning/t3-93c4608a-2658b7f94e14505a",
       "name": "NING-8 \u00b7 TER-4: ship the one-open-per-query partial unique index migration",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for NING-8 existed when the session ran",
       "session_id": "01a1e8bb-c8ef-725b-8999-811f4876b5e7"
     },
     {
       "cost_usd": 0.192521466,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/scripture-scroll/t3-8071ca57-d59e2872e1001986",
       "name": "STS-6 \u00b7 Pseudo-locale and Tamil screenshots at narrow width, with fixes",
-      "reason": "branch t3/pseudo-locale-screenshot-audit has no pull request",
+      "reason": "no pull request for STS-6 existed when the session ran",
       "session_id": "01a1ea48-35c2-741b-8731-5834ffef7894"
     },
     {
       "cost_usd": 0.19044406499999997,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-ee98bde2-15dcc0b4cfa441f7",
       "name": "MO-1076 \u00b7 Reviewer chain: subscriptions only (codex gpt-6.2-astra, then Opus)",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1076 existed when the session ran",
       "session_id": "01a1eca4-43f6-7572-98e3-c1eb3c608401"
     },
     {
       "cost_usd": 0.18935303999999997,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1081-ds-c2a8b679bfa1cfe2",
       "name": "MO-1081 \u00b7 Machine-enforced deny rules for agents (tightening only) (DeepSeek)",
-      "reason": "branch t3/mo-1081-ds has no pull request",
+      "reason": "no pull request for MO-1081 existed when the session ran",
       "session_id": "01a1ed14-0589-73e5-8f71-929bd49ee924"
     },
     {
@@ -2072,15 +2043,29 @@
       "cost_usd": 0.17356026,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-25f5512f-9e45f786321572b2",
       "name": "OPN-14 \u00b7 Export the previewed document as PDF",
-      "reason": "branch t3/opn-14-export-pdf has no pull request",
+      "reason": "no pull request for OPN-14 existed when the session ran",
       "session_id": "01a1ec0f-71a0-7114-8a54-e6233aed3623"
+    },
+    {
+      "cost_usd": 0.16910880000000003,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-af00b1f1-46e123794bdec5f0",
+      "name": "OPN-15 \u00b7 Capture pages with the native document scanner",
+      "reason": "no pull request for OPN-15 existed when the session ran",
+      "session_id": "01a1ebcb-4791-7051-9a87-e0009de16033"
     },
     {
       "cost_usd": 0.16780074,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-2c10b1cd-dbb7b86338b6a474",
       "name": "RCP-24 \u00b7 Make bundled privacy deletion instructions match Settings",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-24 existed when the session ran",
       "session_id": "01a1eb83-e18d-77f2-861e-6ad13b431606"
+    },
+    {
+      "cost_usd": 0.16507571999999998,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-8a08a700-d6734fd95741a5a6",
+      "name": "TNR-25 \u00b7 Show failed live playback with a retry action",
+      "reason": "no pull request for TNR-25 existed when the session ran",
+      "session_id": "01a1ea2e-c081-7473-9bdf-2be3159b53be"
     },
     {
       "cost_usd": 0.15934152000000001,
@@ -2093,28 +2078,42 @@
       "cost_usd": 0.15798209999999996,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-0b52757a-92a5e3a85418e130",
       "name": "MO-1059 \u00b7 Traces trial: install, sign in, find sessions, check redaction (no upload)",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1059 existed when the session ran",
       "session_id": "01a1eb54-ec80-7131-85c1-14ad65235c47"
     },
     {
       "cost_usd": 0.15131020499999995,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-94a80dea-c768669937bac513",
       "name": "RCP-23 \u00b7 Verify bank health before showing Reconnected",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-23 existed when the session ran",
       "session_id": "01a1eb84-340d-76d4-8c34-d9ff81f8942c"
     },
     {
       "cost_usd": 0.143172456,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-74cba777-77ed1f6c802f748d",
       "name": "MO-1058 \u00b7 Dead-run recovery settles or flags hand-launched threads once",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1058 existed when the session ran",
       "session_id": "01a1eb10-6bb1-7137-af77-4962438ff534"
+    },
+    {
+      "cost_usd": 0.13484730000000003,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-f4bdd273-f8a5501f45404698",
+      "name": "TNR-23 \u00b7 Report file import failures without losing the form",
+      "reason": "no pull request for TNR-23 existed when the session ran",
+      "session_id": "01a1ea2f-1345-7548-a6d7-4d5f708de3db"
+    },
+    {
+      "cost_usd": 0.13255791,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-1f15de68-4bdf01be92c40066",
+      "name": "TNR-22 \u00b7 Reject blank and unsupported source addresses",
+      "reason": "no pull request for TNR-22 existed when the session ran",
+      "session_id": "01a1ea33-6d7a-7372-a058-d22d67e3a268"
     },
     {
       "cost_usd": 0.13245951,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-37df92f0-7e757cf1e03538c8",
       "name": "OPN-13 \u00b7 Preview an assembled multi-page PDF",
-      "reason": "branch t3/opn-13-preview-multipage-pdf has no pull request",
+      "reason": "no pull request for OPN-13 existed when the session ran",
       "session_id": "01a1ebcb-4ce7-727c-8378-db08d5fac1a4"
     },
     {
@@ -2128,21 +2127,21 @@
       "cost_usd": 0.11577811200000002,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-8f8b5c8e-a8031accd85438c8",
       "name": "OPN-14 \u00b7 Export the previewed document as PDF",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for OPN-14 existed when the session ran",
       "session_id": "01a1ed56-1679-724c-ad39-def3b88219a2"
     },
     {
       "cost_usd": 0.11356417500000003,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/CineJar/t3-83d11104-f250e1cc3ca5077d",
       "name": "JAR-39 \u00b7 Separate local archive and EAS release instructions",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for JAR-39 existed when the session ran",
       "session_id": "01a1ea55-ae6f-72cc-a3ae-4945fe2a95d6"
     },
     {
       "cost_usd": 0.10510058399999997,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-d2c42691-9b44a5ded5b0ba39",
       "name": "RCP-23 \u00b7 Verify bank health before showing Reconnected",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-23 existed when the session ran",
       "session_id": "01a1eb26-1ae1-72ad-8649-49a1d2870219"
     },
     {
@@ -2156,14 +2155,14 @@
       "cost_usd": 0.09443526000000001,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-dba0cc35-d8e95fa8f0e792c3",
       "name": "RCP-22 \u00b7 Show a recoverable notice when deletion still requires Apple reauth",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-22 existed when the session ran",
       "session_id": "01a1ed7d-6680-73ea-bdf1-6f6273d6be86"
     },
     {
       "cost_usd": 0.09246897000000001,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-22272ce0-19625a477e824c28",
       "name": "RCP-22 \u00b7 Show a recoverable notice when deletion still requires Apple reauth",
-      "reason": "branch t3/rcp-22-repeated-reauth-notice has no pull request",
+      "reason": "no pull request for RCP-22 existed when the session ran",
       "session_id": "01a1eb96-3b87-70cf-9baf-846336add14a"
     },
     {
@@ -2177,7 +2176,7 @@
       "cost_usd": 0.08464681200000003,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-89bab7d2-c34e917881e246c9",
       "name": "OPN-11 \u00b7 Launch an unsigned iPhone simulator app",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for OPN-11 existed when the session ran",
       "session_id": "01a1eb07-d0aa-71a8-9a61-9e39442b8439"
     },
     {
@@ -2188,10 +2187,17 @@
       "session_id": "01a1eb74-5135-745d-853a-f2774a7349cd"
     },
     {
+      "cost_usd": 0.07689710399999997,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-cec9cb5d-a2e6b7cb8ca2bfc9",
+      "name": "TNR-27 \u00b7 continue after cap",
+      "reason": "no pull request for TNR-27 existed when the session ran",
+      "session_id": "01a1eb00-6a2a-7189-ac81-ebd70c9accfc"
+    },
+    {
       "cost_usd": 0.07632770999999998,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-7bff16b6-58d8c9b3dbb0b071",
       "name": "OPN-11 \u00b7 Launch an unsigned iPhone simulator app",
-      "reason": "branch t3/opn-11-unsigned-ios-simulator-app has no pull request",
+      "reason": "no pull request for OPN-11 existed when the session ran",
       "session_id": "01a1ea84-a881-77be-812c-47cea9e0d18d"
     },
     {
@@ -2205,14 +2211,14 @@
       "cost_usd": 0.06859422,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-f5d99920-bbb01affd71f6749",
       "name": "MO-1067 \u00b7 Add five refactoring smell cards to the review skill",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1067 existed when the session ran",
       "session_id": "01a1ec48-5f19-73d2-9bb3-4ba3a70f55c6"
     },
     {
       "cost_usd": 0.06599690399999998,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-lmw-70-ds-6040583db7f5f0e6",
       "name": "LMW-70 \u00b7 Verification layer rules in runtime contracts (DeepSeek)",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for LMW-70 existed when the session ran",
       "session_id": "01a1ed14-13c7-743d-a201-a3c444995f02"
     },
     {
@@ -2226,21 +2232,28 @@
       "cost_usd": 0.063846684,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-9d177d0e-0d1ecbc6662b0e75",
       "name": "RCP-22 \u00b7 Show a recoverable notice when deletion still requires Apple reauth",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-22 existed when the session ran",
       "session_id": "01a1eb24-d42b-7371-9635-f6704c366d32"
+    },
+    {
+      "cost_usd": 0.06286237200000001,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-cec9cb5d-a2e6b7cb8ca2bfc9",
+      "name": "TNR-27 \u00b7 Acceptance check fails on main (empty-home UI assertion)",
+      "reason": "no pull request for TNR-27 existed when the session ran",
+      "session_id": "01a1eae5-0642-76d3-8701-f98a367ba731"
     },
     {
       "cost_usd": 0.06074355,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-af517c91-ac9b4d25dfea9d30",
       "name": "OPN-11 \u00b7 Launch an unsigned iPhone simulator app",
-      "reason": "branch t3/unsigned-iphone-simulator-app-1 has no pull request",
+      "reason": "no pull request for OPN-11 existed when the session ran",
       "session_id": "01a1eab8-3bf4-775d-939a-c612e3226bf0"
     },
     {
       "cost_usd": 0.057277679999999984,
       "cwd": "/Users/shyamsivakumar/Code/mac-ops",
       "name": "MO-1057 \u00b7 install tick time limits",
-      "reason": "branch main has no pull request",
+      "reason": "no pull request for MO-1057 existed when the session ran",
       "session_id": "01a1eabe-7f5a-72a7-b8dd-14e4e81ebffd"
     },
     {
@@ -2261,14 +2274,14 @@
       "cost_usd": 0.05555204399999999,
       "cwd": "/Users/shyamsivakumar/Code/openscan",
       "name": "OPN design fit sections #6-#9",
-      "reason": "branch main has no pull request",
+      "reason": "pull request #9 is not in shyamsivakumar/openscan",
       "session_id": "01a1eb23-a367-7543-9336-d109b2d3fddd"
     },
     {
       "cost_usd": 0.054833114999999995,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-0c230b91-3a8f46fcbc332d5b",
       "name": "MO-1070 \u00b7 Prompt rules: rule of three and behavior-free tidy commits",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1070 existed when the session ran",
       "session_id": "01a1ec43-34a7-7245-abdd-f13fa3765640"
     },
     {
@@ -2289,21 +2302,21 @@
       "cost_usd": 0.043583267999999994,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-02c2b9b9-1f524b3a48903c86",
       "name": "RCP-24 \u00b7 Make bundled privacy deletion instructions match Settings",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-24 existed when the session ran",
       "session_id": "01a1eb25-f17b-748f-ba94-64d76692798f"
     },
     {
       "cost_usd": 0.041708724,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-64e705db-3a51f68531d2c1c8",
       "name": "RCP-25 \u00b7 Record a fresh mock simulator release smoke receipt",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-25 existed when the session ran",
       "session_id": "01a1eb25-c875-7714-bed3-7c6bf2615d10"
     },
     {
       "cost_usd": 0.041352929999999996,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-b7274839-e34187b05c69bf3b",
       "name": "RCP-25 \u00b7 Record a fresh mock simulator release smoke receipt",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for RCP-25 existed when the session ran",
       "session_id": "01a1eb83-b599-7381-87d6-4a18baaa9f8d"
     },
     {
@@ -2317,7 +2330,7 @@
       "cost_usd": 0.039640499999999995,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-0dfb0450-598535602d9e2f45",
       "name": "MO-1074 ticket Context section",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1074 existed when the session ran",
       "session_id": "01a1ec75-b983-70df-85ea-bcda69551cd3"
     },
     {
@@ -2387,7 +2400,7 @@
       "cost_usd": 0.024992175000000002,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-2736b9df-a38f17836418bb0a",
       "name": "SRW-1198 \u00b7 PR tier runs only affected tests (wire srw_fast_check.cjs)",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for SRW-1198 existed when the session ran",
       "session_id": "01a1ec3b-49f5-70a0-b519-48945641cfbc"
     },
     {
@@ -2443,7 +2456,7 @@
       "cost_usd": 0.017589795,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-ada6a7d3-1484fd196460c338",
       "name": "SRW-1200 \u00b7 Cognitive complexity and jscpd copy detection in check.sh (report only)",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for SRW-1200 existed when the session ran",
       "session_id": "01a1ec3b-2a6d-76fb-a4ea-519bdf1e9344"
     },
     {
@@ -2457,14 +2470,14 @@
       "cost_usd": 0.014998379999999997,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-64818e9c-78075469df32f58e",
       "name": "OPN-11 \u00b7 Launch an unsigned iPhone simulator app",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for OPN-11 existed when the session ran",
       "session_id": "01a1eaa3-9697-7400-b837-61b585f35845"
     },
     {
       "cost_usd": 0.012015089999999997,
       "cwd": "/Users/shyamsivakumar/Code/mac-ops",
       "name": "MO-1056 \u00b7 install",
-      "reason": "branch main has no pull request",
+      "reason": "no pull request for MO-1056 existed when the session ran",
       "session_id": "01a1e982-1cad-7581-b59c-5c2f79b97f41"
     },
     {
@@ -2513,49 +2526,49 @@
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-17bb0381-7545982c8ba73e54",
       "name": "LMW-70 \u00b7 Verification layer rules in runtime contracts",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for LMW-70 existed when the session ran",
       "session_id": "01a1ed06-7aef-73e9-a60a-95214b21910b"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-5da9caa8-83326c328876ff49",
       "name": "MO-1083 \u00b7 Gate falls back on no-verdict runs and blocks exhausted reviewers (re-cut of MO-1063)",
-      "reason": "branch t3/mo-1083-ds-continue has no pull request",
+      "reason": "no pull request for MO-1083 existed when the session ran",
       "session_id": "01a1ed07-24ed-73a8-9e65-9db2463bd72b"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-5da9caa8-83326c328876ff49",
       "name": "Continue shyamsivakumar/mac-ops#532: MO-1083 \u00b7 Gate falls back on no-verdict runs and blocks exhausted reviewers (re-cut of MO-1063)",
-      "reason": "branch t3/mo-1083-ds-continue has no pull request",
+      "reason": "no pull request for MO-1083 existed when the session ran",
       "session_id": "01a1ed08-42e3-7255-ba1e-124e40fa6cae"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-5da9caa8-83326c328876ff49",
       "name": "Continue shyamsivakumar/mac-ops#532: Continue shyamsivakumar/mac-ops#532: MO-1083 \u00b7 Gate falls back on no-verdict runs and blocks exhausted reviewers (re-cut of MO-1063)",
-      "reason": "branch t3/mo-1083-ds-continue has no pull request",
+      "reason": "no pull request for MO-1083 existed when the session ran",
       "session_id": "01a1ed0a-3e8f-75c3-9493-3c2064e02a73"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7",
       "name": "MO-1072 \u00b7 heavy: per-host memory headroom (lower on the M1) and governor recovery",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1072 existed when the session ran",
       "session_id": "01a1ec13-3533-7019-bdc3-7c31a986e92e"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7",
       "name": "Continue shyamsivakumar/mac-ops#508: MO-1072 \u00b7 heavy: per-host memory headroom (lower on the M1) and governor recovery",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1072 existed when the session ran",
       "session_id": "01a1ec14-c7cf-7492-9305-0aad186b861c"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7",
       "name": "Continue shyamsivakumar/mac-ops#508: Continue shyamsivakumar/mac-ops#508: MO-1072 \u00b7 heavy: per-host memory headroom (lower on the M1) and governor recovery",
-      "reason": "session ran in a worktree with no branch and no pull request",
+      "reason": "no pull request for MO-1072 existed when the session ran",
       "session_id": "01a1ec17-8389-735f-9d1b-718abf932cc2"
     },
     {

@@ -340,6 +340,18 @@ class PrIndex:
         found.sort(key=lambda row: str(row.get("createdAt") or ""), reverse=True)
         return found
 
+    def by_issue_at(self, repo: str, issue: int, moment: str | None) -> list[dict[str, Any]]:
+        """The pull requests that reference an issue and existed by a moment.
+
+        A pull request opened after the session ran cannot be the pull
+        request that session worked on, so it is left out.
+        """
+        rows = self.by_issue(repo, issue)
+        if not moment:
+            return rows
+        before = [row for row in rows if str(row.get("createdAt") or "") <= moment]
+        return before or []
+
 
 def _issue_number(ticket: str) -> int | None:
     match = re.search(r"(\d+)$", ticket)
@@ -392,7 +404,7 @@ def attribute(
     if ticket and repo:
         issue = _issue_number(ticket.group(1))
         if issue is not None:
-            candidates = index.by_issue(repo, issue)
+            candidates = index.by_issue_at(repo, issue, session.started_at)
             if candidates:
                 chosen = None
                 if branch:
@@ -403,7 +415,10 @@ def attribute(
                 if chosen is None:
                     chosen = candidates[0]
                 return _with_pr(out, chosen, "ticket")
-            out.reason = f"no pull request references {ticket.group(1)}"
+            out.reason = (
+                f"no pull request for {ticket.group(1)} existed when the "
+                "session ran"
+            )
 
     if repo and branch:
         row = index.by_branch(repo, branch)
@@ -416,12 +431,13 @@ def attribute(
         if row is not None:
             return _with_pr(out, row, "pr")
 
-    if repo and branch:
-        out.reason = f"branch {branch} has no pull request"
-    elif repo:
-        out.reason = "session ran in a worktree with no branch and no pull request"
-    else:
-        out.reason = "session ran outside a git repository"
+    if out.reason is None:
+        if repo and branch:
+            out.reason = f"branch {branch} has no pull request"
+        elif repo:
+            out.reason = "session ran in a worktree with no branch and no pull request"
+        else:
+            out.reason = "session ran outside a git repository"
     return out
 
 
@@ -487,10 +503,6 @@ def _window_days(day: str, before: int, after: int) -> list[str]:
     ]
 
 
-def _mean(values: list[float]) -> float | None:
-    return (sum(values) / len(values)) if values else None
-
-
 def refactor_comparison(
     attributions: list[SessionAttribution],
     index: PrIndex,
@@ -531,6 +543,7 @@ def refactor_comparison(
         if not merged:
             continue
         moment = datetime.fromisoformat(str(merged).replace("Z", "+00:00"))
+        moment = moment.astimezone(LOCAL_TZ)
         merged_day = local_day(moment)
         if merged_day < first_day or merged_day > last_day:
             continue
@@ -576,13 +589,13 @@ def _window_summary(
         bucket = buckets.setdefault(item.pr_key, {"cost_usd": 0.0, "sessions": 0})
         bucket["cost_usd"] += item.session.cost_usd
         bucket["sessions"] += 1
-    costs = [bucket["cost_usd"] for bucket in buckets.values() if bucket["cost_usd"]]
+    total = sum(bucket["cost_usd"] for bucket in buckets.values())
     return {
         "days": sorted(wanted),
         "days_with_sessions": len(days_with_sessions),
         "prs": len(buckets),
-        "total_cost_usd": sum(bucket["cost_usd"] for bucket in buckets.values()),
-        "mean_cost_per_pr_usd": _mean(costs),
+        "total_cost_usd": total,
+        "mean_cost_per_pr_usd": (total / len(buckets)) if buckets else None,
     }
 
 
@@ -675,7 +688,7 @@ def build_report(
         "unattributed_cost_usd": total - attributed,
         "reconciled": abs(total - (attributed + (total - attributed))) < 1e-9,
         "pr_count": len(prs),
-        "cost_per_pr_usd": _mean([b["cost_usd"] for b in prs]),
+        "cost_per_pr_usd": (attributed / len(prs)) if prs else None,
         "prs": prs,
         "repos": sorted(by_repo.values(), key=lambda row: -row["cost_usd"]),
         "unattributed_sessions": sorted(
