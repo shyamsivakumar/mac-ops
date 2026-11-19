@@ -683,11 +683,13 @@ def gate_round_decision(repo, number, head, ledger):
     """
     lkey = f"rounds-decision:{repo}#{number}"
     if lkey in ledger:
+        if not DRY:
+            alarms.migrate_stale(DECISIONS_PATH, gate_round_item(repo, number, "")["id"])
         return f"#{number}: no fix round, the decisions item is on the board"
     item = gate_round_item(repo, number, head)
     if DRY:
         return f"DRY #{number}: no fix round, one decisions item"
-    if alarms.board_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+    if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
         return f"#{number}: the decisions item could not be published"
     ledger[lkey] = item["id"]
     return (f"#{number}: no fix round after {GATE_ROUND_CAP} failed reviews, "
@@ -717,7 +719,7 @@ def clear_gate_round_decision(repo, number, ledger):
     if lkey not in ledger:
         return True
     item = gate_round_item(repo, number, "")
-    if not DRY and alarms.board_update(DECISIONS_PATH, item["id"], "remove") != "wrote":
+    if not DRY and alarms.route_update(DECISIONS_PATH, item["id"], "remove") != "wrote":
         return False
     ledger.pop(lkey, None)
     return True
@@ -813,7 +815,7 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
 
 def publish_decision(item):
     """Put one item on Shyam's decisions board, under the board's lock."""
-    return alarms.board_update(DECISIONS_PATH, item["id"], "raise", item)
+    return alarms.route_update(DECISIONS_PATH, item["id"], "raise", item)
 
 
 def prompt_merge_item(repo, number, head):
@@ -829,7 +831,7 @@ def prompt_merge_item(repo, number, head):
 
 def withdraw_decision(item_id):
     """Take one item off Shyam's board, once the pull request is settled."""
-    return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
+    return alarms.route_update(DECISIONS_PATH, item_id, "remove", None)
 
 
 def pull_settled(repo, number):
@@ -862,19 +864,19 @@ def reconcile_prompt_items(snapshot):
     settled is still open, so each candidate's own state is read before its
     card goes. Return how many were removed.
     """
-    try:
-        _bytes, board = alarms.read_board(Path(DECISIONS_PATH))
-    except OSError:
-        return 0
-    if not isinstance(board, dict):
-        return 0
+    boards = []
+    for path in (Path(DECISIONS_PATH), alarms.board_for(DECISIONS_PATH, "prompt-merge-MO-0")):
+        try:
+            boards.append(alarms.read_board(path)[1])
+        except OSError:
+            continue
+    items = {str(i.get("id")): i for b in boards if isinstance(b, dict)
+             for i in b.get("items") or [] if isinstance(i, dict)}.values()
     repos_by_key = {CFG[repo]["key"]: repo for repo in CFG if repo in LANE_REPOS}
     open_prs = {(repo, pull["number"]) for repo, data in snapshot["repos"].items()
                 for pull in data["prs"]}
     removed = 0
-    for item in board.get("items") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in items:
         match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", str(item.get("id") or ""))
         if not match or match.group(1) not in repos_by_key:
             continue
@@ -1589,7 +1591,7 @@ def zero_merge(snapshot):
     # board is written under its lock.
     action = alarms.decide_and_publish(
         "factory-zero-merge", cause or "",
-        lambda decided: None if alarms.board_update(
+        lambda decided: None if alarms.route_update(
             path, "factory-zero-merge",
             "raise" if decided in ("raise", "unchecked") and item else "remove",
             item) == "wrote" else "failed")
