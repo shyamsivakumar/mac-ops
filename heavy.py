@@ -23,7 +23,7 @@ import time
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -102,6 +102,7 @@ class ProcessInfo:
     start_token: str
     start_epoch: float
     state: str
+    uncertain: bool = False
 
 
 @dataclass(frozen=True)
@@ -555,7 +556,10 @@ except OSError:
     _LIBPROC = None
 
 
-def _native_process_info(pid: int) -> Optional[ProcessInfo]:
+_UNCERTAIN = object()
+
+
+def _native_process_info(pid: int) -> Any:
     if sys.platform != "darwin" or _LIBPROC is None:
         raise HeavyError("precise process identity requires macOS libproc")
     function = _LIBPROC.proc_pidinfo
@@ -574,7 +578,7 @@ def _native_process_info(pid: int) -> Optional[ProcessInfo]:
     if received == 0:
         if ctypes.get_errno() == errno.ESRCH:
             return None
-        raise HeavyError("macOS process identity lookup failed")
+        return _UNCERTAIN
     if received != size or info.pid != pid:
         raise HeavyError("macOS process identity response was incomplete")
     token = "{}.{:06d}".format(info.start_sec, info.start_usec)
@@ -622,6 +626,8 @@ def process_table(
             precise = _native_process_info(pid)
             if precise is None:
                 rows.pop(pid, None)
+            elif precise is _UNCERTAIN:
+                rows[pid] = replace(row, uncertain=True)
             else:
                 rows[pid] = ProcessInfo(
                     precise.pid,
@@ -1297,6 +1303,8 @@ def legacy_slot_count(
 def _identity_matches(info: Optional[ProcessInfo], identity: Dict[str, Any]) -> bool:
     if info is None:
         return False
+    if info.uncertain:
+        return info.pid == identity.get("pid")
     if (
         info.pid != identity.get("pid")
         or info.uid != identity.get("uid")
@@ -1319,6 +1327,8 @@ def _verified_group_members(
     start_token = str(identity["start"])
     start_epoch = _start_epoch(start_token)
     root = table.get(pid)
+    if root is not None and root.uncertain:
+        return None
     if root is not None and (
         root.uid != uid or root.start_token != start_token or root.pgid != pgid
     ):
@@ -1329,6 +1339,8 @@ def _verified_group_members(
     for row in members:
         if row.state.startswith(("Z", "X")):
             continue
+        if row.uncertain:
+            return None
         if row.uid != uid or row.start_epoch < start_epoch:
             return None
         try:
@@ -1428,7 +1440,7 @@ def _supervisor_identity(
     task_key: str, boot_id: str, table: Dict[int, ProcessInfo], uid: int
 ) -> Dict[str, Any]:
     info = table.get(os.getpid())
-    if info is None or info.uid != uid:
+    if info is None or info.uncertain or info.uid != uid:
         raise HeavyError("supervisor process identity unavailable")
     return {
         "pid": info.pid,
@@ -1449,7 +1461,12 @@ def _workload_identity_from_process(
     getsid: Callable[[int], int] = os.getsid,
 ) -> Dict[str, Any]:
     info = table.get(pid)
-    if info is None or info.uid != os.getuid() or info.pgid != pid:
+    if (
+        info is None
+        or info.uncertain
+        or info.uid != os.getuid()
+        or info.pgid != pid
+    ):
         raise HeavyError("workload process group identity unavailable")
     try:
         if getpgid(pid) != pid or getsid(pid) != pid:
@@ -2347,7 +2364,7 @@ def _process_pause_identity(
     uid: int,
 ) -> Optional[Dict[str, Any]]:
     info = table.get(pid)
-    if info is None or info.uid != uid:
+    if info is None or info.uncertain or info.uid != uid:
         return None
     return {
         "pid": info.pid,
@@ -2391,7 +2408,12 @@ def signal_verified_processes(
         ):
             failed.append(identity)
             continue
-        if not _identity_matches(table.get(identity["pid"]), identity):
+        target = table.get(identity["pid"])
+        if (
+            target is None
+            or target.uncertain
+            or not _identity_matches(target, identity)
+        ):
             failed.append(identity)
             continue
         try:
