@@ -1043,12 +1043,10 @@ def act_on_pr(repo, number, ledger):
         held = prompt_pass(repo, number, head,
                            prompt_pull(repo, number, pr.get("changedFiles"),
                                        pr.get("baseRefName") or "main", head))
-        if held:
-            return held
-        # Main's gate-round bookkeeping: the round's decisions item must leave
-        # the board before the merge, or the merge waits.
         if not clear_gate_round_stuck(repo, number, ledger):
             return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
+        if held:
+            return held
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         base = pr.get("baseRefName") or "main"
