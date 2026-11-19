@@ -172,6 +172,23 @@ class ReviewSlotTests(unittest.TestCase):
             self.assertIsNone(self.reserve('priority', 'review')[0])
         self.assertFalse(self.active)
 
+    def test_limit_takeover_requires_the_claim_that_was_observed(self):
+        workload = {'pid': 5, 'task_key': 'k', 'uid': 1, 'boot_id': 'b'}
+        stale = {'reason': heavy.WALL_CLOCK_REASON, 'claimant_pid': 10, 'requested_ns': 1}
+        self.active.append({
+            'job_id': 'job', 'state': 'terminating', 'task_key': 'k', 'uid': 1,
+            'supervisor': {'boot_id': 'b'}, 'workload': workload,
+            'termination': dict(stale)})
+        first = heavy._claim_termination(
+            self.registry, 'job', heavy.WALL_CLOCK_REASON, claimant_pid=20,
+            expected_workload=workload, takeover=True, observed_termination=stale)
+        self.assertEqual(first['termination']['claimant_pid'], 20)
+        second = heavy._claim_termination(
+            self.registry, 'job', heavy.WALL_CLOCK_REASON, claimant_pid=30,
+            expected_workload=workload, takeover=True, observed_termination=stale)
+        self.assertIsNone(second)
+        self.assertEqual(self.active[0]['termination']['claimant_pid'], 20)
+
 
 if __name__ == '__main__':
     unittest.main()
