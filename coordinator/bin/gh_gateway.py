@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 # The core calls the callers should leave in reserve. Below this floor an
@@ -916,7 +917,8 @@ def record(argv, count=1, caller_name=None, via=None):
     # credential in one. The caller, the quota and the verb are enough for
     # the report and safe to keep.
     row = {"ts": round(time.time(), 3), "caller": caller_name or caller(),
-           "resource": resource(argv), "verb": verb(argv)}
+           "resource": resource(argv), "verb": verb(argv),
+           "call": uuid.uuid4().hex[:12]}
     if via:
         row["via"] = via
     if pages_unknown(argv):
@@ -1068,28 +1070,35 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
 
 
 def usage_rows(hours, now=None):
-    """Count logged calls per hour and caller over the last `hours` hours."""
+    """Count calls per hour and caller over the last `hours` hours.
+
+    A call is one invocation: `record` writes one row per page, so rows
+    sharing a `call` id are one call. A row from before the id existed is
+    its own call."""
     since = (now or time.time()) - hours * 3600
     table = {}
-    for path in (USAGE_LOG.with_suffix(USAGE_LOG.suffix + ".1"), USAGE_LOG):
+    for number, path in enumerate((USAGE_LOG.with_suffix(USAGE_LOG.suffix + ".1"), USAGE_LOG)):
         if not path.exists():
             continue
-        for line in path.read_text().splitlines():
+        for index, line in enumerate(path.read_text().splitlines()):
             row = json.loads(line)
             if row["ts"] < since:
                 continue
             hour = time.strftime("%Y-%m-%d %H:00", time.localtime(row["ts"]))
-            cell = table.setdefault((hour, row["caller"]), {"core": 0, "graphql": 0, "other": 0, "shim": 0})
-            cell[row["resource"] if row["resource"] in ("core", "graphql") else "other"] += 1
-            cell["shim"] += row.get("via") == "shim"
+            cell = table.setdefault((hour, row["caller"]), {"calls": {}, "pages": 0})
+            call = row.get("call") or f"{number}:{index}"
+            cell["calls"][call] = (row["resource"] if row["resource"] in ("core", "graphql") else "other", row.get("via") == "shim")
+            cell["pages"] += 1
     return sorted(table.items())
 
 
 def usage_report(hours):
-    header = f"{'hour':<17} {'caller':<24} {'core':>6} {'graphql':>8} {'other':>6} {'via shim (bypassed the gateway)':>32}"
+    header = f"{'hour':<17} {'caller':<24} {'core':>6} {'graphql':>8} {'other':>6} {'pages':>6} {'via shim (bypassed the gateway)':>32}"
     lines = [header]
     for (hour, name), cell in usage_rows(hours):
-        lines.append(f"{hour:<17} {name:<24} {cell['core']:>6} {cell['graphql']:>8} {cell['other']:>6} {cell['shim']:>32}")
+        kinds = [kind for kind, _shim in cell["calls"].values()]
+        shim = sum(shim for _kind, shim in cell["calls"].values())
+        lines.append(f"{hour:<17} {name:<24} {kinds.count('core'):>6} {kinds.count('graphql'):>8} {kinds.count('other'):>6} {cell['pages']:>6} {shim:>32}")
     return "\n".join(lines)
 
 
