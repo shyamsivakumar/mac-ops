@@ -248,7 +248,7 @@ def alert(reason, cause=None, path=None):
                 "cause": alarms.cause_of(cause or reason),
                 "why": reason,
             }
-        if alarms.board_update(target, ALERT_ID,
+        if alarms.route_update(target, ALERT_ID,
                                "raise" if item else "remove", item) != "wrote":
             return "failed"
         if action == "unchecked":
