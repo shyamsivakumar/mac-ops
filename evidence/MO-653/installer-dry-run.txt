@@ -1,0 +1,10 @@
+RETIRED_JOBS: ('dev.coordinator.overnight',)
+plists the checkout would install: ['dev.coordinator.dispatch.plist', 'dev.coordinator.gatekeep.plist', 'dev.coordinator.lanes.plist', 'dev.coordinator.tick.plist', 'dev.coordinator.turncap.plist']
+installed in temp home before: ['dev.coordinator.lanes.plist', 'dev.coordinator.overnight.plist']
+dry run would_retire: [
+ "/private/tmp/instdry-yAPu/Library/LaunchAgents/dev.coordinator.overnight.plist"
+]
+retire_jobs notes (temp home, running job left alone):
+   Removed /private/tmp/instdry-yAPu/Library/LaunchAgents/dev.coordinator.overnight.plist. The running job was left alone: this is not the real home.
+   Removed the retired job's plist /private/tmp/instdry-yAPu/Library/LaunchAgents/dev.coordinator.overnight.plist.
+installed in temp home after: ['dev.coordinator.lanes.plist']

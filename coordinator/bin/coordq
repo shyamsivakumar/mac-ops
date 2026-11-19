@@ -152,12 +152,21 @@ def has_verdict(report):
     return bool(lines) and lines[-1] in ("VERDICT: PASS", "VERDICT: FAIL")
 
 
+def gate_thread_to_judge(queue, key, receipts):
+    """The thread of a head's recorded gate, or None when the head has no
+    gate thread a dead-gate retry could judge."""
+    state = gate_state(queue.get("gatedHeads", {}).get(key))
+    thread_id = receipts.get(key)
+    if state["givenUp"] or not thread_id or thread_id == state.get("retryOf"):
+        return None
+    return thread_id
+
+
 def read_dead_gate(queue, key):
     """The recorded gate of a head and its thread read, or None when the head
     has no gate thread to judge. Read before any lock is taken."""
-    state = gate_state(queue.get("gatedHeads", {}).get(key))
-    thread_id = load_receipts().get(key)
-    if state["givenUp"] or not thread_id or thread_id == state.get("retryOf"):
+    thread_id = gate_thread_to_judge(queue, key, load_receipts())
+    if thread_id is None:
         return None
     code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
     return None if code else (thread_id, json.loads(out))
@@ -1618,6 +1627,7 @@ def gate_candidates(config):
         raise RuntimeError("cannot identify authenticated GitHub user")
     login = login_run.stdout.strip()
     receipts = load_receipts()
+    queue = load()
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
@@ -1625,6 +1635,9 @@ def gate_candidates(config):
             if pr["draft"]:
                 continue
             head, number = pr["head"]["sha"], pr["number"]
+            gated_key = f"gate:{repo}#{number}:{head}"
+            if gated_key in queue.get("gatedHeads", {}) and gate_thread_to_judge(queue, gated_key, receipts) is None:
+                continue
             body = pr.get("body") or ""
             refs = re.findall(r"\bRefs #(\d+)\b", body)
             for issue in dict.fromkeys(refs):

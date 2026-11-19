@@ -1,0 +1,15 @@
+== before (origin/main)
+overnight: 2026-11-19 11:45 PST shift cycle under /private/tmp/lockreplay-C8vEVu/root/run/policy.json
+overnight: wrote /private/tmp/lockreplay-C8vEVu/root/receipts/cycle-2026-11-19-1145.md
+Health checks: 3 finding(s) from 4 checks
+ALERT: the launchd interpreter: the interpreter launchd runs the coordinator tools with could not be found: /private/tmp/lockreplay-C8vEVu/home/Library/LaunchAgents/dev.coordinator.dispatch.plist does not say, and the installed coordq has no shebang (action: read the dispatch plist and the installed coordq)
+ALERT: /private/tmp/lockreplay-C8vEVu/home/Code/mac-ops/install_coordinator.py: the install status could not be read (exit 2): /Applications/Xcode.app/Contents/Developer/usr/bin/python3: can't open file '/private/tmp/lockreplay-C8vEVu/home/Code/mac-ops/install_coordinator.py': [Errno 2] (action: read the install status by hand)
+ALERT: /private/tmp/lockreplay-C8vEVu/home/Code/coordinator/queue/dispatch.log: the blockers check is incomplete for the log: the log could not be read: [Errno 2] No such file or directory: '/private/tmp/lockreplay-C8vEVu/home/Code/coordinator/queue/dispatch.log' (action: read the log by hand and fix what it says)
+overnight: lane shyamsivakumar/mac-ops: allowed
+overnight: lane shyamsivakumar/strategy-replay-workbench: allowed
+overnight: lane shyamsivakumar/fantasy-football-toolkit: allowed
+second shift exit: 0; board reads (ticket list) and gh calls made by the second shift: 1
+
+== after (this branch)
+overnight: 2026-11-19 11:45 PST another cycle holds the lock, so this cycle did no work
+second shift exit: 0; board reads (ticket list) and gh calls made by the second shift: 0

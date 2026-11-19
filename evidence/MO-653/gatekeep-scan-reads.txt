@@ -1,0 +1,17 @@
+== before (origin/main)
+gated heads never retryable: 20; gated heads that may retry: 2
+    22  repos/o/r/commits/*/statuses
+    22  repos/o/r/issues/*
+    22  repos/o/r/issues/*/comments
+     1  repos/o/r/pulls
+     1  user
+  total gh reads: 68
+
+== after (this branch)
+gated heads never retryable: 20; gated heads that may retry: 2
+     2  repos/o/r/commits/*/statuses
+     2  repos/o/r/issues/*
+     2  repos/o/r/issues/*/comments
+     1  repos/o/r/pulls
+     1  user
+  total gh reads: 8
