@@ -1708,11 +1708,13 @@ def run_pass(ledger):
     tickets = SNAPSHOT["tickets"]
     recover_dead_runs(ledger)
     for repo in LANE_REPOS:
+        if repo not in busy_by_repo:
+            continue
         with item_boundary(repo, "lane", ledger):
             prs = list(ORDER.get(repo, []))
             others = SNAPSHOT["repos"][repo]["prs"]
             prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
-            b = busy_by_repo.get(repo, "")
+            b = busy_by_repo[repo]
             if b:
                 print(f"{CFG[repo]['key']:5} busy ({b}); PR actions still run")
             done = False
