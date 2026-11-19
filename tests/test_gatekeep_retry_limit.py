@@ -475,10 +475,11 @@ class ReviewerFallbackTest(RetryLimitBase):
             return FakeRun(json.dumps({"thread": {"threadId": "t-1"}}))
 
         coordq.subprocess = types.SimpleNamespace(run=start, TimeoutExpired=TimeoutError)
-        self.assertEqual(coordq.call("t3_thread_launch", launch)[0], 0)
-        # The probe could take the lock while the builder launched, so the
-        # launch never held it.
-        self.assertEqual(busy, [False])
+        with coordq.model_list.blocked_lock():
+            # A writer holds the store, and the builder launch still runs:
+            # only a gate launch waits for the store.
+            self.assertEqual(coordq.call("t3_thread_launch", launch, "rules")[0], 0)
+        self.assertEqual(busy, [True])
 
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
