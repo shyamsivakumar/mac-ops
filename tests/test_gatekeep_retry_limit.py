@@ -228,6 +228,22 @@ class GateRetryOnceTest(RetryLimitBase):
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn("regating", out)
 
+    def test_a_block_after_the_selection_is_not_queued_on_a_fresh_head(self):
+        self.write_queue()
+        first = coordq.model_list.entries("review")[0]["selection"]
+        real = coordq.gate_candidates
+
+        def blocking(config):
+            for event in real(config):
+                coordq.model_list.block_provider(first, time.time() + 600)
+                yield event
+        coordq.gate_candidates = blocking
+        self.addCleanup(setattr, coordq, "gate_candidates", real)
+        self.addCleanup(os.unlink, coordq.model_list.blocked_path())
+        self.run_gatekeep()
+        chosen = self.gate_items()[0]["args"]["modelSelection"]
+        self.assertFalse(coordq.model_list.same_selection(chosen, first))
+
     def test_a_second_dead_gate_is_given_up(self):
         self.write_queue(heads={self.key: {"id": 5, "retries": 1, "at": 0,
                                           "givenUp": False, "retryOf": "gate-0"}})

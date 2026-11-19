@@ -76,13 +76,9 @@ STUCK_COUNT = 3
 # driver, gatekeep and the shift share this one floor.
 FLOOR = gh_gateway.floor()
 STUCK_FILE = "gatekeep-stuck.txt"
-# A gate that dies without a verdict is queued again, but a reviewer that
-# cannot run at all fails the same way, so a retry with no end relaunches it
-# on every run. A head is retried at most GATE_RETRY_LIMIT times, with
-# GATE_RETRY_BACKOFF seconds between retries after the first, and then given
-# up until its head changes.
-GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "1"))
-GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
+# A gate that dies without a verdict moves once to the next reviewer, and a
+# head whose moved gate dies too is given up until its head changes.
+GATE_RETRY_LIMIT = 1
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
 # every action the queue has taken, with the item that took it and what
@@ -1776,8 +1772,6 @@ def cmd_gatekeep(a):
                             heads[key] = {**state, "givenUp": True}
                             save(queue)
                         continue
-                    if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
-                        continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
                     model = failed_gate_reviewer(queue, key, current, data, event.get("builderModels", []))
@@ -1790,6 +1784,12 @@ def cmd_gatekeep(a):
                     args["clientRequestId"] = key + ":" + model["model"] + ":retry"
                     retry_of = thread_id
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
+                if model_list.is_blocked(args["modelSelection"]):
+                    chosen = reviewer_model(event.get("builderModels", []))
+                    if chosen is None:
+                        print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
+                        continue
+                    args["modelSelection"] = chosen
                 attempted.add(key)
                 print(("would queue " if a.dry_run else "queued ") + key
                       + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
