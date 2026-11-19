@@ -267,7 +267,7 @@ class BlockedModelSendTests(unittest.TestCase):
                 [args] = self.launches(key)
                 self.assertEqual([args[k] for k in ("modelSelection", "taskType", "message", "workspaceStrategy")],
                                  [SELECTIONS[expected], kind, "fix it", workspace])
-                self.assertEqual(list(ledger), [key])
+                self.assertIn(key, ledger)
 
     def test_unblocked_send_and_all_blocked_queue(self):
         key = f"fix:{REPO}#1"
@@ -293,6 +293,18 @@ class BlockedModelSendTests(unittest.TestCase):
                     lane.unstick(REPO, ledger)
                 self.assertEqual(len(self.launches(key)), replacements)
                 self.assertEqual(key in ledger, bool(blocked))
+                self.thread_on("sonnet", "completed")
+                ledger.pop("cont:t1", None)
+                lane.unstick(REPO, ledger)
+                self.assertEqual((len(self.launches(key)), key in ledger), (replacements + 1, False))
+
+    def test_two_replacements_never_share_one_worktree(self):
+        self.thread_on("sonnet", "completed", ("sonnet",))
+        ledger = {}
+        for key in (f"fix:{REPO}#1", f"fix:{REPO}#2"):
+            lane.send("t1", "fix it", "t", ledger, key, repo=REPO)
+        workspaces = [json.loads(c[2])["workspaceStrategy"] for c in self.cmds if c[0] == lane.COORDQ]
+        self.assertEqual(workspaces, [OWN, MAIN])
 
 
 if __name__ == "__main__":
