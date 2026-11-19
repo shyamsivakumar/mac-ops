@@ -1,0 +1,159 @@
+"""The reset a provider error names.
+
+A provider that refuses to run often says when it comes back: "resets in 30
+minutes", "retry after 3600s", "resets at 14:00 UTC", "will reset at
+2026-11-18 11:58:52". This module reads that sentence and gives the moment
+it names, in the zone the sentence states.
+
+A relative reset is measured from the failure, not from the moment the
+failure is read: a run that failed at 10:35 and says "resets in 30 minutes"
+comes back at 11:05, not at 11:05 plus however long the failure took to
+read. An absolute reset is taken as it is written, with its fraction of a
+second and its offset read whole.
+"""
+import re
+import time
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python without zoneinfo
+    ZoneInfo = None
+
+# A provider that says when it comes back in relative words: "your plan
+# resets in 30 minutes", "retry after 3600s", "resets in 1 hour 30 minutes".
+_UNIT = r"(?:seconds?|minutes?|hours?|days?|secs?|mins?|hrs?|d|h|m|s)"
+_AMOUNT = rf"\d+(?:\.\d+)?\s*{_UNIT}\b"
+RELATIVE = re.compile(
+    rf"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s+"
+    rf"((?:{_AMOUNT}(?:\s*,?\s*(?:and\s+)?)?)+)", re.IGNORECASE)
+AMOUNT = re.compile(rf"(\d+(?:\.\d+)?)\s*({_UNIT})\b", re.IGNORECASE)
+UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
+         "minute": 60.0, "minutes": 60.0, "min": 60.0, "mins": 60.0,
+         "hour": 3600.0, "hours": 3600.0, "hr": 3600.0, "hrs": 3600.0,
+         "day": 86400.0, "days": 86400.0,
+         "m": 60.0, "h": 3600.0, "d": 86400.0}
+# The last moment the store can write: a reset past the end of the calendar
+# is no reset, and any reset before it is honoured however far off it is.
+MAX_EPOCH = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp()
+
+# An absolute reset: a date and a time of day, or a time of day alone.
+DATETIME = re.compile(
+    r"\b(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?\b")
+TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)")
+# The words that make a time a reset rather than any time in a message.
+RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNORECASE)
+# The zone a message states for its reset: "UTC", "+08:00", "Asia/Shanghai".
+OFFSET = re.compile(r"([+-])(\d{2}):?(\d{2})\b")
+NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z0-9_+-]+)+)\b")
+
+
+def _named_zone(window):
+    match = NAMED_ZONE.search(window) if ZoneInfo is not None else None
+    if match is None:
+        return None
+    try:
+        return ZoneInfo(match.group(1))
+    except Exception:
+        return None
+
+
+def zone_of(text, start=0):
+    """The zone a message states for its reset, or None when it states none.
+
+    An offset wins over a bare "UTC": "UTC+08:00" is eight hours ahead of
+    UTC, not UTC, and reading it as UTC would hold the provider eight hours
+    past the reset it named. A complete zone name wins over both: "Etc/GMT+5"
+    is five hours behind UTC, not GMT."""
+    window = text[start:start + 48]
+    named = _named_zone(window)
+    if named is not None:
+        return named
+    match = OFFSET.search(window)
+    if match and int(match.group(2)) < 24 and int(match.group(3)) < 60:
+        hours, minutes = int(match.group(2)), int(match.group(3))
+        offset = timedelta(hours=hours, minutes=minutes)
+        return timezone(-offset if match.group(1) == "-" else offset)
+    if re.search(r"\b(?:UTC|GMT)\b", window, re.IGNORECASE):
+        return timezone.utc
+    if re.match(r"\s*Z\b", window):
+        return timezone.utc
+    return None
+
+
+def _epoch(date_text, time_text, zone, fold=0):
+    clock, _, fraction = time_text.partition(".")
+    hour, _, rest = clock.partition(":")
+    clock = f"{hour.zfill(2)}:{rest}"
+    if fraction:
+        clock = f"{clock}.{fraction[:6].ljust(6, '0')}"
+    try:
+        moment = datetime.fromisoformat(f"{date_text}T{clock}")
+    except ValueError:
+        return None
+    return moment.replace(tzinfo=zone or timezone.utc, fold=fold).timestamp()
+
+
+def _occurrences(date_text, time_text, zone):
+    folds = [_epoch(date_text, time_text, zone, fold) for fold in (0, 1)]
+    return None if folds[0] is None else folds
+
+
+def _earliest_from(occurrences, base):
+    coming = [seconds for seconds in occurrences if seconds >= base]
+    return min(coming) if coming else None
+
+
+def _absolute(message, base):
+    """The absolute reset a message names, or None when it names none."""
+    for match in DATETIME.finditer(message):
+        if not RESET_WORD.search(message[max(0, match.start() - 60):match.start()]):
+            continue
+        zone = None
+        if match.group(3):
+            zone = timezone.utc if match.group(3) == "Z" else zone_of(match.group(3), 0)
+        zone = zone or zone_of(message, match.end())
+        stated = _occurrences(match.group(1), match.group(2), zone)
+        if stated is None:
+            return None
+        coming = _earliest_from(stated, base)
+        return max(stated) if coming is None else coming
+    for match in TIME_ONLY.finditer(message):
+        if not RESET_WORD.search(message[max(0, match.start() - 60):match.start()]):
+            continue
+        zone = zone_of(message, match.end()) or timezone.utc
+        when = datetime.fromtimestamp(base, timezone.utc).astimezone(zone)
+        today = _occurrences(when.date().isoformat(), match.group(1), zone)
+        if today is None:
+            return None
+        coming = _earliest_from(today, base)
+        if coming is not None:
+            return coming
+        tomorrow = when.date() + timedelta(days=1)
+        return _epoch(tomorrow.isoformat(), match.group(1), zone)
+    return None
+
+
+def reset_at(message, failed=None):
+    """The epoch seconds of the reset a provider error names, or None.
+
+    A relative reset is measured from the failure, not from the moment the
+    failure is read: a run that failed at 10:35 and says "resets in 30
+    minutes" comes back at 11:05, not at 11:05 plus however long the
+    failure took to read. An absolute reset is taken as it is written, in
+    the zone the message states."""
+    if not isinstance(message, str) or not message.strip():
+        return None
+    base = time.time() if failed is None else float(failed)
+    match = RELATIVE.search(message)
+    if match:
+        seconds = sum(float(number) * UNITS[unit.lower()]
+                      for number, unit in AMOUNT.findall(match.group(1)))
+        # A reset of zero is a reset: the provider says it is free now, and
+        # a block that waited an hour would hold it past what it promised.
+        if seconds >= 0 and base + seconds <= MAX_EPOCH:
+            return base + seconds
+    until = _absolute(message, base)
+    if until is not None and until > MAX_EPOCH:
+        return None
+    return until
