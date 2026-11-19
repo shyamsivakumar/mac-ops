@@ -21,8 +21,9 @@ Sol and other OpenAI API models never build.
 
 A provider that fails with no credits, a usage limit or an auth error is
 recorded in `providers-blocked.json` in the queue folder. Every caller skips a
-blocked entry until the hourly probe of that provider answers. `models.py` only
-reads that file; the provider health store writes it. When every entry of a list
+blocked entry until the reset time its error named (an hour after the failure
+when it named none). `models.py` reads and writes that file under one file lock,
+and ignores an entry whose reset time has passed. When every entry of a list
 is blocked, the caller waits and says so.
 
 ## Callers
