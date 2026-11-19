@@ -582,7 +582,7 @@ export default class Board extends View {
   }
 
   prStamp() {
-    return [this.cap, this.groups().map((g) => [g.key, this.prInfo(g), this.verdictFor(g), g.threads.map(runModelOf)])];
+    return [this.cap, this.groups(true).map((g) => [g.key, this.prInfo(g), this.verdictFor(g), g.threads.map(runModelOf)])];
   }
 
   prInfo(g) {
