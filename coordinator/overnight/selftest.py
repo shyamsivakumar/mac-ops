@@ -361,32 +361,85 @@ def dead_run_no_receipt():
     exact(ledger["dead-run:fixture-full"].startswith("flagged "), True)
 
 
+_REAL_OPEN = open
+LIVE_STATE = ("queue", "decisions.json", "dispatch-receipts", "lanes-ledger",
+              "loop/", ".coordinator/tickets.json")
+
+
+def live_state_only(path, *args, **kwargs):
+    """Open a file unless it is coordinator state this eval must not touch.
+
+    The lane legitimately reads model lists and the gateway's own files now, so
+    the ban is narrowed to the live state: the queue, the decisions board, the
+    receipts, the ledger and the tickets config.
+    """
+    name = str(path)
+    mode = args[0] if args else kwargs.get("mode", "r")
+    writing = any(flag in mode for flag in "wax+")
+    if writing and any(marker in name for marker in LIVE_STATE):
+        raise AssertionError(f"live filesystem forbidden (write): {name}")
+    return _REAL_OPEN(path, *args, **kwargs)
+
+
 def gate_pipeline():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     failures = []
+    # The reviewer chain is one list now (#552): the first entry is the gate's
+    # reviewer, the last is the fallback when its quota is exhausted.
+    chain = [entry["selection"]["instanceId"] for entry in lane.model_list.entries("review")]
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["openai-api"]),
-        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
-        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["openai-api"]),
+        ("checked-head", repo, "absent", "", {}, [chain[0]], None),
+        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
+        ("prompt-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"],
+         "coordinator/config/AGENT-RULES.md"),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
+        ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
         ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], None),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["codex"]),
-        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
-        ("ascend", "ascend/fixture", "absent", "", {}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"},
+         [chain[chain.index(chain[0]) + 1]], None),
+        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
+        ("ascend", "ascend/fixture", "absent", "", {}, [], None),
     ]
-    for name, target, verdict, reply, ledger, expected in cases:
+    for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
-        pr = dict(number=20, state="OPEN", headRefOid=head,
+        pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
-        def command(cmd, timeout=150):
+        def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
+                    head=head, reply=reply, verdict=verdict):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
+                # The pre-merge guard: the base and head the review was taken
+                # against, read in one call immediately before the merge.
+                return json.dumps({"baseRefName": "main", "headRefOid": head})
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName"]:
+                # The post-merge guard: a merged pull request cannot be
+                # retargeted, so this base is the one the merge landed on.
+                return json.dumps({"baseRefName": "main"})
+            if cmd[:2] == ["gh", "api"]:
+                # The changed paths of the pull request: the case decides
+                # whether they carry one prompt path or only code. The lane
+                # reads the pinned merge base and head trees first, so that a
+                # file list read by pull-request number never decides a merge;
+                # the slurped list is still served for a caller without a pin.
+                endpoint = cmd[-1]
+                path = changed or "a.py"
+                if "/files?per_page=100" in endpoint:
+                    exact(cmd[3], "--slurp")
+                    return json.dumps([[{"filename": changed}]] if changed else [[]])
+                if "/compare/" in endpoint:
+                    return json.dumps({"merge_base_commit": {"sha": "base"}})
+                if endpoint.endswith("/git/trees/base?recursive=1"):
+                    return json.dumps({"tree": [{"type": "blob", "path": path, "sha": "1"}]})
+                if endpoint.endswith("/git/trees/%s?recursive=1" % head):
+                    return json.dumps({"tree": [{"type": "blob", "path": path, "sha": "2"}]})
+                raise AssertionError(f"unexpected gh api read: {cmd}")
             if cmd == [lane.COORDQ, "list"]:
                 return ""
             if cmd[:2] == ["ticket", "gate"]:
@@ -421,7 +474,7 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args):
+        def threads(tool, args, head=head, verdict=verdict, reply=reply):
             if tool == "t3_thread_list":
                 exact(head[:8] in args["titleContains"], True)
                 return {"threads": [] if verdict == "absent" else [
@@ -432,15 +485,25 @@ def gate_pipeline():
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
+        def decision(item, actions=actions):
+            # The board write is the one live file this eval must not touch.
+            exact(item["id"], "prompt-merge-FIX-20")
+            exact(item["group"], "Coordinator")
+            exact(item["kind"], "action")
+            exact(item.get("options"), None)
+            actions.append("decisions")
+            return "wrote"
+
         try:
             with tempfile.TemporaryDirectory() as scratch, \
                  scratch_board(scratch), \
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "publish_decision", decision), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
-                 patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
+                 patch("builtins.open", side_effect=live_state_only):
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
             try:
@@ -1524,6 +1587,16 @@ def gate_round_cap():
         def command(cmd, timeout=150):
             if cmd[:3] == ["gh", "pr", "view"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd[:2] == ["gh", "api"]:
+                # The prompt classification this branch adds reads the pinned
+                # trees; every head here is code-only against its base.
+                endpoint = cmd[-1]
+                if "/compare/" in endpoint:
+                    return json.dumps({"merge_base_commit": {"sha": "base"}})
+                if endpoint.endswith("/git/trees/base?recursive=1"):
+                    return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]})
+                if "/git/trees/" in endpoint:
+                    return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]})
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):

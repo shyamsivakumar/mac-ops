@@ -793,6 +793,50 @@ reinstall:
 python3 install_coordinator.py
 ```
 
+## Prompt changes wait for Shyam (Refs #543)
+
+A prompt, skill or playbook change never auto-merges (Shyam, 2026-11-17).
+The gate merged such a pull request anyway (mac-ops #542), so the paths are
+now checked instead of remembered. One list lives in
+`coordinator/bin/prompt_paths.py` and two places read it:
+
+- `ticket gate` builds the brief with the no-merge sentence in place of the
+  merge order. The brief says do not merge and close nothing, and names the
+  change as prompt text.
+- The lane driver checks the same list before it merges a passing pull
+  request. On a prompt change it merges nothing and writes one item to
+  `~/Code/coordinator/decisions.json` (`kind: action`, id
+  `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
+  id, so a second pass replaces it instead of adding a second one. A pass
+  also takes the item down, but only once the pull request itself reports
+  `MERGED` or `CLOSED`: the open list a pass holds stops at 200 requests, so
+  an older open request can be missing from it without being settled, and a
+  state that cannot be read keeps the card until the next pass.
+
+A file list GitHub cannot give is not code: the read is retried, and a list
+still unknown defers the gate or the merge instead of guessing. A brief
+written without the list could order a merge of prompt text, so an unknown
+list never reads as clear. A list shorter than the pull request's own
+changed-file count is unknown too, because GitHub's files endpoint stops at
+3,000 and the dropped entry can be the prompt file; when the caller holds no
+count, the pull request itself is read for it. A list that can never be
+completed falls back to the complete diff, comparing the merge base's tree
+with the head's tree, so a 3,001-file pull request of ordinary code still
+merges while one that hides a prompt file still holds. That read is paginated and slurped like the rest,
+so the single pull request is the only row of a list and the count is read
+from that row. A renamed file counts
+under both names, so moving prompt text out of `prompts/` still holds the
+pull request. The list covers
+`AGENT-RULES.md`,
+`answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
+`code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
+`prompts/` directory.
+
+The replay is the registered `gate-pipeline` eval
+(`python3 coordinator/overnight/overnight selftest`): its `prompt-pass` case
+requires one decisions item and no merge, provides or fast-forward, and the
+negative control with the path list switched off must fail.
+
 ## Lane execution ownership (Refs #363)
 
 `overnight shift` runs the imported lane driver under its existing lock,

@@ -2,11 +2,11 @@ from contextlib import contextmanager
 import shlex
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 for _dir in (Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent / "bin"):
     if (_dir / "models.py").is_file() and str(_dir) not in sys.path:
@@ -16,12 +16,14 @@ import alarms
 import models as model_list
 import stall
 
-# The GitHub call path lives next to the coordq and ticket binaries: one
-# cache, one floor and one usage log for every caller.
+# The GitHub call path and the prompt paths live next to the coordq and ticket
+# binaries: one cache, one floor and one usage log for every caller, and the
+# lane reads the same prompt list the gate brief does (Refs #543).
 _BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
+import prompt_paths
 
 # The lane driver loads inside the overnight command, so it names itself on
 # its own calls. A process-wide name would charge every later overnight call
@@ -103,7 +105,7 @@ def board_snapshot(ledger, force=False):
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup"
+    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles"
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
@@ -439,8 +441,10 @@ def pr_action_skip(repo, number):
         return pr, f"skip #{number}: missing PR branch names"
     if any(branch.startswith("herdr/") for branch in branches):
         return pr, f"skip #{number}: herdr branch, Shyam merges"
-    if pr.get("state") != "OPEN":
+    if pr.get("state") in ("MERGED", "CLOSED"):
         return pr, f"skip #{number}: PR is merged or closed"
+    if pr.get("state") != "OPEN":
+        return pr, f"skip #{number}: PR state could not be read"
     return pr, None
 
 
@@ -733,6 +737,251 @@ def check_step(repo, proof_path):
     return "run the repo's full local check"
 
 
+def pr_paths(repo, number, changed_files=None):
+    """The paths a pull request changed, or None when GitHub cannot say.
+
+    Both names of a renamed file count. Moving `prompts/reviewer.md` to
+    `archive/reviewer.md` removed prompt text, so a read that looked at the
+    new name alone would let that pull request merge. A list shorter than
+    the pull request's own changed-file count may have left the one prompt
+    file out (the files endpoint stops at 3,000), so it is no list at all.
+    """
+    output = run(["gh", "api", "--paginate", "--slurp",
+                  f"repos/{repo}/pulls/{number}/files?per_page=100"])
+    try:
+        pages = json.loads(output or "[]")
+    except ValueError:
+        return None
+    entries = prompt_paths.page_entries(pages)
+    if entries is None:
+        return None
+    if not prompt_paths.list_is_complete(entries, changed_files):
+        return None
+    return prompt_paths.entries_paths(entries)
+
+
+def pr_changed_count(repo, number):
+    """The pull request's own changed-file count, or None when unreadable.
+
+    The count is what tells a complete file list from a capped one, so a list
+    read without it is deferred rather than trusted.
+    """
+    output = run(["gh", "api", f"repos/{repo}/pulls/{number}"])
+    try:
+        pull = json.loads(output or "{}")
+    except ValueError:
+        return None
+    count = pull.get("changed_files") if isinstance(pull, dict) else None
+    return count if isinstance(count, int) else None
+
+
+def api_json(endpoint):
+    """One `gh api` read of an endpoint, parsed as JSON."""
+    return json.loads(run(["gh", "api", endpoint]) or "{}")
+
+
+def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts=2):
+    """HOLD, CLEAR or UNKNOWN for the paths a pull request changed.
+
+    The merge base and the head are pinned by the caller, so their trees are
+    read first: a file list is read by pull-request number and describes
+    whatever head GitHub holds at that moment, so a code-only revision could
+    clear a prompt-changing head that is restored before the merge. An
+    unreadable tree diff is retried, then UNKNOWN: the lane defers a passing
+    pull request it cannot read instead of merging it blind.
+
+    A caller with no pinned pair has only the file list, and a list that is
+    unreadable or short is UNKNOWN.
+    """
+    if base and head:
+        return prompt_paths.scan_diff(api_json, repo, base, head, attempts)
+    try:
+        count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
+    except (RuntimeError, ValueError, subprocess.SubprocessError):
+        return prompt_paths.UNKNOWN
+    for _ in range(max(1, attempts)):
+        try:
+            paths = pr_paths(repo, number, count)
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
+            # A `gh` read that failed is retried, never guessed at.
+            continue
+        state = prompt_paths.prompt_scan(paths)
+        if state != prompt_paths.UNKNOWN:
+            return state
+    return prompt_paths.UNKNOWN
+
+
+def publish_decision(item):
+    """Put one item on Shyam's decisions board, under the board's lock."""
+    return alarms.board_update(DECISIONS_PATH, item["id"], "raise", item)
+
+
+def prompt_merge_item(repo, number, head):
+    """The one item Shyam answers to merge a prompt pull request that passed."""
+    key = CFG[repo]["key"]
+    return {"id": f"prompt-merge-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} passed its gate in {repo}. It changes prompt, skill or playbook "
+                      f"text, so it waits for you: merge it or close it."),
+            "why": (f"Prompt text never auto-merges (your rule), so the lane stopped at the verdict on "
+                    f"head {head[:8]} and merged nothing. Merge with "
+                    f"`gh pr merge {number} -R {repo} --squash --match-head-commit {head}`.")}
+
+
+def withdraw_decision(item_id):
+    """Take one item off Shyam's board, once the pull request is settled."""
+    return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
+
+
+def pull_settled(repo, number):
+    """True only when the pull request itself says it is merged or closed.
+
+    The open list the snapshot holds stops at 200 pull requests, so an older
+    open request can fall outside it; absence from that list is not proof
+    that Shyam settled it. Only the pull request's own state answers that,
+    and a read that fails answers nothing: the card stays until the state is
+    known rather than disappearing while its pull request is still open.
+    """
+    try:
+        state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                                "--json", "state,mergedAt"]))
+    except (subprocess.SubprocessError, RuntimeError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    return state.get("state") in ("MERGED", "CLOSED") or bool(state.get("mergedAt"))
+
+
+def reconcile_prompt_items(snapshot):
+    """Take merge asks off the board for pull requests Shyam settled.
+
+    A prompt pull request Shyam merged or closed between two passes is not in
+    the snapshot any more, so no per-pull-request action ever reaches its
+    item: the board would keep asking for work that is done. The items are
+    read once here and the stale ones are removed by the key and number their
+    id carries. A request that left the capped open list without being
+    settled is still open, so each candidate's own state is read before its
+    card goes. Return how many were removed.
+    """
+    try:
+        _bytes, board = alarms.read_board(Path(DECISIONS_PATH))
+    except OSError:
+        return 0
+    if not isinstance(board, dict):
+        return 0
+    repos_by_key = {CFG[repo]["key"]: repo for repo in CFG if repo in LANE_REPOS}
+    open_prs = {(repo, pull["number"]) for repo, data in snapshot["repos"].items()
+                for pull in data["prs"]}
+    removed = 0
+    for item in board.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", str(item.get("id") or ""))
+        if not match or match.group(1) not in repos_by_key:
+            continue
+        repo, number = repos_by_key[match.group(1)], int(match.group(2))
+        if (repo, number) in open_prs:
+            continue
+        if DRY:
+            continue
+        # Absent from the capped list is not settled: confirm it on the pull
+        # request, and leave the card when the state cannot be read.
+        if not pull_settled(repo, number):
+            continue
+        if withdraw_decision(item["id"]) == "wrote":
+            removed += 1
+    return removed
+
+
+def prompt_pass(repo, number, head, prompt):
+    """What the lane does with a passing pull request's path state.
+
+    A prompt, skill or playbook change never auto-merges (Shyam): the lane
+    stops at the verdict and asks him once. A dry run writes nothing at all,
+    and an unknown list defers to the next run rather than merging blind.
+    None means the merge may go ahead.
+    """
+    if prompt == prompt_paths.UNKNOWN:
+        return (f"skip #{number}: gate PASS, the changed-file list could not be read on "
+                f"head {head[:8]}, next run retries")
+    if prompt != prompt_paths.HOLD:
+        return None
+    if DRY:
+        return f"DRY hold #{number} {head}"
+    if publish_decision(prompt_merge_item(repo, number, head)) != "wrote":
+        return f"skip #{number}: prompt change, the decisions item could not be written"
+    return f"skip #{number}: gate PASS, prompt change, Shyam merges"
+
+
+def base_moved_item(repo, number, head, landed, base):
+    """The item Shyam answers when a merge landed on a base nobody reviewed.
+
+    The merge API pins no base, so the guard reads the base again after the
+    merge; a merge that landed elsewhere is not silently reported as a merge
+    on the reviewed base. The item is what makes that reach Shyam instead of
+    a log line nobody reads.
+    """
+    key = CFG[repo]["key"]
+    return {"id": f"base-moved-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} merged into `{landed}`, not the reviewed `{base}`: "
+                      f"read head {head[:8]} and decide whether to keep it."),
+            "why": ("The merge call pins the head only, so a retarget inside the last moment before "
+                    "it cannot be refused by the merge. Nothing was closed and main was not "
+                    "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
+
+
+def merge_on_reviewed_base(repo, number, head, base):
+    """Merge one pull request only when its base is still the reviewed one.
+
+    `--match-head-commit` pins the head, and nothing in the merge call pins
+    the base: a retarget leaves the head where it is. Two things guard the
+    interval around the merge. The base and head are read once immediately
+    before it, and a pull request that moved merges nothing. The base is read
+    once more after it: a merge cannot pin its base, so a retarget that slipped
+    into that interval would otherwise be reported as a merge on the reviewed
+    base. A merge that landed on another base is reported as one that is not
+    the reviewed review's, and the caller closes nothing and fast-forwards
+    nothing, so the outcome Shyam reads is never "merged as reviewed" for a
+    base nobody reviewed.
+    Return (merged, note): merged means the merge was issued onto the reviewed
+    base; note is the line the pass prints.
+
+    The residue this cannot remove, and why it is accepted:
+
+    The merge call pins the head and squashes, and the pull request carries the
+    base. So a retarget landing between the read above and the merge below is
+    merged into the new base, and the read after it reports that instead of
+    claiming a merge on the reviewed base. No GitHub merge call pins a base and
+    a head together: the `merges` endpoint names the base but cannot squash and
+    takes a head commit, and pushing the squash by hand bypasses the pull
+    request merge and is refused where direct pushes are restricted. Six
+    designs along those lines were built, each losing one of the properties
+    this rule needs, which is why the ticket's own merge is the one kept.
+
+    Who reaches the window: retargeting a pull request needs write access to
+    the repository, so on a private repository it is the owner racing his own
+    two calls, not an outsider. The prompt rule itself is unaffected: the
+    classification decides on the pull request's own diff, and anything the
+    pull request introduces against the base this review read still holds.
+    """
+    current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                              "--json", "baseRefName,headRefOid"])) or {}
+    if current.get("baseRefName") != base or current.get("headRefOid") != head:
+        return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
+                       f"{current.get('baseRefName')}, head {head[:8]} -> "
+                       f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
+    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    landed = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                             "--json", "baseRefName"])) or {}
+    if landed.get("baseRefName") != base:
+        # The pull request cannot be retargeted once it is merged, so the base
+        # it names now is the base the merge landed on. The item puts that in
+        # front of Shyam; the pass itself claims no merge.
+        published = publish_decision(base_moved_item(repo, number, head,
+                                                     landed.get("baseRefName"), base))
+        return False, (f"critical #{number}: the merge landed on base "
+                       f"{landed.get('baseRefName')}, not the reviewed {base}; nothing closed, "
+                       f"nothing fast-forwarded, Shyam has the item ({published})")
+    return True, f"#{number}: merged {head}"
 def message_title(repo, number, action, head):
     """The title of one message about one head of one pull request.
 
@@ -769,6 +1018,12 @@ def act_on_pr(repo, number, ledger):
         return None
     current_pr, skip = pr_action_skip(repo, number)
     if skip:
+        if current_pr.get("state") in ("MERGED", "CLOSED") and not DRY:
+            # The pull request says it is settled, so its merge ask is
+            # answered by whoever settled it. A state that did not come back
+            # says nothing, so the card stays: an unread state is not a
+            # closed pull request.
+            withdraw_decision(f"prompt-merge-{CFG[repo]['key']}-{number}")
         return skip
     pr = {**pr, **current_pr}
     state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
@@ -799,13 +1054,31 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
+        # A prompt, skill or playbook change never auto-merges (Refs #543):
+        # the hold comes first, so a prompt PR is written to the board before
+        # anything else looks at the merge.
+        held = prompt_pass(repo, number, head,
+                           prompt_pull(repo, number, pr.get("changedFiles"),
+                                       pr.get("baseRefName") or "main", head))
+        if held:
+            return held
+        # Main's gate-round bookkeeping: the round's decisions item must leave
+        # the board before the merge, or the merge waits.
         if not clear_gate_round_decision(repo, number, ledger):
             return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
+        base = pr.get("baseRefName") or "main"
         if DRY:
             return f"DRY merge #{number} {head}"
-        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+        # A retarget moves the pull request onto another base without moving
+        # its head, and the same head can then introduce prompt text it did
+        # not introduce against the base this pass classified. The base and
+        # head are read again inside the merge step, as close to the merge as
+        # the merge can be guarded: a pull request that moved merges nothing.
+        merged, note = merge_on_reviewed_base(repo, number, head, base)
+        if not merged:
+            return note
         if issue:
             ref = f"{repo}#{issue}"
             output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
@@ -813,7 +1086,7 @@ def act_on_pr(repo, number, ledger):
             if "is already closed" in output:
                 print(f"already-closed:{ref}: {output}")
         fast_forward_main(repo)
-        return f"#{number}: merged {head}"
+        return note
     if verdict == "FAIL":
         # The failed review in hand is one after the reviews the pull
         # request already had. The convergence rule gives it three
@@ -1767,6 +2040,9 @@ def main():
         run_pass(ledger)
         if not DRY:
             zero_merge(SNAPSHOT)
+            stale = reconcile_prompt_items(SNAPSHOT)
+            if stale:
+                print(f"BOARD removed {stale} settled merge ask(s)")
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
         if ledger.get("_item_failures", 0):
