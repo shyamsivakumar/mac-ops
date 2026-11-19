@@ -78,11 +78,13 @@ class BuilderChoice(unittest.TestCase):
         path.write_text(json.dumps({"blocked": {identity: {"reason": "usage limit"} for identity in identities}}))
 
     def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False, tickets=None,
-               worktree_exists=True, branch="builder/fixture", resolved=None):
+               worktree_exists=True, branch="builder/fixture", resolved=None, toplevel=None):
         """Replay one send and return the dispatch payload, or None."""
         calls = []
 
         def run(cmd, timeout=150):
+            if cmd[:1] == ["git"] and "--show-toplevel" in cmd:
+                return toplevel or thread.get("worktreePath", "")
             if cmd[:1] == ["git"] and "symbolic-ref" in cmd:
                 return head_ref(branch)
             calls.append(cmd)
@@ -218,6 +220,34 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_subfolder_of_a_herdr_workspace_takes_no_send(self):
+        # The thread is rooted in a subfolder, so its own name shows no
+        # herdr folder; the Git top-level folder does.
+        subfolder = "/fixture/.worktrees/mac-ops/herdr-example/src"
+        out, payload = self.launch(self.thread(MINIMAX, worktreePath=subfolder), branch="builder/topic",
+                                   toplevel="/fixture/.worktrees/mac-ops/herdr-example")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_subfolder_of_a_herdr_workspace_is_never_handed_off(self):
+        subfolder = "/fixture/.worktrees/mac-ops/herdr-example/src"
+        out, payload = self.launch(self.thread(SOL, worktreePath=subfolder), branch="builder/topic",
+                                   toplevel="/fixture/.worktrees/mac-ops/herdr-example")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_subfolder_of_a_herdr_workspace_is_barred(self):
+        def run(cmd, timeout=150):
+            if "--show-toplevel" in cmd:
+                return "/fixture/.worktrees/mac-ops/herdr-example"
+            if "symbolic-ref" in cmd:
+                return head_ref("builder/topic")
+            raise AssertionError(cmd)
+        with patch.object(self.lane, "run", run):
+            self.assertTrue(self.lane.barred_worktree("/fixture/.worktrees/mac-ops/herdr-example/src"))
+
     def test_a_worktree_whose_branch_cannot_be_read_takes_no_send(self):
         # The branch read answers nothing, so the worktree is not
         # confirmed to be outside herdr: it takes no send and no handoff.
@@ -245,6 +275,8 @@ class BuilderChoice(unittest.TestCase):
         def run(cmd, timeout=150):
             if "--abbrev-ref" in cmd:
                 return "heads/herdr/gh-trim"
+            if "--show-toplevel" in cmd:
+                return cmd[2]
             if "symbolic-ref" in cmd:
                 return "refs/heads/herdr/gh-trim"
             raise AssertionError(cmd)
@@ -265,6 +297,8 @@ class BuilderChoice(unittest.TestCase):
         calls = []
 
         def run(cmd, timeout=150):
+            if "--show-toplevel" in cmd:
+                return cmd[2]
             if cmd[:1] == ["git"]:
                 return head_ref("herdr/gh-trim")
             calls.append(cmd)
@@ -367,6 +401,8 @@ class DeadRunChoice(unittest.TestCase):
             raise AssertionError(f"unexpected T3 call {tool}")
 
         def run(cmd, timeout=150):
+            if cmd[0] == "git" and "--show-toplevel" in cmd:
+                return cmd[2]
             if cmd[0] == "git" and "symbolic-ref" in cmd:
                 return head_ref(branch)
             if cmd[0] == "git":
@@ -569,6 +605,8 @@ class UnstickBuilders(unittest.TestCase):
             return mock_open(read_data="unstick {list} in {repo}")()
 
         def run(cmd, timeout=150):
+            if "--show-toplevel" in cmd:
+                return cmd[2]
             if cmd[:1] == ["git"]:
                 return head_ref(root_branch)
             launches.append(json.loads(cmd[2]))
@@ -655,6 +693,8 @@ class HeldContinue(unittest.TestCase):
         def run(cmd, timeout=150):
             if cmd[:2] == ["ticket", "start"]:
                 return "started"
+            if "--show-toplevel" in cmd:
+                return cmd[2]
             if cmd[:1] == ["git"]:
                 return head_ref("builder/fixture")
             queued.append(json.loads(cmd[2]))
