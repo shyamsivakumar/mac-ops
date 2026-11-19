@@ -20,15 +20,18 @@
       "id": "bot2",
       "label": "Bot 2",
       "repository": "~/Code/strategy-replay-workbench",
-      "liveRef": null,
+      "liveRef": "origin/fix/srw-689-bot2-keep-colors",
       "rollbackSha": null,
-      "rollbackCommands": null,
+      "rollbackCommands": [
+        ["git", "checkout", "--detach", "{sha}"],
+        ["railway", "up", "--ci", "--project", "7eee29d1-22a7-42a4-eec0-8e8552c864c5", "--service", "bot2", "--environment", "production"]
+      ],
       "healthUrlEnv": "BOT2_HEALTH_URL",
       "healthPath": "/health",
       "healthMustShowSha": true,
       "healthShaField": "sourceSha",
       "healthTimeoutSeconds": 300,
-      "note": "Bot 2's live commit is not carried by a ref in this repository: the promotion path records it in the Railway deployment history, not in git. Name the ref and the rollback command here once that record is read, and the command will print Bot 2's steps the way it prints Bot 1's. Until then the dry run prints each Bot 2 step as not recorded."
+      "note": "The promotion path pushes the branch and the bot2 service deploys it, so the rollback checks the recorded SHA out in the checkout and deploys the service again. The project and the service name come from railway.bot2.json; the dry run prints them for the operator to confirm before anything is run, and the checkout is restored to its branch afterwards. The branch's first push created the branch, so it recorded no commit to roll back to: the rollback SHA for Bot 2 comes from the deployment history and is pinned in rollbackSha once that history is read."
     }
   ]
 }

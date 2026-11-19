@@ -38,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "bot-rollback.json"
 CONFIG_SCHEMA_VERSION = 1
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+ZERO_SHA = "0" * 40
 
 
 class ConfigError(Exception):
@@ -258,6 +259,11 @@ def recorded_rollback_sha(bot, repo, live_sha):
         return None, (
             f"the latest recorded push to {live_branch(bot)} ends at {after}, not at the live "
             f"commit {live_sha}; fetch the ref or pin the rollback SHA in the config"
+        )
+    if before == ZERO_SHA:
+        return None, (
+            f"the first push to {live_branch(bot)} created the branch, so it recorded no commit to "
+            "roll back to; pin the rollback SHA in the config"
         )
     return before, None
 

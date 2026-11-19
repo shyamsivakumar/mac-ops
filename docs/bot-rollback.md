@@ -123,17 +123,21 @@ decision outside the scope of the command and its dry run.
 
 ## Where Bot 2 stands
 
-Bot 1's path is complete: its live commit is carried by `origin/paper-live`
-and the promotion path's own script rolls it back. Bot 2's live commit is not
-carried by a ref in the repository. The promotion path records it in the
-Railway deployment history, so the config marks Bot 2 unresolved rather than
-guessing a commit. The dry run prints every Bot 2 step it lacks as `not recorded`. Naming Bot 2's ref and its rollback command in
-`config/bot-rollback.json` is the remaining work, and the command then prints
-Bot 2's steps the way it prints Bot 1's.
+Bot 1's path is complete. Its live commit is carried by `origin/paper-live`,
+GitHub's push record for that branch holds the commit it moved Bot 1 from,
+and the promotion path's own script rolls it back.
 
-## Files
+Bot 2's live commit is carried by `origin/fix/srw-689-bot2-keep-colors`, and
+the config names the commands that roll it back: the recorded SHA is checked
+out and the bot2 service is deployed again, with the project and the service
+name taken from `railway.bot2.json`. The dry run prints them for the operator
+to confirm before anything runs.
 
-- `scripts/bot_rollback.py` — the command.
-- `config/bot-rollback.json` — the bots, their refs and their commands.
-- `tests/test_bot_rollback.py` — the config contract, the dry run and the
-  execute path.
+One thing Bot 2 does not have is a rollback SHA. That branch's first push
+created the branch, so its push record holds no commit to roll back to, and
+the commit Bot 2 ran before that one lives in the deployment history rather
+than in git. The command reports that and prints every other Bot 2 step, and
+the SHA is pinned in `rollbackSha` once the deployment history is read. A
+rollback to a guessed commit is worse than no rollback, so the command does
+not guess.
+
