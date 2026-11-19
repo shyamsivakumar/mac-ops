@@ -71,7 +71,7 @@ class BuilderChoice(unittest.TestCase):
         path.write_text(json.dumps({"blocked": {identity: {"reason": "usage limit"} for identity in identities}}))
 
     def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False, tickets=None,
-               worktree_exists=True, branch="builder/fixture"):
+               worktree_exists=True, branch="builder/fixture", resolved=None):
         """Replay one send and return the dispatch payload, or None."""
         calls = []
 
@@ -81,6 +81,9 @@ class BuilderChoice(unittest.TestCase):
             calls.append(cmd)
             return "#1 p0 started"
 
+        def realpath(path):
+            return resolved or path
+
         snapshot = {"tickets": tickets or [], "repos": {REPO: {"prs": [], "issues": [
             {"number": 10, "labels": ([{"name": f"builder:{builder_label}"}] if builder_label else [])}]}}}
         with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
@@ -89,6 +92,7 @@ class BuilderChoice(unittest.TestCase):
              patch.object(self.lane, "root_workspace", return_value=root_workspace), \
              patch.object(self.lane, "branch_on_origin", return_value=True), \
              patch.object(self.lane.os.path, "isdir", return_value=worktree_exists), \
+             patch.object(self.lane.os.path, "realpath", realpath), \
              patch.object(self.lane, "SNAPSHOT", snapshot), \
              patch.object(self.lane, "read_json", return_value={"number": 20, "state": "OPEN",
                                                                "headRefName": "builder/fixture",
@@ -159,6 +163,25 @@ class BuilderChoice(unittest.TestCase):
         thread = {**self.thread(MINIMAX),
                   "worktreePath": "/Users/shyamsivakumar/.herdr/worktrees/mac-ops/work-2-example"}
         out, payload = self.launch(thread, branch="builder/topic")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_symlink_into_a_herdr_workspace_takes_no_send(self):
+        # The worktree path is an ordinary-named symlink into the herdr
+        # workspace. Git follows it, so the branch reads as an ordinary
+        # one and only the resolved folder shows the workspace.
+        out, payload = self.launch(self.thread(MINIMAX), branch="builder/topic",
+                                   resolved="/Users/shyamsivakumar/.herdr/worktrees/mac-ops/work-2-example")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_symlink_into_a_herdr_workspace_is_never_handed_off(self):
+        # The same symlink, reached by the reroute: the work is never
+        # handed to a builder in that folder.
+        out, payload = self.launch(self.thread(SOL), branch="builder/topic",
+                                   resolved="/Users/shyamsivakumar/.herdr/worktrees/mac-ops/work-2-example")
         self.assertNotIn("threadId", payload)
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
