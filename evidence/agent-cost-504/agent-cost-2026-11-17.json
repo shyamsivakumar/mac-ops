@@ -1,8 +1,8 @@
 {
-  "attributed_cost_usd": 214.39211837500002,
-  "cost_per_pr_usd": 2.552287123511905,
+  "attributed_cost_usd": 168.93008611000002,
+  "cost_per_pr_usd": 2.0601230013414638,
   "day": "2026-11-17",
-  "generated_at": "2026-11-19T01:51:18.683304Z",
+  "generated_at": "2026-11-19T02:19:05.640759Z",
   "measured_days": [
     "2026-11-10",
     "2026-11-11",
@@ -16,30 +16,8 @@
     "2026-11-19",
     "2026-11-20"
   ],
-  "pr_count": 84,
+  "pr_count": 82,
   "prs": [
-    {
-      "cost_usd": 30.595001684999986,
-      "kinds": {
-        "branch": 9,
-        "review": 19
-      },
-      "merged_at": null,
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "glm-5.3",
-        "gpt-6-astra",
-        "gpt-6.2-astra"
-      ],
-      "number": 499,
-      "pr": "shyamsivakumar/mac-ops#499",
-      "repo": "shyamsivakumar/mac-ops",
-      "sessions": 28,
-      "state": "CLOSED",
-      "title": "Reviews on GPT-6.2 Astra only; builds on GLM or MiniMax (Refs #497)",
-      "tokens": 114688242,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/499"
-    },
     {
       "cost_usd": 22.644894969999992,
       "kinds": {
@@ -83,43 +61,26 @@
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/498"
     },
     {
-      "cost_usd": 9.176641702000001,
+      "cost_usd": 9.238939525,
       "kinds": {
-        "ticket": 6
-      },
-      "merged_at": "2026-11-16T13:26:21Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "composer-2.5",
-        "deepseek-flash",
-        "glm-5.3"
-      ],
-      "number": 1209,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1209",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 6,
-      "state": "MERGED",
-      "title": "Census worker: release only the lock this worker took and bound the held bytes truthfully (Refs #1160)",
-      "tokens": 506150692,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1209"
-    },
-    {
-      "cost_usd": 8.778015750000003,
-      "kinds": {
-        "branch": 2
+        "branch": 7,
+        "review": 19
       },
       "merged_at": null,
       "models": [
-        "MiniMax-M3.1-Flash"
+        "MiniMax-M3.1-Flash",
+        "glm-5.3",
+        "gpt-6-astra",
+        "gpt-6.2-astra"
       ],
-      "number": 545,
-      "pr": "shyamsivakumar/mac-ops#545",
+      "number": 499,
+      "pr": "shyamsivakumar/mac-ops#499",
       "repo": "shyamsivakumar/mac-ops",
-      "sessions": 2,
-      "state": "OPEN",
-      "title": "Ignore agent bootstrap files and remove finished worktrees (Refs #514)",
-      "tokens": 496737305,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/545"
+      "sessions": 26,
+      "state": "CLOSED",
+      "title": "Reviews on GPT-6.2 Astra only; builds on GLM or MiniMax (Refs #497)",
+      "tokens": 39171932,
+      "url": "https://github.com/shyamsivakumar/mac-ops/pull/499"
     },
     {
       "cost_usd": 6.8333254519999995,
@@ -244,27 +205,6 @@
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/480"
     },
     {
-      "cost_usd": 4.01970118,
-      "kinds": {
-        "branch": 2,
-        "pr": 1,
-        "review": 4
-      },
-      "merged_at": "2026-11-17T15:26:36Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6-astra"
-      ],
-      "number": 104,
-      "pr": "digitized/Concerning#104",
-      "repo": "digitized/Concerning",
-      "sessions": 7,
-      "state": "MERGED",
-      "title": "Build: report the build commit on each service's health (Refs #103)",
-      "tokens": 18630873,
-      "url": "https://github.com/digitized/Concerning/pull/104"
-    },
-    {
       "cost_usd": 4.0026455,
       "kinds": {
         "review": 4
@@ -281,6 +221,27 @@
       "title": "Settle or flag no-receipt dead threads once (Refs #489)",
       "tokens": 1009461,
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/490"
+    },
+    {
+      "cost_usd": 3.7858333899999996,
+      "kinds": {
+        "branch": 1,
+        "pr": 1,
+        "review": 4
+      },
+      "merged_at": "2026-11-17T15:26:36Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
+      ],
+      "number": 104,
+      "pr": "digitized/Concerning#104",
+      "repo": "digitized/Concerning",
+      "sessions": 6,
+      "state": "MERGED",
+      "title": "Build: report the build commit on each service's health (Refs #103)",
+      "tokens": 7488429,
+      "url": "https://github.com/digitized/Concerning/pull/104"
     },
     {
       "cost_usd": 3.6033692119999996,
@@ -301,25 +262,6 @@
       "title": "fix(splash): respect Reduce Motion during the splash (JAR-37)",
       "tokens": 3616847,
       "url": "https://github.com/shyamsivakumar/CineJar/pull/73"
-    },
-    {
-      "cost_usd": 3.412442548,
-      "kinds": {
-        "branch": 8
-      },
-      "merged_at": null,
-      "models": [
-        "deepseek-flash",
-        "glm-5.3"
-      ],
-      "number": 534,
-      "pr": "shyamsivakumar/mac-ops#534",
-      "repo": "shyamsivakumar/mac-ops",
-      "sessions": 8,
-      "state": "OPEN",
-      "title": "Machine-enforce the agent deny list in each tool's real check point (Refs #530)",
-      "tokens": 42429045,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/534"
     },
     {
       "cost_usd": 3.1890544799999994,
@@ -381,23 +323,25 @@
       "url": "https://github.com/digitized/Concerning/pull/22"
     },
     {
-      "cost_usd": 2.5677990719999997,
+      "cost_usd": 2.660601459999999,
       "kinds": {
-        "branch": 7
+        "ticket": 6
       },
-      "merged_at": "2026-11-18T10:57:11Z",
+      "merged_at": "2026-11-16T13:26:21Z",
       "models": [
         "MiniMax-M3.1-Flash",
-        "deepseek-flash"
+        "composer-2.5",
+        "deepseek-flash",
+        "glm-5.3"
       ],
-      "number": 538,
-      "pr": "shyamsivakumar/mac-ops#538",
-      "repo": "shyamsivakumar/mac-ops",
-      "sessions": 7,
+      "number": 1209,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1209",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 6,
       "state": "MERGED",
-      "title": "Run a close checklist before the coordinator closes a ticket (Refs #524)",
-      "tokens": 123045896,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/538"
+      "title": "Census worker: release only the lock this worker took and bound the held bytes truthfully (Refs #1160)",
+      "tokens": 69187250,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1209"
     },
     {
       "cost_usd": 2.55119363,
@@ -458,44 +402,40 @@
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1254"
     },
     {
-      "cost_usd": 2.1937901650000002,
+      "cost_usd": 2.078405,
       "kinds": {
-        "branch": 1,
-        "review": 2
-      },
-      "merged_at": "2026-11-17T21:52:51Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6-astra"
-      ],
-      "number": 1276,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1276",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 3,
-      "state": "MERGED",
-      "title": "Refs #1272: point the lookahead proof at the preserved development data",
-      "tokens": 5986957,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1276"
-    },
-    {
-      "cost_usd": 2.1601016,
-      "kinds": {
-        "branch": 1,
         "review": 2
       },
       "merged_at": "2026-11-17T21:36:59Z",
       "models": [
-        "MiniMax-M3.1-Flash",
         "gpt-6-astra"
       ],
       "number": 1274,
       "pr": "shyamsivakumar/strategy-replay-workbench#1274",
       "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 3,
+      "sessions": 2,
       "state": "MERGED",
       "title": "Record learner cron slot check after the pause (Refs #1264)",
-      "tokens": 3913895,
+      "tokens": 535262,
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1274"
+    },
+    {
+      "cost_usd": 2.0765635000000002,
+      "kinds": {
+        "review": 2
+      },
+      "merged_at": "2026-11-17T21:52:51Z",
+      "models": [
+        "gpt-6-astra"
+      ],
+      "number": 1276,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1276",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 2,
+      "state": "MERGED",
+      "title": "Refs #1272: point the lookahead proof at the preserved development data",
+      "tokens": 576565,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1276"
     },
     {
       "cost_usd": 2.06117566,
@@ -554,27 +494,6 @@
       "url": "https://github.com/shyamsivakumar/CineJar/pull/63"
     },
     {
-      "cost_usd": 1.9224074679999998,
-      "kinds": {
-        "branch": 3,
-        "review": 1
-      },
-      "merged_at": "2026-11-17T20:32:43Z",
-      "models": [
-        "deepseek-flash",
-        "gpt-6-astra",
-        "gpt-6.1-terra"
-      ],
-      "number": 1262,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1262",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 4,
-      "state": "MERGED",
-      "title": "Document staging learner volume investigation (Refs #1251)",
-      "tokens": 5807790,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1262"
-    },
-    {
       "cost_usd": 1.8112735,
       "kinds": {
         "review": 2
@@ -609,27 +528,6 @@
       "title": "OPN-11: launch an unsigned iPhone simulator app",
       "tokens": 577262,
       "url": "https://github.com/shyamsivakumar/openscan/pull/10"
-    },
-    {
-      "cost_usd": 1.639955541,
-      "kinds": {
-        "branch": 2,
-        "review": 1
-      },
-      "merged_at": "2026-11-17T18:47:25Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "deepseek-flash",
-        "gpt-6-astra"
-      ],
-      "number": 33,
-      "pr": "shyamsivakumar/scripture-scroll#33",
-      "repo": "shyamsivakumar/scripture-scroll",
-      "sessions": 3,
-      "state": "MERGED",
-      "title": "fix(i18n): pseudo-locale and Tamil screenshots at 390 px, with the two fixes they found",
-      "tokens": 14215551,
-      "url": "https://github.com/shyamsivakumar/scripture-scroll/pull/33"
     },
     {
       "cost_usd": 1.6326619999999998,
@@ -711,24 +609,44 @@
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1259"
     },
     {
-      "cost_usd": 1.5226633840000001,
+      "cost_usd": 1.5456711650000003,
       "kinds": {
-        "branch": 2,
+        "branch": 1,
         "review": 1
       },
-      "merged_at": "2026-11-17T20:31:39Z",
+      "merged_at": "2026-11-17T21:39:45Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
+      ],
+      "number": 1275,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1275",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 2,
+      "state": "MERGED",
+      "title": "Preserve learner dataset fingerprint and restore schedule configuration",
+      "tokens": 5829996,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1275"
+    },
+    {
+      "cost_usd": 1.545378468,
+      "kinds": {
+        "branch": 1,
+        "review": 1
+      },
+      "merged_at": "2026-11-17T20:32:43Z",
       "models": [
         "deepseek-flash",
         "gpt-6-astra"
       ],
-      "number": 1263,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1263",
+      "number": 1262,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1262",
       "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 3,
+      "sessions": 2,
       "state": "MERGED",
-      "title": "Refs #1261: Lane 3 entry funnel research (silent zero-entry risk)",
-      "tokens": 7448402,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1263"
+      "title": "Document staging learner volume investigation (Refs #1251)",
+      "tokens": 2967105,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1262"
     },
     {
       "cost_usd": 1.5216215500000003,
@@ -787,26 +705,6 @@
       "title": "[orb] TNR-25: Show failed live playback with a retry action (Refs #24)",
       "tokens": 2309389,
       "url": "https://github.com/shyamsivakumar/tunerise/pull/32"
-    },
-    {
-      "cost_usd": 1.50457078,
-      "kinds": {
-        "branch": 3,
-        "review": 3
-      },
-      "merged_at": "2026-11-18T00:29:23Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6.2-astra"
-      ],
-      "number": 13,
-      "pr": "shyamsivakumar/openscan#13",
-      "repo": "shyamsivakumar/openscan",
-      "sessions": 6,
-      "state": "MERGED",
-      "title": "OPN-13: preview the assembled document as a PDF",
-      "tokens": 10943622,
-      "url": "https://github.com/shyamsivakumar/openscan/pull/13"
     },
     {
       "cost_usd": 1.47537446,
@@ -870,22 +768,62 @@
       "url": "https://github.com/shyamsivakumar/openscan/pull/12"
     },
     {
-      "cost_usd": 1.4284445000000003,
+      "cost_usd": 1.429289008,
+      "kinds": {
+        "branch": 1,
+        "review": 1
+      },
+      "merged_at": "2026-11-17T20:31:39Z",
+      "models": [
+        "deepseek-flash",
+        "gpt-6-astra"
+      ],
+      "number": 1263,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1263",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 2,
+      "state": "MERGED",
+      "title": "Refs #1261: Lane 3 entry funnel research (silent zero-entry risk)",
+      "tokens": 2132768,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1263"
+    },
+    {
+      "cost_usd": 1.3593221,
+      "kinds": {
+        "pr": 1,
+        "review": 1
+      },
+      "merged_at": "2026-11-17T21:26:19Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
+      ],
+      "number": 1271,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1271",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 2,
+      "state": "MERGED",
+      "title": "Pause learner cron schedule in staging (Refs #1264)",
+      "tokens": 3755551,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1271"
+    },
+    {
+      "cost_usd": 1.3204770000000001,
       "kinds": {
         "review": 1
       },
-      "merged_at": "2026-11-17T21:39:45Z",
+      "merged_at": "2026-11-17T18:47:25Z",
       "models": [
         "gpt-6-astra"
       ],
-      "number": 1275,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1275",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 33,
+      "pr": "shyamsivakumar/scripture-scroll#33",
+      "repo": "shyamsivakumar/scripture-scroll",
       "sessions": 1,
       "state": "MERGED",
-      "title": "Preserve learner dataset fingerprint and restore schedule configuration",
-      "tokens": 419604,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1275"
+      "title": "fix(i18n): pseudo-locale and Tamil screenshots at 390 px, with the two fixes they found",
+      "tokens": 380892,
+      "url": "https://github.com/shyamsivakumar/scripture-scroll/pull/33"
     },
     {
       "cost_usd": 1.3155970000000001,
@@ -904,6 +842,26 @@
       "title": "feat(i18n): dev-only pseudo locale and translation parity check",
       "tokens": 431805,
       "url": "https://github.com/shyamsivakumar/scripture-scroll/pull/32"
+    },
+    {
+      "cost_usd": 1.31404384,
+      "kinds": {
+        "branch": 1,
+        "review": 3
+      },
+      "merged_at": "2026-11-18T00:29:23Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6.2-astra"
+      ],
+      "number": 13,
+      "pr": "shyamsivakumar/openscan#13",
+      "repo": "shyamsivakumar/openscan",
+      "sessions": 4,
+      "state": "MERGED",
+      "title": "OPN-13: preview the assembled document as a PDF",
+      "tokens": 2283279,
+      "url": "https://github.com/shyamsivakumar/openscan/pull/13"
     },
     {
       "cost_usd": 1.304864,
@@ -958,24 +916,6 @@
       "title": "Keep learner container idle for SPY projection upload (Refs #1280)",
       "tokens": 383503,
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1281"
-    },
-    {
-      "cost_usd": 1.2776255,
-      "kinds": {
-        "review": 1
-      },
-      "merged_at": "2026-11-17T21:26:19Z",
-      "models": [
-        "gpt-6-astra"
-      ],
-      "number": 1271,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1271",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 1,
-      "state": "MERGED",
-      "title": "Pause learner cron schedule in staging (Refs #1264)",
-      "tokens": 376918,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1271"
     },
     {
       "cost_usd": 1.26168966,
@@ -1110,69 +1050,22 @@
       "url": "https://github.com/shyamsivakumar/recoup/pull/22"
     },
     {
-      "cost_usd": 0.7418068999999999,
+      "cost_usd": 0.536315268,
       "kinds": {
-        "branch": 7,
-        "review": 1
-      },
-      "merged_at": "2026-11-18T02:27:22Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "glm-5.3",
-        "gpt-6-astra"
-      ],
-      "number": 1291,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1291",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 8,
-      "state": "MERGED",
-      "title": "SRW-1202: production learner for Bot 1 - diagnosis (Refs #1288)",
-      "tokens": 18609030,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1291"
-    },
-    {
-      "cost_usd": 0.6633903150000001,
-      "kinds": {
-        "branch": 4,
-        "review": 2
+        "branch": 5
       },
       "merged_at": null,
       "models": [
-        "MiniMax-M3.1-Flash",
-        "deepseek-flash",
-        "gpt-6-astra",
-        "gpt-6.2-astra"
+        "deepseek-flash"
       ],
-      "number": 222,
-      "pr": "shyamsivakumar/sams-llm-wiki#222",
-      "repo": "shyamsivakumar/sams-llm-wiki",
-      "sessions": 6,
-      "state": "OPEN",
-      "title": "docs: explain refactoring, design, and code health ideas",
-      "tokens": 26078686,
-      "url": "https://github.com/shyamsivakumar/sams-llm-wiki/pull/222"
-    },
-    {
-      "cost_usd": 0.6459487199999999,
-      "kinds": {
-        "branch": 6,
-        "review": 2
-      },
-      "merged_at": "2026-11-18T05:41:05Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "deepseek-flash",
-        "glm-5.3",
-        "gpt-6-astra"
-      ],
-      "number": 529,
-      "pr": "shyamsivakumar/mac-ops#529",
+      "number": 534,
+      "pr": "shyamsivakumar/mac-ops#534",
       "repo": "shyamsivakumar/mac-ops",
-      "sessions": 8,
-      "state": "MERGED",
-      "title": "Mute the merge alert for four hours once acknowledged (Refs #496)",
-      "tokens": 34941200,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/529"
+      "sessions": 5,
+      "state": "OPEN",
+      "title": "Machine-enforce the agent deny list in each tool's real check point (Refs #530)",
+      "tokens": 33275611,
+      "url": "https://github.com/shyamsivakumar/mac-ops/pull/534"
     },
     {
       "cost_usd": 0.48839253599999993,
@@ -1197,47 +1090,30 @@
       "url": "https://github.com/shyamsivakumar/tunerise/pull/36"
     },
     {
-      "cost_usd": 0.4506441149999998,
+      "cost_usd": 0.4659729450000001,
       "kinds": {
-        "branch": 4,
-        "review": 9
-      },
-      "merged_at": "2026-11-18T02:18:10Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6.2-astra"
-      ],
-      "number": 509,
-      "pr": "shyamsivakumar/mac-ops#509",
-      "repo": "shyamsivakumar/mac-ops",
-      "sessions": 13,
-      "state": "MERGED",
-      "title": "Give each host its own heavy memory headroom (Refs #508)",
-      "tokens": 20505476,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/509"
-    },
-    {
-      "cost_usd": 0.4321664160000001,
-      "kinds": {
-        "branch": 6
+        "branch": 3,
+        "review": 2
       },
       "merged_at": null,
       "models": [
-        "deepseek-flash"
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra",
+        "gpt-6.2-astra"
       ],
-      "number": 536,
-      "pr": "shyamsivakumar/mac-ops#536",
-      "repo": "shyamsivakumar/mac-ops",
-      "sessions": 6,
+      "number": 222,
+      "pr": "shyamsivakumar/sams-llm-wiki#222",
+      "repo": "shyamsivakumar/sams-llm-wiki",
+      "sessions": 5,
       "state": "OPEN",
-      "title": "A verdictless gate falls back one reviewer, and an exhausted reviewer is blocked for every head (Refs #532)",
-      "tokens": 26787763,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/536"
+      "title": "docs: explain refactoring, design, and code health ideas",
+      "tokens": 17001532,
+      "url": "https://github.com/shyamsivakumar/sams-llm-wiki/pull/222"
     },
     {
-      "cost_usd": 0.42358892399999987,
+      "cost_usd": 0.312553716,
       "kinds": {
-        "branch": 7
+        "branch": 6
       },
       "merged_at": null,
       "models": [
@@ -1246,52 +1122,11 @@
       "number": 537,
       "pr": "shyamsivakumar/mac-ops#537",
       "repo": "shyamsivakumar/mac-ops",
-      "sessions": 7,
+      "sessions": 6,
       "state": "OPEN",
       "title": "Fall back to the next builder when a provider runs out (Refs #531)",
-      "tokens": 23952675,
+      "tokens": 18398238,
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/537"
-    },
-    {
-      "cost_usd": 0.35001977999999995,
-      "kinds": {
-        "branch": 2,
-        "review": 3
-      },
-      "merged_at": "2026-11-18T02:19:48Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6-astra",
-        "gpt-6.2-astra"
-      ],
-      "number": 1290,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1290",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 5,
-      "state": "MERGED",
-      "title": "SRW-1283: reuse the passing runtime-tree receipt in the release-gate lane (Refs #1283)",
-      "tokens": 15009670,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1290"
-    },
-    {
-      "cost_usd": 0.31673937,
-      "kinds": {
-        "branch": 2,
-        "review": 1
-      },
-      "merged_at": "2026-11-18T03:17:42Z",
-      "models": [
-        "MiniMax-M3.1-Flash",
-        "gpt-6-astra"
-      ],
-      "number": 1296,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1296",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 3,
-      "state": "MERGED",
-      "title": "SRW-1204: record the post-merge production deploy of the learner (Refs #1292)",
-      "tokens": 15097901,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1296"
     },
     {
       "cost_usd": 0.282086775,
@@ -1311,6 +1146,24 @@
       "title": "TNR-25: show failed live playback with a retry action (Refs #24)",
       "tokens": 13421721,
       "url": "https://github.com/shyamsivakumar/tunerise/pull/33"
+    },
+    {
+      "cost_usd": 0.26381563199999997,
+      "kinds": {
+        "branch": 4
+      },
+      "merged_at": "2026-11-18T10:57:11Z",
+      "models": [
+        "deepseek-flash"
+      ],
+      "number": 538,
+      "pr": "shyamsivakumar/mac-ops#538",
+      "repo": "shyamsivakumar/mac-ops",
+      "sessions": 4,
+      "state": "MERGED",
+      "title": "Run a close checklist before the coordinator closes a ticket (Refs #524)",
+      "tokens": 12849212,
+      "url": "https://github.com/shyamsivakumar/mac-ops/pull/538"
     },
     {
       "cost_usd": 0.2541968,
@@ -1349,6 +1202,24 @@
       "title": "Keep exactly one stage label on a started ticket (Refs #533)",
       "tokens": 16783072,
       "url": "https://github.com/shyamsivakumar/mac-ops/pull/535"
+    },
+    {
+      "cost_usd": 0.25247646000000007,
+      "kinds": {
+        "branch": 5
+      },
+      "merged_at": null,
+      "models": [
+        "deepseek-flash"
+      ],
+      "number": 536,
+      "pr": "shyamsivakumar/mac-ops#536",
+      "repo": "shyamsivakumar/mac-ops",
+      "sessions": 5,
+      "state": "OPEN",
+      "title": "A verdictless gate falls back one reviewer, and an exhausted reviewer is blocked for every head (Refs #532)",
+      "tokens": 16016458,
+      "url": "https://github.com/shyamsivakumar/mac-ops/pull/536"
     },
     {
       "cost_usd": 0.23283069599999992,
@@ -1391,6 +1262,27 @@
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1293"
     },
     {
+      "cost_usd": 0.21432707999999998,
+      "kinds": {
+        "branch": 5,
+        "review": 2
+      },
+      "merged_at": "2026-11-18T05:41:05Z",
+      "models": [
+        "deepseek-flash",
+        "glm-5.3",
+        "gpt-6-astra"
+      ],
+      "number": 529,
+      "pr": "shyamsivakumar/mac-ops#529",
+      "repo": "shyamsivakumar/mac-ops",
+      "sessions": 7,
+      "state": "MERGED",
+      "title": "Mute the merge alert for four hours once acknowledged (Refs #496)",
+      "tokens": 11233097,
+      "url": "https://github.com/shyamsivakumar/mac-ops/pull/529"
+    },
+    {
       "cost_usd": 0.21082295999999995,
       "kinds": {
         "ticket": 2
@@ -1407,6 +1299,26 @@
       "title": "JAR-27: ensure heavy on iOS agent PATH",
       "tokens": 9249311,
       "url": "https://github.com/shyamsivakumar/CineJar/pull/39"
+    },
+    {
+      "cost_usd": 0.20319886499999992,
+      "kinds": {
+        "branch": 3,
+        "review": 9
+      },
+      "merged_at": "2026-11-18T02:18:10Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6.2-astra"
+      ],
+      "number": 509,
+      "pr": "shyamsivakumar/mac-ops#509",
+      "repo": "shyamsivakumar/mac-ops",
+      "sessions": 12,
+      "state": "MERGED",
+      "title": "Give each host its own heavy memory headroom (Refs #508)",
+      "tokens": 8738488,
+      "url": "https://github.com/shyamsivakumar/mac-ops/pull/509"
     },
     {
       "cost_usd": 0.184085325,
@@ -1446,22 +1358,24 @@
       "url": "https://github.com/shyamsivakumar/CineJar/pull/37"
     },
     {
-      "cost_usd": 0.149341572,
+      "cost_usd": 0.15005388,
       "kinds": {
-        "branch": 1
+        "branch": 1,
+        "review": 1
       },
-      "merged_at": "2026-11-18T07:33:12Z",
+      "merged_at": "2026-11-18T02:27:22Z",
       "models": [
-        "deepseek-flash"
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
       ],
-      "number": 542,
-      "pr": "shyamsivakumar/mac-ops#542",
-      "repo": "shyamsivakumar/mac-ops",
-      "sessions": 1,
+      "number": 1291,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1291",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 2,
       "state": "MERGED",
-      "title": "MO-539 \u00b7 Ask Shyam in a fixed answer format in builder, review and gate prompts (Refs #539)",
-      "tokens": 9860306,
-      "url": "https://github.com/shyamsivakumar/mac-ops/pull/542"
+      "title": "SRW-1202: production learner for Bot 1 - diagnosis (Refs #1288)",
+      "tokens": 4323674,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1291"
     },
     {
       "cost_usd": 0.12123098999999991,
@@ -1480,6 +1394,47 @@
       "title": "JAR-24: PickSession row-id model run",
       "tokens": 5637459,
       "url": "https://github.com/shyamsivakumar/CineJar/pull/36"
+    },
+    {
+      "cost_usd": 0.09278120999999999,
+      "kinds": {
+        "pr": 1,
+        "review": 2
+      },
+      "merged_at": "2026-11-18T02:57:57Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra"
+      ],
+      "number": 1294,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1294",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 3,
+      "state": "MERGED",
+      "title": "SRW-1204: remove the staging learner leftover and restore the learner schedule (Refs #1292)",
+      "tokens": 4077884,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1294"
+    },
+    {
+      "cost_usd": 0.06475521000000001,
+      "kinds": {
+        "branch": 1,
+        "review": 3
+      },
+      "merged_at": "2026-11-18T02:19:48Z",
+      "models": [
+        "MiniMax-M3.1-Flash",
+        "gpt-6-astra",
+        "gpt-6.2-astra"
+      ],
+      "number": 1290,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1290",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 4,
+      "state": "MERGED",
+      "title": "SRW-1283: reuse the passing runtime-tree receipt in the release-gate lane (Refs #1283)",
+      "tokens": 2338121,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1290"
     },
     {
       "cost_usd": 0.05198188799999999,
@@ -1615,24 +1570,6 @@
       "kinds": {
         "review": 2
       },
-      "merged_at": "2026-11-18T02:57:57Z",
-      "models": [
-        "gpt-6-astra"
-      ],
-      "number": 1294,
-      "pr": "shyamsivakumar/strategy-replay-workbench#1294",
-      "repo": "shyamsivakumar/strategy-replay-workbench",
-      "sessions": 2,
-      "state": "MERGED",
-      "title": "SRW-1204: remove the staging learner leftover and restore the learner schedule (Refs #1292)",
-      "tokens": 0,
-      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1294"
-    },
-    {
-      "cost_usd": 0.0,
-      "kinds": {
-        "review": 2
-      },
       "merged_at": "2026-11-18T03:09:21Z",
       "models": [
         "gpt-6-astra"
@@ -1645,6 +1582,24 @@
       "title": "SRW-1204: record the reviewer round in the staging learner removal report (Refs #1292)",
       "tokens": 0,
       "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1295"
+    },
+    {
+      "cost_usd": 0.0,
+      "kinds": {
+        "review": 1
+      },
+      "merged_at": "2026-11-18T03:17:42Z",
+      "models": [
+        "gpt-6-astra"
+      ],
+      "number": 1296,
+      "pr": "shyamsivakumar/strategy-replay-workbench#1296",
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "sessions": 1,
+      "state": "MERGED",
+      "title": "SRW-1204: record the post-merge production deploy of the learner (Refs #1292)",
+      "tokens": 0,
+      "url": "https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1296"
     }
   ],
   "reconciled": true,
@@ -1657,9 +1612,9 @@
           "2026-11-16"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 0.1944827099,
+        "mean_cost_per_pr_usd": 0.20236729579999999,
         "prs": 30,
-        "total_cost_usd": 5.834481297
+        "total_cost_usd": 6.071018874
       },
       "after_days": 3,
       "before": {
@@ -1687,9 +1642,9 @@
           "2026-11-17"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 2.6647814806046513,
-        "prs": 43,
-        "total_cost_usd": 114.585603666
+        "mean_cost_per_pr_usd": 1.948088199525,
+        "prs": 40,
+        "total_cost_usd": 77.92352798099999
       },
       "after_days": 3,
       "before": {
@@ -1700,9 +1655,9 @@
           "2026-11-13"
         ],
         "days_with_sessions": 1,
-        "mean_cost_per_pr_usd": 0.28644177675,
-        "prs": 12,
-        "total_cost_usd": 3.437301321
+        "mean_cost_per_pr_usd": 0.23674809136363636,
+        "prs": 11,
+        "total_cost_usd": 2.604229005
       },
       "before_days": 7,
       "merged_at": "2026-11-14T18:49:37Z",
@@ -1718,9 +1673,9 @@
           "2026-11-20"
         ],
         "days_with_sessions": 1,
-        "mean_cost_per_pr_usd": 0.8658468018499998,
-        "prs": 20,
-        "total_cost_usd": 17.316936036999998
+        "mean_cost_per_pr_usd": 1.1101528452307692,
+        "prs": 13,
+        "total_cost_usd": 14.431986987999998
       },
       "after_days": 3,
       "before": {
@@ -1734,9 +1689,9 @@
           "2026-11-16"
         ],
         "days_with_sessions": 4,
-        "mean_cost_per_pr_usd": 0.24399427942105256,
+        "mean_cost_per_pr_usd": 0.22829599681578944,
         "prs": 38,
-        "total_cost_usd": 9.271782617999998
+        "total_cost_usd": 8.675247878999999
       },
       "before_days": 7,
       "merged_at": "2026-11-18T01:31:41Z",
@@ -1752,9 +1707,9 @@
           "2026-11-20"
         ],
         "days_with_sessions": 1,
-        "mean_cost_per_pr_usd": 0.8658468018499998,
-        "prs": 20,
-        "total_cost_usd": 17.316936036999998
+        "mean_cost_per_pr_usd": 1.1101528452307692,
+        "prs": 13,
+        "total_cost_usd": 14.431986987999998
       },
       "after_days": 3,
       "before": {
@@ -1768,9 +1723,9 @@
           "2026-11-16"
         ],
         "days_with_sessions": 4,
-        "mean_cost_per_pr_usd": 0.24399427942105256,
+        "mean_cost_per_pr_usd": 0.22829599681578944,
         "prs": 38,
-        "total_cost_usd": 9.271782617999998
+        "total_cost_usd": 8.675247878999999
       },
       "before_days": 7,
       "merged_at": "2026-11-18T01:48:33Z",
@@ -1786,9 +1741,9 @@
           "2026-11-18"
         ],
         "days_with_sessions": 3,
-        "mean_cost_per_pr_usd": 1.1374192651538466,
-        "prs": 52,
-        "total_cost_usd": 59.14580178800002
+        "mean_cost_per_pr_usd": 1.1751879320000003,
+        "prs": 46,
+        "total_cost_usd": 54.058644872000016
       },
       "after_days": 3,
       "before": {
@@ -1800,9 +1755,9 @@
           "2026-11-14"
         ],
         "days_with_sessions": 2,
-        "mean_cost_per_pr_usd": 0.11339038537499997,
-        "prs": 8,
-        "total_cost_usd": 0.9071230829999998
+        "mean_cost_per_pr_usd": 0.09406790249999998,
+        "prs": 6,
+        "total_cost_usd": 0.5644074149999999
       },
       "before_days": 7,
       "merged_at": "2026-11-15T21:44:32Z",
@@ -1813,20 +1768,20 @@
   ],
   "repos": [
     {
-      "cost_usd": 110.585764614,
-      "mean_cost_per_pr_usd": 4.42343058456,
-      "prs": 25,
+      "cost_usd": 74.15244235799999,
+      "mean_cost_per_pr_usd": 3.2240192329565214,
+      "prs": 23,
       "repo": "shyamsivakumar/mac-ops"
     },
     {
-      "cost_usd": 49.76201945700001,
-      "mean_cost_per_pr_usd": 1.843037757666667,
+      "cost_usd": 41.67460008900001,
+      "mean_cost_per_pr_usd": 1.5435037070000004,
       "prs": 27,
       "repo": "shyamsivakumar/strategy-replay-workbench"
     },
     {
-      "cost_usd": 15.739190349999998,
-      "mean_cost_per_pr_usd": 3.9347975874999994,
+      "cost_usd": 15.505322559999996,
+      "mean_cost_per_pr_usd": 3.876330639999999,
       "prs": 4,
       "repo": "digitized/Concerning"
     },
@@ -1843,8 +1798,8 @@
       "repo": "shyamsivakumar/CineJar"
     },
     {
-      "cost_usd": 9.723145429999999,
-      "mean_cost_per_pr_usd": 2.4307863574999997,
+      "cost_usd": 9.532618489999999,
+      "mean_cost_per_pr_usd": 2.3831546224999998,
       "prs": 4,
       "repo": "shyamsivakumar/openscan"
     },
@@ -1855,19 +1810,19 @@
       "repo": "shyamsivakumar/recoup"
     },
     {
-      "cost_usd": 3.139637866,
-      "mean_cost_per_pr_usd": 1.0465459553333334,
+      "cost_usd": 2.8201593250000005,
+      "mean_cost_per_pr_usd": 0.9400531083333336,
       "prs": 3,
       "repo": "shyamsivakumar/scripture-scroll"
     },
     {
-      "cost_usd": 0.7153722030000002,
-      "mean_cost_per_pr_usd": 0.3576861015000001,
+      "cost_usd": 0.5179548330000001,
+      "mean_cost_per_pr_usd": 0.25897741650000006,
       "prs": 2,
       "repo": "shyamsivakumar/sams-llm-wiki"
     }
   ],
-  "session_count": 488,
+  "session_count": 490,
   "session_log_days": [
     "2026-11-12",
     "2026-11-13",
@@ -1882,15 +1837,50 @@
     "note": "Cost comes from the usage records pi writes for every API turn: usage.cost.total per assistant message.",
     "pi_root": "/Users/shyamsivakumar/.pi"
   },
-  "total_cost_usd": 231.44693892799987,
-  "unattributed_cost_usd": 17.054820552999843,
+  "total_cost_usd": 314.6627311960003,
+  "unattributed_cost_usd": 145.7326450860003,
   "unattributed_sessions": [
+    {
+      "cost_usd": 97.00477380000004,
+      "cwd": "/Users/shyamsivakumar/Code/coordinator",
+      "name": "Pi - Coordinator",
+      "reason": "session ran outside a git repository",
+      "session_id": "01a1d261-83ed-7681-aa79-992bf552922d"
+    },
+    {
+      "cost_usd": 17.42936827999998,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-86fb60cc-77f3858e291ab650",
+      "name": "Continue shyamsivakumar/mac-ops#497: MO-1063 \u00b7 Reviews on GPT-6 only; all builds on GLM 5.3 or MiniMax; no OpenAI API in builds",
+      "reason": "pull request #497 is not in shyamsivakumar/mac-ops",
+      "session_id": "01a1ebd6-96c3-7527-8f89-23b9144ea384"
+    },
+    {
+      "cost_usd": 3.926693880000001,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-86fb60cc-77f3858e291ab650",
+      "name": "MO-1063 \u00b7 Reviews on GPT-6 only; all builds on GLM 5.3 or MiniMax; no OpenAI API in builds",
+      "reason": "no pull request for MO-1063 existed when the session ran",
+      "session_id": "01a1ebbb-f047-74b3-bc90-036f7a463b88"
+    },
+    {
+      "cost_usd": 3.246707000000001,
+      "cwd": "/Users/shyamsivakumar/Code",
+      "name": null,
+      "reason": "session ran outside a git repository",
+      "session_id": "01a1d345-2e02-75b7-b03f-6428ce08c5c1"
+    },
     {
       "cost_usd": 3.180714969,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-63e68ccf-a7a81e80537cb8cf",
       "name": "MO-1062 \u00b7 Alarms stay quiet for 4 hours once acknowledged, unless the cause changes",
       "reason": "no pull request for MO-1062 existed when the session ran",
       "session_id": "01a1ebb6-d4d5-71cc-b3d0-6e29dcf00cdc"
+    },
+    {
+      "cost_usd": 2.35907984,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-a21e3469-1d212e1c95923be1",
+      "name": "MO-1081 \u00b7 Machine-enforced deny rules for agents (tightening only)",
+      "reason": "no pull request for MO-1081 existed when the session ran",
+      "session_id": "01a1ecea-7c79-72b5-bf8e-e5ebc349df9c"
     },
     {
       "cost_usd": 1.7836758300000006,
@@ -1919,6 +1909,27 @@
       "name": "LMW-70 \u00b7 Verification layer rules in runtime contracts",
       "reason": "no pull request for LMW-70 existed when the session ran",
       "session_id": "01a1ecfc-078f-7565-88f0-b342c514f29b"
+    },
+    {
+      "cost_usd": 0.77423748,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-8323093c-7304dfba01517719",
+      "name": "Continue shyamsivakumar/mac-ops#524: Continue shyamsivakumar/mac-ops#524: MO-1077 \u00b7 Evaluator checklist before a ticket closes (idea 6)",
+      "reason": "pull request #524 is not in shyamsivakumar/mac-ops",
+      "session_id": "01a1ecb6-4424-7649-94f3-a43f0ca5e1fe"
+    },
+    {
+      "cost_usd": 0.5170474399999999,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-a21e3469-1d212e1c95923be1",
+      "name": "Continue shyamsivakumar/mac-ops#530: MO-1081 \u00b7 Machine-enforced deny rules for agents (tightening only)",
+      "reason": "pull request #530 is not in shyamsivakumar/mac-ops",
+      "session_id": "01a1ecfd-1d2f-74ff-9138-dd4913e7a859"
+    },
+    {
+      "cost_usd": 0.43162164,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-68e03d08-a6f67d35e6602587",
+      "name": "MO-1075 \u00b7 Overnight stall alarm counts merges and closed tickets as progress",
+      "reason": "no pull request for MO-1075 existed when the session ran",
+      "session_id": "01a1eca4-40e2-7441-9132-e698673cbd14"
     },
     {
       "cost_usd": 0.399724,
@@ -1963,6 +1974,13 @@
       "session_id": "01a1e966-df6f-7141-a08b-953e3fa3d265"
     },
     {
+      "cost_usd": 0.28526456999999994,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-7148e44b-3599c5b8e8a044e6",
+      "name": "SRW-1197 \u00b7 Gate reuses its last passing receipt for unchanged checks (--runtime-tree)",
+      "reason": "no pull request for SRW-1197 existed when the session ran",
+      "session_id": "01a1ec3b-8a0e-734f-ad5d-4cd6184880c6"
+    },
+    {
       "cost_usd": 0.2765156999999999,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-61f123a5-69fc9a10c4fb5aa8",
       "name": "MO-1065 \u00b7 Proof file per PR: every check passed, failed or not run, with commands",
@@ -1970,11 +1988,11 @@
       "session_id": "01a1ec3c-9f3a-7351-9534-09d8a2ff40a8"
     },
     {
-      "cost_usd": 0.24880122000000005,
-      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-19a4b3ae-9c56076728b57709",
-      "name": "TNR-24 \u00b7 Prevent repeated Save from creating duplicate sources",
-      "reason": "no pull request for TNR-24 existed when the session ran",
-      "session_id": "01a1ea2e-ea7c-7663-acd4-b8db040d8100"
+      "cost_usd": 0.2474452499999999,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1072-heavy-headro-7047753fa31e514d",
+      "name": "MO-1072 \u00b7 per-host heavy headroom (MiniMax)",
+      "reason": "no pull request for MO-1072 existed when the session ran",
+      "session_id": "01a1ec20-c6e9-775e-96f2-4314c8ced546"
     },
     {
       "cost_usd": 0.24719235,
@@ -1991,6 +2009,34 @@
       "session_id": "01a1eb6d-33e3-7177-9f88-8a12f1969241"
     },
     {
+      "cost_usd": 0.23875232,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-c2253f5b-9d5f517acc8f8e60",
+      "name": "Continue shyamsivakumar/strategy-replay-workbench#1288: Continue shyamsivakumar/strategy-replay-workbench#1288: Continue shyamsivakumar/strategy-replay-workbench#1288: SRW-1202 \u00b7 Learner in production next to Bot 1 (read-only), data, one proven run",
+      "reason": "pull request #1288 is not in shyamsivakumar/strategy-replay-workbench",
+      "session_id": "01a1ec65-a894-7089-a96a-46c28cb2eb1d"
+    },
+    {
+      "cost_usd": 0.23386779,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/concerning/t3-e0f553f3-52fdfde222f25372",
+      "name": "NING-15 \u00b7 Each service reports its build commit, checked after release",
+      "reason": "no pull request for NING-15 existed when the session ran",
+      "session_id": "01a1e9fd-dd0b-75fe-b86b-7c6a514f8fa9"
+    },
+    {
+      "cost_usd": 0.22802873999999998,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-c2253f5b-9d5f517acc8f8e60",
+      "name": "SRW-1202 \u00b7 learner in production next to Bot 1 (MiniMax)",
+      "reason": "no pull request for SRW-1202 existed when the session ran",
+      "session_id": "01a1ec49-ed61-7294-8757-b7ca33b26aa2"
+    },
+    {
+      "cost_usd": 0.22395816000000004,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-8a34da9d-0aa265e510c99162",
+      "name": "SRW-1204 \u00b7 Remove the leftover staging learner and its volume; restore the schedule line",
+      "reason": "no pull request for SRW-1204 existed when the session ran",
+      "session_id": "01a1ec85-bf16-757d-aa30-7b0be7631f1b"
+    },
+    {
       "cost_usd": 0.22233166499999998,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-b0403464-2d79187186b26f5f",
       "name": "MO-1057 \u00b7 Tick finishes even when GitHub calls hang",
@@ -1998,11 +2044,25 @@
       "session_id": "01a1ea43-d1b5-72ce-ad6b-c10c3de2e181"
     },
     {
+      "cost_usd": 0.21757600000000005,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-srw-1186-noon-crash-d48ca355d51e4616",
+      "name": "SRW-1186 \u00b7 where did the learner volume go",
+      "reason": "no pull request for SRW-1186 existed when the session ran",
+      "session_id": "01a1eb2a-05fe-7719-90d9-e388bfd78740"
+    },
+    {
       "cost_usd": 0.215245872,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/concerning/t3-93c4608a-2658b7f94e14505a",
       "name": "NING-8 \u00b7 TER-4: ship the one-open-per-query partial unique index migration",
       "reason": "no pull request for NING-8 existed when the session ran",
       "session_id": "01a1e8bb-c8ef-725b-8999-811f4876b5e7"
+    },
+    {
+      "cost_usd": 0.19741737,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-91122478-c58df0f5c4bd7ad9",
+      "name": "LMW-69 \u00b7 Refactoring and design book pages, one per idea",
+      "reason": "no pull request for LMW-69 existed when the session ran",
+      "session_id": "01a1ec3b-7442-7051-8976-e60ba94b18c8"
     },
     {
       "cost_usd": 0.192521466,
@@ -2019,18 +2079,18 @@
       "session_id": "01a1eca4-43f6-7572-98e3-c1eb3c608401"
     },
     {
-      "cost_usd": 0.18935303999999997,
-      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1081-ds-c2a8b679bfa1cfe2",
-      "name": "MO-1081 \u00b7 Machine-enforced deny rules for agents (tightening only) (DeepSeek)",
-      "reason": "no pull request for MO-1081 existed when the session ran",
-      "session_id": "01a1ed14-0589-73e5-8f71-929bd49ee924"
-    },
-    {
       "cost_usd": 0.1819576,
       "cwd": "/Users/shyamsivakumar/.t3/scratch/2026-11-17-agent-rules-these-standing-rules-48127bed",
       "name": "Morning check \u00b7 learner, bots, dashboard, Concerning",
       "reason": "session ran outside a git repository",
       "session_id": "01a1e9d4-84e9-7324-bfff-b4dd65be92a1"
+    },
+    {
+      "cost_usd": 0.17968995600000004,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1083-ds-f14d3e93d7c4c72c",
+      "name": "MO-1083 \u00b7 Gate falls back on no-verdict runs and blocks exhausted revi (DeepSeek)",
+      "reason": "no pull request for MO-1083 existed when the session ran",
+      "session_id": "01a1ed13-ee24-722b-9056-ec48870856e8"
     },
     {
       "cost_usd": 0.17946700000000002,
@@ -2047,6 +2107,13 @@
       "session_id": "01a1ec0f-71a0-7114-8a54-e6233aed3623"
     },
     {
+      "cost_usd": 0.17130746099999994,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/scripture-scroll/t3-7f419b5c-c127d3801a8db27f",
+      "name": "STS-6 \u00b7 continue after interrupt",
+      "reason": "no pull request for STS-6 existed when the session ran",
+      "session_id": "01a1eac4-1b02-766b-a575-0b882d7e3df8"
+    },
+    {
       "cost_usd": 0.16910880000000003,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-af00b1f1-46e123794bdec5f0",
       "name": "OPN-15 \u00b7 Capture pages with the native document scanner",
@@ -2054,18 +2121,18 @@
       "session_id": "01a1ebcb-4791-7051-9a87-e0009de16033"
     },
     {
-      "cost_usd": 0.16780074,
-      "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-2c10b1cd-dbb7b86338b6a474",
-      "name": "RCP-24 \u00b7 Make bundled privacy deletion instructions match Settings",
-      "reason": "no pull request for RCP-24 existed when the session ran",
-      "session_id": "01a1eb83-e18d-77f2-861e-6ad13b431606"
-    },
-    {
       "cost_usd": 0.16507571999999998,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-8a08a700-d6734fd95741a5a6",
       "name": "TNR-25 \u00b7 Show failed live playback with a retry action",
       "reason": "no pull request for TNR-25 existed when the session ran",
       "session_id": "01a1ea2e-c081-7473-9bdf-2be3159b53be"
+    },
+    {
+      "cost_usd": 0.159453,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-srw-1186-noon-crash-d48ca355d51e4616",
+      "name": "SRW-1186 \u00b7 learner noon run crashed: RCA and fix",
+      "reason": "no pull request for SRW-1186 existed when the session ran",
+      "session_id": "01a1eb24-3e72-757e-a6cf-b78281702470"
     },
     {
       "cost_usd": 0.15934152000000001,
@@ -2089,6 +2156,20 @@
       "session_id": "01a1eb84-340d-76d4-8c34-d9ff81f8942c"
     },
     {
+      "cost_usd": 0.149341572,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-af05d4d4-92a8fafc3dde265b",
+      "name": "MO-1085 \u00b7 Prompt rule: questions to Shyam end with numbered options and a Recommended line",
+      "reason": "no pull request for MO-1085 existed when the session ran",
+      "session_id": "01a1ed7d-6b0a-7763-a059-a079e2f08bf7"
+    },
+    {
+      "cost_usd": 0.14817107999999998,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/scripture-scroll/t3-7f419b5c-c127d3801a8db27f",
+      "name": "STS-6 \u00b7 Pseudo-locale and Tamil screenshots at narrow width, with fixes",
+      "reason": "no pull request for STS-6 existed when the session ran",
+      "session_id": "01a1eab4-2f56-7727-8f8a-9a23c63a442b"
+    },
+    {
       "cost_usd": 0.143172456,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-74cba777-77ed1f6c802f748d",
       "name": "MO-1058 \u00b7 Dead-run recovery settles or flags hand-launched threads once",
@@ -2096,18 +2177,25 @@
       "session_id": "01a1eb10-6bb1-7137-af77-4962438ff534"
     },
     {
+      "cost_usd": 0.140414625,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-c99986dc-a0c075a880e9441a",
+      "name": "OPN-13 \u00b7 Preview an assembled multi-page PDF",
+      "reason": "no pull request for OPN-13 existed when the session ran",
+      "session_id": "01a1ebfb-0ea5-74cc-877d-2bd49bd6da3d"
+    },
+    {
+      "cost_usd": 0.13578744,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-19a4b3ae-9c56076728b57709",
+      "name": "TNR-24 \u00b7 Prevent repeated Save from creating duplicate sources",
+      "reason": "no pull request for TNR-24 existed when the session ran",
+      "session_id": "01a1ea2e-ea7c-7663-acd4-b8db040d8100"
+    },
+    {
       "cost_usd": 0.13484730000000003,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-f4bdd273-f8a5501f45404698",
       "name": "TNR-23 \u00b7 Report file import failures without losing the form",
       "reason": "no pull request for TNR-23 existed when the session ran",
       "session_id": "01a1ea2f-1345-7548-a6d7-4d5f708de3db"
-    },
-    {
-      "cost_usd": 0.13255791,
-      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-1f15de68-4bdf01be92c40066",
-      "name": "TNR-22 \u00b7 Reject blank and unsupported source addresses",
-      "reason": "no pull request for TNR-22 existed when the session ran",
-      "session_id": "01a1ea33-6d7a-7372-a058-d22d67e3a268"
     },
     {
       "cost_usd": 0.13245951,
@@ -2124,6 +2212,13 @@
       "session_id": "01a1ea5b-b8a9-7767-95bb-960e18f703bc"
     },
     {
+      "cost_usd": 0.12497196000000002,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-c2253f5b-9d5f517acc8f8e60",
+      "name": "SRW-1202 \u00b7 learner production (MiniMax pinned)",
+      "reason": "no pull request for SRW-1202 existed when the session ran",
+      "session_id": "01a1ec65-949c-7398-af2c-1562860b638f"
+    },
+    {
       "cost_usd": 0.11577811200000002,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-8f8b5c8e-a8031accd85438c8",
       "name": "OPN-14 \u00b7 Export the previewed document as PDF",
@@ -2131,11 +2226,25 @@
       "session_id": "01a1ed56-1679-724c-ad39-def3b88219a2"
     },
     {
+      "cost_usd": 0.11394732,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1081-ds-c2a8b679bfa1cfe2",
+      "name": "MO-1081 \u00b7 Machine-enforced deny rules for agents (tightening only) (DeepSeek)",
+      "reason": "no pull request for MO-1081 existed when the session ran",
+      "session_id": "01a1ed14-0589-73e5-8f71-929bd49ee924"
+    },
+    {
       "cost_usd": 0.11356417500000003,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/CineJar/t3-83d11104-f250e1cc3ca5077d",
       "name": "JAR-39 \u00b7 Separate local archive and EAS release instructions",
       "reason": "no pull request for JAR-39 existed when the session ran",
       "session_id": "01a1ea55-ae6f-72cc-a3ae-4945fe2a95d6"
+    },
+    {
+      "cost_usd": 0.1110352079999999,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1082-builder-fall-f25933ab4a05df56",
+      "name": "MO-1082 \u00b7 builder fallback incl. lane driver (DeepSeek)",
+      "reason": "no pull request for MO-1082 existed when the session ran",
+      "session_id": "01a1ed28-7e93-7129-8b91-e40ac4b55fdb"
     },
     {
       "cost_usd": 0.10510058399999997,
@@ -2157,6 +2266,13 @@
       "name": "RCP-22 \u00b7 Show a recoverable notice when deletion still requires Apple reauth",
       "reason": "no pull request for RCP-22 existed when the session ran",
       "session_id": "01a1ed7d-6680-73ea-bdf1-6f6273d6be86"
+    },
+    {
+      "cost_usd": 0.093374376,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-19e9d2e4-29a035675fe3579c",
+      "name": "SRW-1189 \u00b7 Can Bot 2 Lane 3's retest gate silently block every entry?",
+      "reason": "no pull request for SRW-1189 existed when the session ran",
+      "session_id": "01a1eb2d-11e8-7539-8184-06989a44806d"
     },
     {
       "cost_usd": 0.09246897000000001,
@@ -2187,6 +2303,20 @@
       "session_id": "01a1eb74-5135-745d-853a-f2774a7349cd"
     },
     {
+      "cost_usd": 0.07928142,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-1f15de68-4bdf01be92c40066",
+      "name": "TNR-22 \u00b7 Reject blank and unsupported source addresses",
+      "reason": "no pull request for TNR-22 existed when the session ran",
+      "session_id": "01a1ea33-6d7a-7372-a058-d22d67e3a268"
+    },
+    {
+      "cost_usd": 0.07745111999999998,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-2767e585-3aaf4aae17942d16",
+      "name": "MO-1073 \u00b7 Worktree cleaner ignores agent bootstrap files and auto-archives finished worktrees",
+      "reason": "no pull request for MO-1073 existed when the session ran",
+      "session_id": "01a1ec79-067f-71e7-9dc5-71c3b4eae58e"
+    },
+    {
       "cost_usd": 0.07689710399999997,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-cec9cb5d-a2e6b7cb8ca2bfc9",
       "name": "TNR-27 \u00b7 continue after cap",
@@ -2199,6 +2329,13 @@
       "name": "OPN-11 \u00b7 Launch an unsigned iPhone simulator app",
       "reason": "no pull request for OPN-11 existed when the session ran",
       "session_id": "01a1ea84-a881-77be-812c-47cea9e0d18d"
+    },
+    {
+      "cost_usd": 0.07610639999999999,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/recoup/t3-2c10b1cd-dbb7b86338b6a474",
+      "name": "RCP-24 \u00b7 Make bundled privacy deletion instructions match Settings",
+      "reason": "no pull request for RCP-24 existed when the session ran",
+      "session_id": "01a1eb83-e18d-77f2-861e-6ad13b431606"
     },
     {
       "cost_usd": 0.07162521,
@@ -2290,6 +2427,13 @@
       "name": "Set up anthropic-api instance (Opus on API credits)",
       "reason": "session ran outside a git repository",
       "session_id": "01a1ec4a-952a-70f5-8b99-bf5b8e74a615"
+    },
+    {
+      "cost_usd": 0.05011231499999999,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/openscan/t3-c99986dc-a0c075a880e9441a",
+      "name": "Review OPN-13 preview slice",
+      "reason": "no pull request for OPN-13 existed when the session ran",
+      "session_id": "01a1ebfe-719c-7618-93d0-85540cad79d2"
     },
     {
       "cost_usd": 0.04948193999999999,
@@ -2390,6 +2534,13 @@
       "session_id": "01a1eb09-3ba6-75db-b7c4-2f2973dce32e"
     },
     {
+      "cost_usd": 0.027858780000000003,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-8323093c-7304dfba01517719",
+      "name": "MO-1077 \u00b7 Evaluator checklist before a ticket closes (idea 6)",
+      "reason": "no pull request for MO-1077 existed when the session ran",
+      "session_id": "01a1ecad-cee7-74c8-9b55-053db8c946d5"
+    },
+    {
       "cost_usd": 0.026007734999999997,
       "cwd": "/Users/shyamsivakumar/.t3/scratch/2026-11-17-agent-rules-these-standing-rules-027aa154",
       "name": "Chore \u00b7 level local main (MO)",
@@ -2458,6 +2609,13 @@
       "name": "SRW-1200 \u00b7 Cognitive complexity and jscpd copy detection in check.sh (report only)",
       "reason": "no pull request for SRW-1200 existed when the session ran",
       "session_id": "01a1ec3b-2a6d-76fb-a4ea-519bdf1e9344"
+    },
+    {
+      "cost_usd": 0.016193849999999996,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-2767e585-3aaf4aae17942d16",
+      "name": "Continue shyamsivakumar/mac-ops#514: MO-1073 \u00b7 Worktree cleaner ignores agent bootstrap files and auto-archives finished worktrees",
+      "reason": "pull request #514 is not in shyamsivakumar/mac-ops",
+      "session_id": "01a1ec90-da3c-77a8-b77c-d9aa2b96d608"
     },
     {
       "cost_usd": 0.015676799999999998,
@@ -2540,15 +2698,22 @@
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-5da9caa8-83326c328876ff49",
       "name": "Continue shyamsivakumar/mac-ops#532: MO-1083 \u00b7 Gate falls back on no-verdict runs and blocks exhausted reviewers (re-cut of MO-1063)",
-      "reason": "no pull request for MO-1083 existed when the session ran",
+      "reason": "pull request #532 is not in shyamsivakumar/mac-ops",
       "session_id": "01a1ed08-42e3-7255-ba1e-124e40fa6cae"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-5da9caa8-83326c328876ff49",
       "name": "Continue shyamsivakumar/mac-ops#532: Continue shyamsivakumar/mac-ops#532: MO-1083 \u00b7 Gate falls back on no-verdict runs and blocks exhausted reviewers (re-cut of MO-1063)",
-      "reason": "no pull request for MO-1083 existed when the session ran",
+      "reason": "pull request #532 is not in shyamsivakumar/mac-ops",
       "session_id": "01a1ed0a-3e8f-75c3-9493-3c2064e02a73"
+    },
+    {
+      "cost_usd": 0.0,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-a21e3469-1d212e1c95923be1",
+      "name": "Continue shyamsivakumar/mac-ops#530: Continue shyamsivakumar/mac-ops#530: MO-1081 \u00b7 Machine-enforced deny rules for agents (tightening only)",
+      "reason": "pull request #530 is not in shyamsivakumar/mac-ops",
+      "session_id": "01a1ed01-4b70-7452-bd74-380ab47f898f"
     },
     {
       "cost_usd": 0.0,
@@ -2561,15 +2726,36 @@
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7",
       "name": "Continue shyamsivakumar/mac-ops#508: MO-1072 \u00b7 heavy: per-host memory headroom (lower on the M1) and governor recovery",
-      "reason": "no pull request for MO-1072 existed when the session ran",
+      "reason": "pull request #508 is not in shyamsivakumar/mac-ops",
       "session_id": "01a1ec14-c7cf-7492-9305-0aad186b861c"
     },
     {
       "cost_usd": 0.0,
       "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7",
       "name": "Continue shyamsivakumar/mac-ops#508: Continue shyamsivakumar/mac-ops#508: MO-1072 \u00b7 heavy: per-host memory headroom (lower on the M1) and governor recovery",
-      "reason": "no pull request for MO-1072 existed when the session ran",
+      "reason": "pull request #508 is not in shyamsivakumar/mac-ops",
       "session_id": "01a1ec17-8389-735f-9d1b-718abf932cc2"
+    },
+    {
+      "cost_usd": 0.0,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-c2253f5b-9d5f517acc8f8e60",
+      "name": "SRW-1202 \u00b7 Learner in production next to Bot 1 (read-only), data, one proven run",
+      "reason": "no pull request for SRW-1202 existed when the session ran",
+      "session_id": "01a1ec43-3e72-7694-b156-f00c16e8f7bd"
+    },
+    {
+      "cost_usd": 0.0,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-c2253f5b-9d5f517acc8f8e60",
+      "name": "Continue shyamsivakumar/strategy-replay-workbench#1288: SRW-1202 \u00b7 Learner in production next to Bot 1 (read-only), data, one proven run",
+      "reason": "pull request #1288 is not in shyamsivakumar/strategy-replay-workbench",
+      "session_id": "01a1ec45-150a-77c4-8a78-d13faa5e4583"
+    },
+    {
+      "cost_usd": 0.0,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/strategy-replay-workbench/t3-c2253f5b-9d5f517acc8f8e60",
+      "name": "Continue shyamsivakumar/strategy-replay-workbench#1288: Continue shyamsivakumar/strategy-replay-workbench#1288: SRW-1202 \u00b7 Learner in production next to Bot 1 (read-only), data, one proven run",
+      "reason": "pull request #1288 is not in shyamsivakumar/strategy-replay-workbench",
+      "session_id": "01a1ec49-afe6-7295-a016-e2be5c5061ab"
     },
     {
       "cost_usd": 0.0,
@@ -2577,6 +2763,13 @@
       "name": "MO unstick #508",
       "reason": "branch main has no pull request",
       "session_id": "01a1ec18-c10d-7103-b138-9591c69654c8"
+    },
+    {
+      "cost_usd": 0.0,
+      "cwd": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-8323093c-7304dfba01517719",
+      "name": "Continue shyamsivakumar/mac-ops#524: MO-1077 \u00b7 Evaluator checklist before a ticket closes (idea 6)",
+      "reason": "pull request #524 is not in shyamsivakumar/mac-ops",
+      "session_id": "01a1ecb2-1aed-72b4-97a3-ad7819ccbfeb"
     },
     {
       "cost_usd": 0.0,

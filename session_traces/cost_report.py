@@ -138,22 +138,25 @@ class SessionAttribution:
 def session_files(pi_root: Path, days: list[str]) -> list[Path]:
     """Session files that can hold a run on one of ``days``.
 
-    A session file is named after the UTC moment the session started, so a
-    local day can start inside the previous UTC day. The extra days on both
-    sides cover that; the caller still filters on the local day.
+    A session file is named after the UTC moment the session started, but a
+    session can stay open for days, so its later turns are on days the file
+    name does not mention. Every file that started on or before the end of
+    the window is therefore read, and the caller keeps the turns that fell
+    on the days it asked for.
     """
     wanted = set(days)
     extra = {d for d in wanted}
     for day in list(wanted):
         extra.add((datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d"))
         extra.add((datetime.strptime(day, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+    upper = max(extra)
     paths: list[Path] = []
     for pi_home in sorted(pi_root.glob("agent*")):
         sessions = pi_home / "sessions"
         if not sessions.is_dir():
             continue
         for path in sorted(sessions.glob("*/*.jsonl")):
-            if path.name[:10] in extra:
+            if path.name[:10] <= upper:
                 paths.append(path)
     return paths
 
@@ -393,6 +396,21 @@ class PrIndex:
                 return row
         return None
 
+    def by_number_at(
+        self, repo: str, number: int, moment: str | None
+    ) -> dict[str, Any] | None:
+        """The pull request with a number, if it existed by a moment.
+
+        A pull request opened after the session ran cannot be the pull
+        request that session worked on, so it is left out.
+        """
+        row = self.by_number(repo, number)
+        if row is None:
+            return None
+        if moment and str(row.get("createdAt") or "") > moment:
+            return None
+        return row
+
     def by_branch_at(
         self, repo: str, branch: str, moment: str | None
     ) -> dict[str, Any] | None:
@@ -473,10 +491,15 @@ def attribute(
             number, kind = int(match.group(2)), "pr"
 
     if number is not None and repo:
-        row = index.by_number(repo, number)
+        row = index.by_number_at(repo, number, session.started_at)
         if row is not None:
             return _with_pr(out, row, kind)
-        out.reason = f"pull request #{number} is not in {repo}"
+        if index.by_number(repo, number) is None:
+            out.reason = f"pull request #{number} is not in {repo}"
+        else:
+            out.reason = (
+                f"pull request #{number} opened after the session ran"
+            )
 
     ticket = TICKET_RE.search(name)
     if ticket and repo:
@@ -493,10 +516,11 @@ def attribute(
                 if chosen is None:
                     chosen = candidates[0]
                 return _with_pr(out, chosen, "ticket")
-            out.reason = (
-                f"no pull request for {ticket.group(1)} existed when the "
-                "session ran"
-            )
+            if out.reason is None:
+                out.reason = (
+                    f"no pull request for {ticket.group(1)} existed when the "
+                    "session ran"
+                )
 
     if repo and branch:
         row = index.by_branch_at(repo, branch, session.started_at)
@@ -505,7 +529,7 @@ def attribute(
 
     match = BARE_PR_RE.search(name)
     if match and repo:
-        row = index.by_number(repo, int(match.group(1)))
+        row = index.by_number_at(repo, int(match.group(1)), session.started_at)
         if row is not None:
             return _with_pr(out, row, "pr")
 

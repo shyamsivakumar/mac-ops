@@ -24,6 +24,20 @@ from session_traces.cost_report import (
 )
 
 REPO = "shyamsivakumar/mac-ops"
+OTHER_REPO = "shyamsivakumar/openscan"
+
+OTHER_PRS = [
+    {
+        "number": 11,
+        "title": "Refactor the import path",
+        "body": "Refs #6",
+        "headRefName": "t3/import-path",
+        "state": "MERGED",
+        "mergedAt": "2026-11-17T20:00:00Z",
+        "createdAt": "2026-11-17T10:00:00Z",
+        "url": "https://github.com/shyamsivakumar/openscan/pull/11",
+    }
+]
 
 PRS = [
     {
@@ -92,6 +106,63 @@ def _session_file(
                 },
             },
         },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def _two_turn_session_file(
+    root: Path,
+    *,
+    name: str,
+    first_stamp: str,
+    second_stamp: str,
+    cwd: str,
+    first_cost: float,
+    second_cost: float,
+) -> Path:
+    """A session with one turn before midnight and one turn after it."""
+    directory = root / "agent" / "sessions" / "worktree"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{first_stamp}_session.jsonl"
+
+    def turn(stamp: str, cost: float) -> dict:
+        return {
+            "type": "message",
+            "timestamp": stamp,
+            "message": {
+                "role": "assistant",
+                "model": "test-model-1",
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "cacheRead": 30,
+                    "totalTokens": 60,
+                    "cost": {
+                        "input": cost / 2,
+                        "output": cost / 2,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                        "total": cost,
+                        "totalFromProvider": False,
+                    },
+                },
+            },
+        }
+
+    lines = [
+        {
+            "type": "session",
+            "version": 3,
+            "id": "session",
+            "timestamp": first_stamp,
+            "cwd": cwd,
+        },
+        {"type": "session_info", "name": name, "timestamp": first_stamp},
+        turn(first_stamp, first_cost),
+        turn(second_stamp, second_cost),
     ]
     path.write_text(
         "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8"
@@ -359,6 +430,133 @@ class CostReportTests(unittest.TestCase):
         self.assertIn("2026-11-12", rows[0]["before"]["days"])
         self.assertIn("2026-11-14", rows[0]["after"]["days"])
         self.assertNotIn("2026-11-13", rows[0]["before"]["days"])
+
+    def test_a_session_is_priced_on_the_day_each_turn_ran(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = _two_turn_session_file(
+                root,
+                name="MO-482 review #487",
+                # 2026-11-16 15:30 and 2026-11-17 00:30 in Los Angeles.
+                first_stamp="2026-11-16T23:30:00.000Z",
+                second_stamp="2026-11-17T08:30:00.000Z",
+                cwd="/tmp/worktree",
+                first_cost=1.0,
+                second_cost=2.0,
+            )
+            session = cost_report.read_session(path, root)
+            slices = cost_report.split_by_day(session)
+        self.assertEqual([part.day for part in slices], ["2026-11-16", "2026-11-17"])
+        self.assertAlmostEqual(slices[0].cost_usd, 1.0)
+        self.assertAlmostEqual(slices[1].cost_usd, 2.0)
+
+    def test_a_branch_pull_request_opened_after_the_session_is_rejected(self):
+        session = SessionCost(
+            session_id="s6",
+            path="/tmp/s6.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 · a ticket whose pull request came later",
+            started_at="2026-11-13T12:00:00Z",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 900,
+                "title": "the branch's only pull request, opened later",
+                "body": "",
+                "headRefName": "t3/later",
+                "state": "OPEN",
+                "createdAt": "2026-11-18T00:00:00Z",
+                "mergedAt": None,
+            }
+        ]
+        out = attribute(session, index, repo=REPO, branch="t3/later")
+        self.assertIsNone(out.pr_number)
+        self.assertEqual(out.pr_key, "unattributed")
+
+    def test_a_named_pull_request_opened_after_the_session_is_rejected(self):
+        session = SessionCost(
+            session_id="s7",
+            path="/tmp/s7.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 review #900",
+            started_at="2026-11-13T12:00:00Z",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = [
+            {
+                "number": 900,
+                "title": "a pull request opened later",
+                "body": "",
+                "headRefName": "t3/later",
+                "state": "OPEN",
+                "createdAt": "2026-11-18T00:00:00Z",
+                "mergedAt": None,
+            }
+        ]
+        out = attribute(session, index, repo=REPO)
+        self.assertIsNone(out.pr_number)
+        self.assertIn("opened after the session ran", out.reason)
+
+    def test_the_repo_filter_scopes_the_refactor_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _session_file(
+                root,
+                name="MO-482 review #487",
+                stamp="2026-11-17T18:00:00.000Z",
+                cwd="/tmp/mac-ops-worktree",
+                cost=2.0,
+            )
+            _session_file(
+                root,
+                name="OPN-6 review #11",
+                stamp="2026-11-17T19:00:00.000Z",
+                cwd="/tmp/openscan-worktree",
+                cost=3.0,
+            )
+            original_prs = cost_report.gh_prs
+            original_repo = cost_report.repo_of
+            original_branch = cost_report.branch_of
+            cost_report.gh_prs = lambda repo: (
+                list(PRS) if repo == REPO else list(OTHER_PRS)
+            )
+            cost_report.repo_of = lambda cwd: (
+                REPO if "mac-ops" in str(cwd) else OTHER_REPO
+            )
+            cost_report.branch_of = lambda cwd: None
+            try:
+                unscoped = build_report(
+                    "2026-11-17",
+                    pi_root=root,
+                    before_days=2,
+                    after_days=1,
+                )
+                scoped = build_report(
+                    "2026-11-17",
+                    pi_root=root,
+                    before_days=2,
+                    after_days=1,
+                    repos=[REPO],
+                )
+            finally:
+                cost_report.gh_prs = original_prs
+                cost_report.repo_of = original_repo
+                cost_report.branch_of = original_branch
+        self.assertIn(
+            f"{OTHER_REPO}#11",
+            [row["pr"] for row in unscoped["refactor_comparison"]],
+        )
+        self.assertEqual(
+            [row["pr"] for row in scoped["refactor_comparison"]],
+            [],
+            "the other repository's refactor must not be in the comparison",
+        )
+        self.assertAlmostEqual(scoped["total_cost_usd"], 2.0)
+        self.assertAlmostEqual(unscoped["total_cost_usd"], 5.0)
+        self.assertTrue(scoped["reconciled"])
 
     def test_refactor_is_read_from_the_title(self):
         self.assertTrue(is_refactor("Rename the lane driver module"))
