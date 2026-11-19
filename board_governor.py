@@ -1249,6 +1249,12 @@ def controller_tick(*, board_control=True, cfg=None):
     helper = _heavy_module()
     entry = {"schema": 1, "mode": "controller", "board_control": bool(board_control),
              "runtime": str(SCRIPT_DIR)}
+    try:
+        reaped = helper.reap_dead_jobs()
+        if reaped:
+            entry["dead_jobs_reaped"] = reaped
+    except Exception as exc:
+        entry["reap_error"] = type(exc).__name__ + ": " + (str(exc).splitlines() or [""])[0][:180]
     boot_id = None
     sample = None
     census = None
