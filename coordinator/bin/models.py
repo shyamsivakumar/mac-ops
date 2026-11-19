@@ -124,10 +124,19 @@ def read_blocked_file(file_path):
 
 
 def expiry(entry):
-    """The entry's `expires_at`, or infinity for a manual entry that never expires."""
+    """The entry's `expires_at` as a float, or infinity for a manual entry that never expires.
+
+    Anything that is not a finite number counts as manual, including an integer too
+    large for a float, which JavaScript's JSON.parse reads as an infinity.
+    """
     value = entry.get("expires_at") if isinstance(entry, dict) else None
-    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) < math.inf
-    return value if ok else math.inf
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return math.inf
+    try:
+        seconds = float(value)
+    except OverflowError:
+        return math.inf
+    return seconds if math.isfinite(seconds) else math.inf
 
 
 def blocked_identities(now=None):
