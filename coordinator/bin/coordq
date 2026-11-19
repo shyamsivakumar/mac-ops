@@ -1294,6 +1294,9 @@ def cmd_status(a):
 
 
 
+OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
+
+
 def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
@@ -1301,7 +1304,7 @@ def gh_json(endpoint, optional=True, fresh=False):
     a timer, and not an explicit `gate` an operator asked for."""
     run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
                          timeout=40, limit=FLOOR if optional else None,
-                         fresh=fresh)
+                         fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
@@ -1598,7 +1601,7 @@ def gate_candidates(config):
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
-        for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100", fresh=True):
+        for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
             if pr["draft"]:
                 continue
             head, number = pr["head"]["sha"], pr["number"]
