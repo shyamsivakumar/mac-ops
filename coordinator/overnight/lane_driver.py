@@ -531,6 +531,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
     if blocked:
+        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
+            return f"skip {lkey}: thread is {thread.get('status')} on a blocked model, held until it is idle"
         sendable = False
         reroute = "model is blocked"
     elif not model_list.same_selection(thread_model, fixer["selection"]):
@@ -557,10 +559,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             raise ValueError(f"No repository for {lkey}")
         if reroute == "model is blocked":
             head = ((pr or attached_pr) or {}).get("headRefName")
-            if not head or not branch_on_origin(repo, head):
-                ledger[f"needs-you:{lkey}"] = "model is blocked and no PR branch on origin to start from"
-                return f"needs-you {lkey}: model is blocked, no PR branch on origin to start from"
-            workspace = {"type": "worktree", "baseRef": "origin/" + head, "startFromOrigin": True}
+            if os.path.isdir(thread.get("worktreePath") or "") and not root_workspace(thread):
+                workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
+            elif head and branch_on_origin(repo, head):
+                workspace = {"type": "worktree", "baseRef": "origin/" + head, "startFromOrigin": True}
+            else:
+                ledger[f"needs-you:{lkey}"] = "model is blocked, its worktree is gone and no PR branch is on origin"
+                return f"needs-you {lkey}: model is blocked, its worktree is gone and no PR branch is on origin"
         elif reroute == "model is not first available" and not root_workspace(thread):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:

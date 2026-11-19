@@ -204,6 +204,7 @@ SELECTIONS = {
     "minimax": {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
     "glm": {"instanceId": "glm", "model": "zai/glm-5.3"},
 }
+OWN = {"type": "existing_worktree", "worktreePath": None}
 PR_BRANCH = {"type": "worktree", "baseRef": "origin/builder/pr", "startFromOrigin": True}
 
 
@@ -228,6 +229,7 @@ class BlockedModelSendTests(unittest.TestCase):
             patch.object(lane, "SNAPSHOT", issues),
             patch.object(lane, "DRY", False),
             patch.object(lane, "branch_on_origin", return_value=True),
+            patch.object(lane, "root_workspace", return_value=False),
             patch.object(lane, "pr_action_skip", return_value=({"headRefName": "builder/pr"}, None)),
             patch.object(lane, "run", run),
             patch.object(lane, "t3", lambda tool, args: {"thread": self.thread}),
@@ -235,31 +237,48 @@ class BlockedModelSendTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def thread_on(self, name, blocked=(), attached=True):
+    def thread_on(self, name, blocked=(), attached=True, status="completed", gone=False):
         selection = SELECTIONS[name]
         names = {lane.model_list.identity(SELECTIONS[b]): {"reason": "limit"} for b in blocked}
         Path(self.dir, "providers-blocked.json").write_text(json.dumps({"blocked": names}))
-        self.thread = {"sendable": True, "status": "completed", **selection, "providerInstanceId": selection["instanceId"],
+        self.thread = {"sendable": True, "status": status, "worktreePath": self.dir + "/gone" * gone, **selection,
+                       "providerInstanceId": selection["instanceId"],
                        "pullRequests": [{"repository": REPO, "number": 7}] * attached}
 
     def launches(self):
         starts = [json.loads(c[2]) for c in self.cmds if c[0] == lane.COORDQ]
         return [a for a in starts if "clientRequestId" in a]
 
-    def test_blocked_thread_with_a_pr_starts_one_replacement_from_its_branch(self):
-        self.thread_on("sonnet", ("sonnet",))
+    def replace(self, key="k"):
         ledger = {}
-        lane.send("t1", "fix it", "t", ledger, "k", repo=REPO)
-        [args] = self.launches()
-        self.assertEqual([args[k] for k in ("modelSelection", "taskType", "message", "workspaceStrategy")],
-                         [SELECTIONS["terra"], "fix", "fix it", PR_BRANCH])
-        self.assertEqual(lane.send("t1", "fix it", "t", ledger, "k", repo=REPO), "already done k")
-        self.assertEqual(len(self.launches()), 1)
+        out = lane.send("t1", "fix it", "t", ledger, key, repo=REPO)
+        return out, ledger
 
-    def test_blocked_thread_without_a_pr_raises_needs_you_and_starts_nothing(self):
-        self.thread_on("sonnet", ("sonnet",), attached=False)
-        ledger = {}
-        out = lane.send("t1", "fix it", "t", ledger, "k", repo=REPO)
+    def test_blocked_idle_thread_is_replaced_in_its_own_worktree_with_or_without_a_pr(self):
+        for attached in (True, False):
+            with self.subTest(attached=attached):
+                self.cmds = []
+                self.thread_on("sonnet", ("sonnet",), attached=attached)
+                out, ledger = self.replace()
+                [args] = self.launches()
+                self.assertEqual([args[k] for k in ("modelSelection", "taskType", "message", "workspaceStrategy")],
+                                 [SELECTIONS["terra"], "fix", "fix it", {**OWN, "worktreePath": self.dir}])
+                self.assertEqual(lane.send("t1", "fix it", "t", ledger, "k", repo=REPO), "already done k")
+                self.assertEqual((len(self.launches()), "needs-you:k" in ledger), (1, False))
+
+    def test_blocked_running_thread_is_held_until_idle(self):
+        self.thread_on("sonnet", ("sonnet",), status="running")
+        out, ledger = self.replace()
+        self.assertIn("held until it is idle", out)
+        self.assertEqual((self.cmds, ledger), ([], {}))
+
+    def test_blocked_thread_with_its_worktree_gone_uses_the_pr_branch_or_raises_needs_you(self):
+        self.thread_on("sonnet", ("sonnet",), gone=True)
+        self.replace()
+        self.assertEqual([a["workspaceStrategy"] for a in self.launches()], [PR_BRANCH])
+        self.cmds = []
+        self.thread_on("sonnet", ("sonnet",), attached=False, gone=True)
+        out, ledger = self.replace()
         self.assertTrue(out.startswith("needs-you k"), out)
         self.assertEqual((self.launches(), list(ledger)), ([], ["needs-you:k"]))
 
@@ -283,7 +302,7 @@ class BlockedModelSendTests(unittest.TestCase):
             lane.unstick(REPO, ledger)
         [args] = self.launches()
         self.assertEqual((args["modelSelection"], args["taskType"], args["workspaceStrategy"]),
-                         (SELECTIONS["minimax"], "standard", PR_BRANCH))
+                         (SELECTIONS["minimax"], "standard", {**OWN, "worktreePath": self.dir}))
         self.assertIn(key, ledger)
         self.thread_on("terra")
         ledger.pop("cont:t1", None)
