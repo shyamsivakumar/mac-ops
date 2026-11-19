@@ -4,7 +4,7 @@
         "name": "example",
         "version": "1.0.0",
         "type": "local",
-        "digest": "sha256:b558ea4e87bafe5023fa33ab21070bcf448ba51661f4933276857a4d150858a1",
+        "digest": "sha256:4af0a0d5ec1938ed0e0359e366480ab995c6b0461251db81a7e6abeb967ff106",
         "path": "evals/harbor/tasks/example"
     },
     "install_only": false,

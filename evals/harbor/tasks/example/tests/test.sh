@@ -6,7 +6,7 @@ set -u
 
 mkdir -p /logs/verifier
 
-if [ -f /app/hello.txt ] && [ "$(cat /app/hello.txt)" = "hello harbor" ]; then
+if [ -f /app/hello.txt ] && printf 'hello harbor\n' | cmp -s - /app/hello.txt; then
   echo 1 > /logs/verifier/reward.txt
 else
   echo 0 > /logs/verifier/reward.txt

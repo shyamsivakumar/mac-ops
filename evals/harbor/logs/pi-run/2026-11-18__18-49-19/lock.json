@@ -1,6 +1,6 @@
 {
     "schema_version": 3,
-    "created_at": "2026-11-19T02:41:03.574437Z",
+    "created_at": "2026-11-19T02:49:21.075881Z",
     "harbor": {
         "version": "0.26.0",
         "is_editable": false
@@ -51,13 +51,17 @@
                 "name": "example",
                 "version": "1.0.0",
                 "type": "local",
-                "digest": "sha256:b558ea4e87bafe5023fa33ab21070bcf448ba51661f4933276857a4d150858a1",
-                "path": "evals/harbor/tasks/example"
+                "digest": "sha256:4af0a0d5ec1938ed0e0359e366480ab995c6b0461251db81a7e6abeb967ff106",
+                "path": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/tasks/example"
             },
             "install_only": false,
             "timeout_multiplier": 1.0,
             "agent": {
-                "name": "oracle",
+                "name": "pi",
+                "model_name": "MiniMax-M3.1-Flash",
+                "base_url": "https://api.minimax.io/anthropic",
+                "model_api_key_name": "MINIMAX_API_KEY",
+                "model_api_format": "anthropic_messages",
                 "skip_model_parsing": false,
                 "skills": [],
                 "resume_trajectory": false,
