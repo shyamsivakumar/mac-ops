@@ -223,8 +223,12 @@ One file, next to the other coordinator config files:
 - live copy: `~/.coordinator/risk-tiers.json`, on the Mac the coordinator
   runs on. The live copy is the policy the gate reads, the same arrangement
   as `tickets.json`: `install_coordinator.py` seeds the file when the
-  machine has none (`LOCAL_CONFIG_FILES` gains one name) and never writes
-  over it afterwards, so a policy edit on the Mac is not install drift.
+  machine has none and never writes over it afterwards, so a policy edit on
+  the Mac is not install drift. This is how the installer treats
+  `tickets.json` today: `LOCAL_CONFIG_FILES` names it, and `plan()` copies a
+  name in that tuple only when `~/.coordinator/<name>` does not exist. The
+  build ticket adds `risk-tiers.json` to `CONFIG_FILES` and to
+  `LOCAL_CONFIG_FILES`.
   The repository copy is the seed for a new machine and the reviewable
   source of the list.
 
@@ -272,6 +276,14 @@ Matching rules:
 - The tier of a pull request is the highest tier among the entries its
   changed files match. Tier order is `routine` < `protected` < `critical`.
 - A file that matches nothing is tier 0.
+- A renamed file is two paths. The gate classifies the new path and the old
+  path, and the file's tier is the higher of the two. Without this, renaming
+  `coordinator/bin/gate_policy.py` to `coordinator/bin/review_policy.py`
+  would match no entry on the new path, give tier 0 and allow a machine
+  merge, when the old path is protected and the correct answer is tier 1 and
+  a manual merge. A file that was moved out of a protected directory is
+  covered the same way. A copy is not a rename: only the new path exists in
+  the file list, and the new path is classified on its own.
 - The tier is computed from the live config on the machine, so a pull
   request that edits the config cannot lower its own tier.
 
@@ -308,9 +320,16 @@ The change is small and lands in two places.
    it in. The two callers use one shared function, so the manual path and the
    scheduled path cannot drift apart.
 
-The changed-file list comes from the pull request itself
-(`gh pr view <pr> --json files`), not from the local checkout, because the
-gate may run on a machine that never cloned the pull request.
+The changed-file list comes from the pull request itself, not from the local
+checkout, because the gate may run on a machine that never cloned the pull
+request. `gh pr view <pr> --json files` returns only the new path of a
+renamed file, so the list is read with `gh api
+repos/<owner>/<repo>/pulls/<n>/files --paginate`, which also returns
+`previous_filename` for every rename. The shared function classifies both the
+`filename` and the `previous_filename` of each entry, and the pull request's
+tier is the highest tier over all of them. A list that has no
+`previous_filename` field on a file whose status is `renamed` is an unreadable
+list and fails closed to tier 1.
 
 ## When the tier cannot be computed, it fails closed
 
@@ -323,7 +342,7 @@ is tier 0 by definition, and that is a known answer, not an unknown one.
 | --- | --- | --- |
 | The config file is missing | 1 | "the risk-tier config is missing, so this pull request is reviewed as protected" |
 | The config file does not parse | 1 | the same, with the parse error named |
-| The pull request's file list cannot be read | 1 | the read error named; the gate never merges on a pull request whose files it could not read |
+| The pull request's file list cannot be read, or a renamed file carries no old path | 1 | the read error named; the gate never merges on a pull request whose files it could not read |
 | The repository is not in the config | 1 | "this repository is not in the risk-tier config, so this pull request is reviewed as protected"; the config must list every repository the gate runs on |
 | A path is listed in two tiers | the higher one | the tier named with both tiers' paths |
 
