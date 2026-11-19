@@ -160,7 +160,7 @@ def start_routing():
          patch.object(lane, "board_snapshot", return_value=snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
-         patch.object(lane, "recover_dead_runs"), \
+         patch.object(lane, "recover_dead_runs"), patch.object(lane, "settle_merged_prs"), \
          patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False):
@@ -190,7 +190,7 @@ def start_routing():
          patch.object(lane, "board_snapshot", return_value=orphan_snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
-         patch.object(lane, "recover_dead_runs"), \
+         patch.object(lane, "recover_dead_runs"), patch.object(lane, "settle_merged_prs"), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
          patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
              read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
@@ -397,21 +397,42 @@ def gate_pipeline():
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
         ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
         ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], None),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"}, [], None),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"},
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"},
          [chain[chain.index(chain[0]) + 1]], None),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
+        ("stray-pass-ignored", repo, "absent", "", {}, [chain[0]], None),
+        ("earlier-fail-later-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"], None),
+        ("retry-replaced-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("merge-timeout-but-merged", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("older-running-newer-pass", repo, "PASS", "VERDICT: PASS", {}, [], None),
+        ("older-pass-newer-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("no-receipts-file", repo, "absent", "", {}, [chain[0]], None),
+        ("retargeted-after-pass", repo, "PASS", "VERDICT: PASS", {}, [chain[0]], None),
     ]
+    gate_key = f"gate:{repo}#20:{head}"
+    extra = {"stray-pass-ignored": {"stray": "VERDICT: PASS"},
+             "earlier-fail-later-pass": {gate_key + ":old:retry": "old"},
+             "retry-replaced-pass": {gate_key + ":old:retry": "old"},
+             "older-running-newer-pass": {gate_key + ":old:retry": "old"},
+             "older-pass-newer-pass": {gate_key + ":old:retry": "old"}}
+    replies = {"stray": "VERDICT: PASS", "old": "dead\nVERDICT: FAIL"}
+    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": "VERDICT: PASS"}}
+    live_by_case = {"older-running-newer-pass": {"old"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
+        receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate", "base:gate": "main"}
+        receipts.update(extra.get(name, {}))
+        receipts.update({f"base:{v}": "main" for k, v in extra.get(name, {}).items() if k.startswith("gate:")})
+        thread_replies = {**replies, **replies_by_case.get(name, {}), "gate": reply}
         pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
         def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
-                    head=head, reply=reply, verdict=verdict):
+                    head=head, reply=reply, verdict=verdict, name=name):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
@@ -449,9 +470,13 @@ def gate_pipeline():
             if cmd[:2] == ["ticket", "close"]:
                 actions.append("provides")
                 return "closed"
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state"]:
+                return json.dumps({"state": "MERGED"})
             if cmd[:3] == ["gh", "pr", "merge"]:
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
+                if name == "merge-timeout-but-merged":
+                    raise subprocess.TimeoutExpired(cmd, 150)
                 return "merged"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
@@ -474,20 +499,18 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args, head=head, verdict=verdict, reply=reply):
-            if tool == "t3_thread_list":
-                exact(head[:8] in args["titleContains"], True)
-                return {"threads": [] if verdict == "absent" else [
-                    dict(threadId="gate", status="completed", updatedAt="fixture")]}
+        def threads(tool, args, thread_replies=thread_replies, name=name):
+            live = live_by_case.get(name, ())
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
-                return {"items": [{"type": "assistant_message", "text": reply}]}
+                return {"thread": {"status": "running" if args["threadId"] in live else "completed"},
+                        "items": [{"type": "assistant_message", "text": thread_replies[args["threadId"]]}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def decision(item, actions=actions):
             # The board write is the one live file this eval must not touch.
-            exact(item["id"], "prompt-merge-FIX-20")
+            exact(item["id"] in ("prompt-merge-FIX-20", "lane-gate-split-FIX-20"), True)
             exact(item["group"], "Coordinator")
             exact(item["kind"], "action")
             exact(item.get("options"), None)
@@ -497,13 +520,17 @@ def gate_pipeline():
         try:
             with tempfile.TemporaryDirectory() as scratch, \
                  scratch_board(scratch), \
+                 patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "publish_decision", decision), \
-                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture",
+                                                baseRefName="other" if name == "retargeted-after-pass" else "main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
+                if name != "no-receipts-file":
+                    Path(scratch, "receipts.json").write_text(json.dumps(receipts))
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
             try:
@@ -518,6 +545,58 @@ def gate_pipeline():
         raise AssertionError("; ".join(failures))
     completion_boundary()
     main_update_boundary()
+
+
+def merged_restart():
+    import lane_driver as lane
+    head = "a" * 40
+    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z", baseRefName="main"),
+              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z", baseRefName="main")]
+    for repo, key, receipts, reply, expected, board in [
+        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"}, "VERDICT: PASS",
+         ["provides", "ff"], None),
+        ("shyamsivakumar/mac-ops", "MO", {}, "", [], "owner"),
+        ("shyamsivakumar/strategy-replay-workbench", "SRW", {}, "", [], "decisions"),
+    ]:
+        actions = []
+
+        def command(cmd, timeout=150, actions=actions):
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return json.dumps(merged)
+            if cmd[:2] == ["ticket", "close"]:
+                exact(cmd[3:5], ["--pr", "20"])
+                actions.append("provides")
+                return "closed"
+            if cmd[0] == "git" and "worktree" in cmd:
+                return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
+            if cmd[0] == "git" and "symbolic-ref" in cmd:
+                return "refs/heads/main"
+            if cmd[0] == "git" and "--ff-only" in cmd:
+                actions.append("ff")
+                return "updated"
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def threads(tool, args, reply=reply):
+            return {"thread": {"status": "completed"}, "items": [{"type": "assistant_message", "text": reply}]}
+
+        ledger = {}
+        with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions, \
+             patch.dict(os.environ, {"COORDINATOR_OWNER_BOARD": str(Path(scratch) / "owner.json")}), \
+             patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
+             patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
+             patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": [dict(number=10, labels=[])]}}}), \
+             patch.object(lane, "DRY", False), \
+             patch.object(lane, "run", command), patch.object(lane, "t3", threads):
+            Path(scratch, "receipts.json").write_text(json.dumps(receipts))
+            for _ in range(2):
+                lane.settle_merged_prs(repo, ledger)
+                exact(actions, expected)
+            item_id = f"lane-merged-unreviewed-{key}-20"
+            owner_path = Path(scratch, "owner.json")
+            owner = [i["id"] for i in json.loads(owner_path.read_text())["items"]] if owner_path.exists() else []
+            exact(owner, [item_id] if board == "owner" else [])
+            exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
+                  [item_id] if board == "decisions" else [])
 
 
 def main_update_boundary():
@@ -1450,26 +1529,21 @@ def api_budget():
 
 def ff_drift():
     import lane_driver as lane
-    from unittest.mock import mock_open
     repo = "fixture/repo"
     path = "/Users/shyamsivakumar/Code/fixture"
     local, origin = "a" * 40, "b" * 40
-    calls = []
+    forwards = []
     ancestor = True
 
     def run(cmd, **kwargs):
+        if cmd == ["git", "-C", path, "fetch", "origin", "main"]:
+            return ""
         if cmd == ["git", "-C", path, "rev-parse", "main", "origin/main"]:
             return f"{local} {origin}"
         if cmd == ["git", "-C", path, "merge-base", "--is-ancestor", local, origin]:
             if not ancestor:
                 raise subprocess.CalledProcessError(1, cmd)
             return ""
-        if cmd[:2] == [lane.COORDQ, "start"]:
-            exact(cmd[3:], ["--priority", "700"])
-            payload = json.loads(cmd[2])
-            exact(payload["title"], "Chore · level local main (FIX)")
-            calls.append(origin)
-            return "fixture-queued"
         raise AssertionError(f"unexpected command: {cmd}")
 
     with patch.object(lane, "PATHS", {repo: "fixture"}), \
@@ -1477,28 +1551,17 @@ def ff_drift():
          patch.object(lane, "CFG", {repo: {"key": "FIX"}}), \
          patch.object(lane, "DRY", False), \
          patch.object(lane.os.path, "isdir", return_value=True), \
-         patch.object(lane, "run", side_effect=run), \
-         patch("builtins.open", mock_open(read_data="fixture chore")):
-        ledger = {}
-        lane.drift_ff(ledger)
-        lane.drift_ff(ledger)
-        exact(calls, [origin])
-        exact(ledger, {f"ff:{repo}:{origin}": "fixture-queued"})
-        origin = "c" * 40
-        lane.drift_ff(ledger)
-        exact(calls, ["b" * 40, origin])
+         patch.object(lane, "fast_forward_main", side_effect=forwards.append), \
+         patch.object(lane, "run", side_effect=run):
+        lane.drift_ff({})
+        exact(forwards, [repo])
         local = origin
-        lane.drift_ff(ledger)
-        exact(calls, ["b" * 40, origin])
+        lane.drift_ff({})
+        exact(forwards, [repo])
         origin = "d" * 40
         ancestor = False
-        before = dict(ledger)
-        with contextlib.redirect_stdout(io.StringIO()) as output:
-            lane.drift_ff(ledger)
-        exact(output.getvalue().splitlines(), [
-            f"FIX   left alone, not fast-forwardable ({local} vs {origin})"])
-        exact(ledger, before)
-        exact(calls, ["b" * 40, "c" * 40])
+        lane.drift_ff({})
+        exact(forwards, [repo])
 
 
 def script_results():
@@ -1564,6 +1627,12 @@ def consolidation_guard():
                 exact("verify every Provides claim" in emitted, True)
                 exact("false, missing or unverified, close nothing" in emitted, True)
                 exact(emitted.index("verify every Provides claim") < emitted.index("gh issue close"), True)
+    lane_brief = ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX"}, 1, 2, "a" * 40, "main", False, False)
+    exact("gh pr merge" in lane_brief, False)
+    exact("fast-forward" in lane_brief and "git merge --ff-only" in lane_brief, False)
+    exact("PROVIDES: PASS " + "a" * 40 in lane_brief, True)
+    other_brief = ticket.gate_brief("shyamsivakumar/tunerise", {"key": "FIX"}, 1, 2, "a" * 40, "main", False, False)
+    exact("gh pr merge 2 -R shyamsivakumar/tunerise --squash --match-head-commit " + "a" * 40 in other_brief, True)
     for brief in (builder, gate):
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
@@ -2281,7 +2350,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         lane.STALL_STATE = {}
         lane.STALL_EVENTS.clear()
         for _ in range(4):
@@ -2310,7 +2379,7 @@ def stall():
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
              patch.object(lane, "busy", return_value=live), patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "stall_receipts", return_value={}), \
-             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
             lane.STALL_STATE = {}
             lane.STALL_EVENTS.clear()
             for _ in range(4):
@@ -2331,7 +2400,7 @@ def stall():
          patch.object(lane, "busy", side_effect=timeout), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "start_next") as start, \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         lane.STALL_STATE = {}
         failed = {}
         with contextlib.redirect_stdout(io.StringIO()), contextlib.suppress(RuntimeError):
@@ -2374,7 +2443,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "run", run), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "run", run), \
          patch.object(lane, "DRY", False):
         for _ in range(3):
             lane.run_pass({})
@@ -2401,7 +2470,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         for _ in range(4):
             lane.run_pass({})
     exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], False)
@@ -2417,7 +2486,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         lane.run_pass({})
     exact(lane.STALL_STATE.get("items", {}), {})
 
@@ -2435,7 +2504,7 @@ def stall():
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
              patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "stall_receipts", return_value={}), \
-             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
             for _ in range(3):
                 lane.run_pass({})
         found = list(lane.STALL_EVENTS)
@@ -3135,7 +3204,7 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():
