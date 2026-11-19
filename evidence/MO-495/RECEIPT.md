@@ -8,9 +8,9 @@ A real supervisor process ran in a real registry beside the live capacity
 contract (`dead_job_and_simulator_proof.py`):
 
 ```
-supervisor pid: 57938
+supervisor pid: 13621
 active jobs before the kill: 1
-reaped jobs: ['925cad6cb3424657a30290e862e6b076']
+reaped jobs: ['44071bce802044f5bfdbe1761b7555c3']
 active jobs after the reap: 0
 job-dead log lines: 1
 job-dead log line: {"command": "sleep", "detail": "supervisor-gone; slot freed", "event": "job-dead", ...}
@@ -28,19 +28,24 @@ on any outcome, the devices that the job booted are shut down
 
 ```
 booted devices before: ['0A9E4E19-...', '193BDCDC-...', '80064A77-...']
-simulator process count before: 527
+simulator process count before: 540
 booted devices while the job runs: [4 devices]
-simulator process count while the job runs: 547
+simulator process count while the job runs: 559
 devices shut down when the job ended: ['EE63FDDC-24A9-46CF-BD25-C384B5D1DD0B']
 booted devices after: ['0A9E4E19-...', '193BDCDC-...', '80064A77-...']
-simulator process count after: 527
-baseline was: 527
+simulator process count after: 540
+baseline was: 540
 ```
 
 The cleanup holds the simulator lock while it reads the competing jobs and
 shuts a device down, and a simulator job takes the same lock before it records
 its devices and launches its workload. A device another running job may use is
 left alone.
+
+The baseline of booted devices is captured after the job holds its project
+lock, so a device that someone else boots while the job waits for that lock is
+part of the baseline and never counts as booted by the job. A job with no
+baseline shuts no device down.
 
 ## Orphan sweep
 
@@ -50,9 +55,11 @@ launchd or lives in a device data directory or a simulator runtime, so a command
 that only names a simulator path, such as a log tail, is never touched. Each
 device is handled on its own: the booted devices and the process table are read
 again after the identities were collected and right before that device's
-processes are signalled, and again before the escalation to SIGKILL. A signal
-goes only to a process whose uid and start token match the ones read with its
-classification.
+processes are signalled, and again before the escalation to SIGKILL.
+Immediately before each signal the device state is read first and the process
+identity last, so no query sits between the identity check and the signal. A
+signal goes only to a process whose uid and start token match the ones read
+with its classification.
 
 ## M1 device and live testing
 
@@ -64,6 +71,6 @@ zero booted devices.
 
 ## Check
 
-The repo check passed at `d4dc12726e3020a87bfa766c0d7b516675177cc8` with a
-clean tree. The proof file `check-proof.md` lists every check, its command, and
-its result.
+The repo check passed at the commit named in `check-proof.md` with a clean
+tree. The proof file `check-proof.md` lists every check, its command, and its
+result.
