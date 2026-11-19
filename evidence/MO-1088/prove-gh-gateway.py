@@ -978,6 +978,8 @@ print("ISSUELISTASSIGNEE", gh_gateway.argv_host(
      "-Rother.example/o/r"]))
 print("RUNVIEWVERBOSE", gh_gateway.argv_host(
     ["gh", "run", "view", "42", "-v", "-R", "ent.example/o/r"]))
+print("RUNVIEWWEB", gh_gateway.argv_host(
+    ["gh", "run", "view", "42", "-w", "-R", "ent.example/o/r"]))
 print("REVIEWBODY", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-R", "actual.example/o/r", "--body",
      "-Rother.example/o/r"]))
@@ -1005,7 +1007,7 @@ check("a host in -R is the effective host",
                   "CREATEWEB", "ent.example", "CREATEEDITOR", "ent.example",
                   "ISSUEEDITOR", "ent.example", "CHECKOUTFORCE", "ent.example",
                   "COMMENTEDITOR", "ent.example", "ISSUECOMMENT", "ent.example", "LIMITATTACHED", "ent.example", "LABELVALUE", "ent.example", "VIEWCOMMENTS", "ent.example", "ISSUEVIEW", "ent.example", "ISSUELISTWEB", "ent.example", "ISSUELISTASSIGNEE", "actual.example",
-                  "RUNVIEWVERBOSE", "ent.example",
+                  "RUNVIEWVERBOSE", "ent.example", "RUNVIEWWEB", "ent.example",
                   "REVIEWBODY", "actual.example"],
       str(selector))
 

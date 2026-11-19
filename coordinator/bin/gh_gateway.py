@@ -682,17 +682,18 @@ def parse_options(argv):
     words = [str(word) for word in (argv or [])[1:]]
     group, verb = command_of(argv)
     key = (group, verb)
-    if key in SHORT_BOOLEAN:
-        booleans = SHORT_BOOLEAN[key]
-    elif verb == "list":
-        # A list command's `-a`/`-d`/`-w` are flags, not values: `-a` is
-        # `--all` for `workflow list` just as it is for `run list`.
+    # Family defaults, then the command's own additions. A command that
+    # gives a family flag a different meaning lists it in SHORT_VALUE, and a
+    # value wins over a flag below, so an override only ever adds.
+    if verb == "list":
         booleans = {"-a", "-d", "-w"}
     elif verb == "view":
-        # A view command's `-c` shows comments and `-w` opens the browser.
-        booleans = {"-c", "-w"}
+        # A view command's `-c` shows comments, `-w` opens the browser and
+        # `-v` is verbose.
+        booleans = {"-c", "-w", "-v"}
     else:
         booleans = set()
+    booleans = booleans | SHORT_BOOLEAN.get(key, set())
     values = SHORT_VALUE.get(key, set())
     options, positionals, ordered = {}, [], []
     # True when a selector-shaped token may have been consumed as the value
@@ -719,15 +720,17 @@ def parse_options(argv):
             ordered.append((name, True))
             index += 1
             continue
+        if word in values or (word in VALUE_FLAGS and word not in booleans):
+            # An explicit value beats a family flag: `issue list -a` is the
+            # assignee there, even though `-a` is a flag for other lists.
+            options[word] = following
+            ordered.append((word, following))
+            index += 2
+            continue
         if word in booleans:
             options[word] = True
             ordered.append((word, True))
             index += 1
-            continue
-        if word in values or (word in VALUE_FLAGS and word not in booleans):
-            options[word] = following
-            ordered.append((word, following))
-            index += 2
             continue
         if word.startswith("-") and len(word) > 2:
             # A cluster of short options: `-dRhost/o/r` is `-d` (a flag)
