@@ -1249,12 +1249,10 @@ _orphan_simulators_seen = set()
 
 def _reap_orphan_simulators(helper):
     global _orphan_simulators_seen
-    orphans = {device["udid"]: device for device in helper.orphaned_ci_simulators()}
-    survivors = [udid for udid in orphans if udid in _orphan_simulators_seen]
-    _orphan_simulators_seen = set(orphans)
-    for udid in survivors:
-        helper.shutdown_simulator(udid)
-    return survivors
+    orphans = {device["udid"] for device in helper.orphaned_ci_simulators()}
+    survivors = sorted(orphans & _orphan_simulators_seen)
+    _orphan_simulators_seen = orphans
+    return helper.reap_orphaned_ci_simulators(survivors) if survivors else []
 
 
 def controller_tick(*, board_control=True, cfg=None):

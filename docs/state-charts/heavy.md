@@ -20,7 +20,7 @@ Each queue entry stores the waiting process identity and is removed when that pr
 
 The governor tick calls the registry reap on every sample. A running or starting job whose supervisor process is gone, and whose workload group has no live members, is logged once as `job-dead` and its slot is freed in that tick.
 
-An `xcodebuild` job records which simulators named by its `-destination` were shut down at launch. When the job ends, whether it exits, fails or is killed, heavy shuts those simulators down and logs `simulator-shutdown`. A simulator is left running while another live heavy `xcodebuild` job exists or any `xcodebuild` or `xctest` process names it.
+An `xcodebuild` job records which simulators named by its `-destination` were shut down at launch. An `xcrun simctl boot <udid or name>` job records the device it names when that device was shut down at launch. When the job ends, whether it exits, fails or is killed, heavy shuts those simulators down and logs `simulator-shutdown`. The in-use check and the shutdown run together under the registry lock, so a job admitted meanwhile cannot acquire the device between them. A simulator is left running while another live heavy `xcodebuild` job exists or any `xcodebuild` or `xctest` process names it.
 
 Before submitting deploy gates after installation, drain all queued supervisors from the previous release. Older supervisors reject deploy queue records and can fail their own waiting commands if a deploy is queued.
 

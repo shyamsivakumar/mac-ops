@@ -67,10 +67,11 @@ QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 HEARTBEAT_TEMP_PATTERN = re.compile(r"\.heartbeat-[0-9a-f]{32}\.tmp")
 SIMCTL = ["/usr/bin/xcrun", "simctl"]
 SIMULATOR_TIMEOUT = 20.0
+SIMULATOR_SHUTDOWN_TIMEOUT = 4.0
 CI_SIMULATOR_NAME = "CI-iPhone"
 SIMULATOR_USER_COMMANDS = frozenset({"xcodebuild", "xctest"})
 SIMULATOR_RUNTIME_PATTERN = re.compile(
-    r"^\s*\d+\s+launchd_sim\s+\S*/Devices/([0-9A-Fa-f-]{36})/"
+    r"^\s*(\d+)\s+(launchd_sim\s+)?\S*/CoreSimulator/Devices/([0-9A-Fa-f-]{36})/"
 )
 
 
@@ -1816,7 +1817,7 @@ def simulator_devices() -> List[Dict[str, str]]:
 
 
 def shutdown_simulator(udid: str) -> None:
-    _run_native(SIMCTL + ["shutdown", udid], SIMULATOR_TIMEOUT)
+    _run_native(SIMCTL + ["shutdown", udid], SIMULATOR_SHUTDOWN_TIMEOUT)
 
 
 def _destination_simulators(
@@ -1857,13 +1858,11 @@ def _simulator_process_table() -> Dict[int, ProcessInfo]:
 
 def _simulator_in_use(
     device: Dict[str, str],
-    registry: Registry,
+    records: List[Dict[str, Any]],
+    table: Dict[int, ProcessInfo],
     commands: List[str],
     exclude_job: Optional[str] = None,
 ) -> bool:
-    table = _simulator_process_table()
-    with registry.lock(exclusive=False):
-        records = registry.records()
     for record in records:
         if (
             record.get("job_id") != exclude_job
@@ -1883,11 +1882,28 @@ def _simulator_in_use(
     return False
 
 
+def _simctl_boot_simulators(
+    argv: Sequence[str], devices: List[Dict[str, str]]
+) -> Set[str]:
+    if len(argv) < 4 or list(argv[1:3]) != ["simctl", "boot"]:
+        return set()
+    target = argv[3].upper()
+    by_udid = {device["udid"] for device in devices if device["udid"].upper() == target}
+    if by_udid:
+        return by_udid
+    by_name = {device["udid"] for device in devices if device["name"] == argv[3]}
+    return by_name if len(by_name) == 1 else set()
+
+
 def simulators_booted_by(command_basename: str, argv: Sequence[str]) -> Set[str]:
-    if command_basename != "xcodebuild":
+    if command_basename == "xcodebuild":
+        find_targets = _destination_simulators
+    elif command_basename == "xcrun":
+        find_targets = _simctl_boot_simulators
+    else:
         return set()
     devices = simulator_devices()
-    targeted = _destination_simulators(argv, devices)
+    targeted = find_targets(argv, devices)
     return {
         device["udid"]
         for device in devices
@@ -1898,45 +1914,100 @@ def simulators_booted_by(command_basename: str, argv: Sequence[str]) -> Set[str]
 def release_simulators(
     registry: Registry, job_id: str, udids: Set[str]
 ) -> List[str]:
-    commands = _process_commands()
+    booted = [
+        device
+        for device in simulator_devices()
+        if device["udid"] in udids and device["state"] == "Booted"
+    ]
     shut_down = []
-    for device in simulator_devices():
-        if (
-            device["udid"] in udids
-            and device["state"] == "Booted"
-            and not _simulator_in_use(device, registry, commands, job_id)
-        ):
-            shutdown_simulator(device["udid"])
-            shut_down.append(device["udid"])
+    if not booted:
+        return shut_down
+    with registry.lock():
+        commands = _process_commands()
+        table = _simulator_process_table()
+        records = registry.records()
+        for device in booted:
+            if not _simulator_in_use(device, records, table, commands, job_id):
+                shutdown_simulator(device["udid"])
+                shut_down.append(device["udid"])
     return shut_down
+
+
+def _simulator_runtime_pids(
+    commands: List[str],
+) -> Tuple[Dict[str, List[int]], Set[str]]:
+    pids: Dict[str, List[int]] = {}
+    booted: Set[str] = set()
+    for match in map(SIMULATOR_RUNTIME_PATTERN.match, commands):
+        if match:
+            udid = match.group(3).upper()
+            pids.setdefault(udid, []).append(int(match.group(1)))
+            if match.group(2):
+                booted.add(udid)
+    return pids, booted
+
+
+def _refresh_simulator_names() -> None:
+    pids, _ = _simulator_runtime_pids(_process_commands())
+    if not pids.keys() <= _SIMULATOR_NAMES.keys():
+        for device in simulator_devices():
+            _SIMULATOR_NAMES[device["udid"]] = device["name"]
+
+
+def _orphaned_ci_simulators(registry: Registry) -> List[Dict[str, Any]]:
+    commands = _process_commands()
+    pids, booted = _simulator_runtime_pids(commands)
+    if not pids:
+        return []
+    table = _simulator_process_table()
+    records = registry.records()
+    return [
+        {
+            "udid": udid,
+            "name": CI_SIMULATOR_NAME,
+            "booted": udid in booted,
+            "pids": pids[udid],
+        }
+        for udid in sorted(pids)
+        if _SIMULATOR_NAMES.get(udid) == CI_SIMULATOR_NAME
+        and not _simulator_in_use(
+            {"udid": udid, "name": CI_SIMULATOR_NAME}, records, table, commands
+        )
+    ]
 
 
 def orphaned_ci_simulators(
     registry: Optional[Registry] = None,
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     if registry is None:
         registry = Registry(state_directory())
-    commands = _process_commands()
-    booted = {
-        match.group(1).upper()
-        for match in map(SIMULATOR_RUNTIME_PATTERN.match, commands)
-        if match
-    }
-    if not booted:
-        return []
-    if not booted <= _SIMULATOR_NAMES.keys():
-        for device in simulator_devices():
-            _SIMULATOR_NAMES[device["udid"]] = device["name"]
-    ci_devices = [
-        {"udid": udid, "name": CI_SIMULATOR_NAME}
-        for udid in sorted(booted)
-        if _SIMULATOR_NAMES.get(udid) == CI_SIMULATOR_NAME
-    ]
-    return [
-        device
-        for device in ci_devices
-        if not _simulator_in_use(device, registry, commands)
-    ]
+    _refresh_simulator_names()
+    with registry.lock(exclusive=False):
+        return _orphaned_ci_simulators(registry)
+
+
+def reap_orphaned_ci_simulators(
+    udids: Iterable[str], registry: Optional[Registry] = None
+) -> List[str]:
+    if registry is None:
+        registry = Registry(state_directory())
+    wanted = set(udids)
+    reaped = []
+    _refresh_simulator_names()
+    with registry.lock():
+        for device in _orphaned_ci_simulators(registry):
+            if device["udid"] not in wanted:
+                continue
+            if device["booted"]:
+                shutdown_simulator(device["udid"])
+            else:
+                for pid in device["pids"]:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        continue
+            reaped.append(device["udid"])
+    return reaped
 
 
 @dataclass
