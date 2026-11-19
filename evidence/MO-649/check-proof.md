@@ -1,8 +1,8 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `67b5ff8dfe4c65afa638ab5afeff9653fdb70f9b`
-Working tree clean when the checks ran: no
+Checked commit: `2b29faf7ca08a1f17a6dae2b2e7a378422ae8ec4`
+Working tree clean when the checks ran: yes
 Run result: passed
 
 | Check | Command | Result | Detail |
@@ -16,7 +16,7 @@ Run result: passed
 | python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-48sy_o4b -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-48sy_o4b/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-_rzzx0ze -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-_rzzx0ze/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_lane_decisions_board | `python3 -m unittest tests.test_lane_decisions_board` | passed |  |
 
