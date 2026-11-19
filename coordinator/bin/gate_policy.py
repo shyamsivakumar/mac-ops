@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -19,6 +20,11 @@ PROMPT_NO_MERGE = (
     "auto-merges (Shyam): do not merge. Stop at the verdict and report it; Shyam merges a passing one himself."
 )
 PROMPT_CLOSE_NOTHING = " Do not close the issue either: the merge that would close it is Shyam's."
+
+
+def brief_base(message, head):
+    found = re.search(rf"git diff origin/(\S+?)\.\.\.{re.escape(head)}", message)
+    return found.group(1) if found else None
 
 
 def manual_merge(settings):

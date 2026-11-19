@@ -397,9 +397,9 @@ def gate_pipeline():
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
         ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
         ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], None),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"}, [], None),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"},
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"},
          [chain[chain.index(chain[0]) + 1]], None),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
@@ -407,6 +407,7 @@ def gate_pipeline():
         ("earlier-fail-later-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"], None),
         ("retry-replaced-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
         ("merge-timeout-but-merged", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("retargeted-after-pass", repo, "PASS", "VERDICT: PASS", {}, [chain[0]], None),
     ]
     gate_key = f"gate:{repo}#20:{head}"
     extra = {"stray-pass-ignored": {"stray": "VERDICT: PASS"},
@@ -416,7 +417,7 @@ def gate_pipeline():
     replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
-        receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate"}
+        receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate", "base:gate": "main"}
         receipts.update(extra.get(name, {}))
         thread_replies = {**replies, **replies_by_case.get(name, {}), "gate": reply}
         pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
@@ -516,7 +517,8 @@ def gate_pipeline():
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "publish_decision", decision), \
-                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture",
+                                                baseRefName="other" if name == "retargeted-after-pass" else "main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
                 Path(scratch, "receipts.json").write_text(json.dumps(receipts))
@@ -539,10 +541,10 @@ def gate_pipeline():
 def merged_restart():
     import lane_driver as lane
     head = "a" * 40
-    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z"),
-              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z")]
+    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z", baseRefName="main"),
+              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z", baseRefName="main")]
     for repo, key, receipts, reply, expected, board in [
-        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate"}, "VERDICT: PASS",
+        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"}, "VERDICT: PASS",
          ["provides", "ff"], None),
         ("shyamsivakumar/mac-ops", "MO", {}, "", [], "owner"),
         ("shyamsivakumar/strategy-replay-workbench", "SRW", {}, "", [], "decisions"),
@@ -586,6 +588,36 @@ def merged_restart():
             exact(owner, [item_id] if board == "owner" else [])
             exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
                   [item_id] if board == "decisions" else [])
+
+
+def pending_fast_forward():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    forwards = []
+
+    def command(cmd, timeout=150):
+        if cmd[:3] == ["gh", "pr", "list"]:
+            return "[]"
+        if cmd[:2] == ["ticket", "close"]:
+            return "closed"
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    def stopped(repo_name):
+        raise RuntimeError("stopped after the close")
+
+    ledger = {}
+    with patch.object(lane, "run", command), patch.object(lane, "DRY", False), \
+         patch.object(lane, "CFG", {repo: dict(key="MO", projectId="fixture")}), \
+         patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": []}}}):
+        with patch.object(lane, "fast_forward_main", stopped):
+            try:
+                lane.after_merge(repo, 20, "a" * 40, "10", {"threadId": "gate"}, ledger)
+            except RuntimeError:
+                pass
+        for _ in range(2):
+            with patch.object(lane, "fast_forward_main", lambda name: forwards.append(name)):
+                lane.settle_merged_prs(repo, ledger)
+    exact(forwards, [repo])
 
 
 def main_update_boundary():
@@ -3209,7 +3241,7 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "pending-fast-forward": pending_fast_forward, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():
