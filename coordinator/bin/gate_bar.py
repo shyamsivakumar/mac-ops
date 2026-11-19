@@ -19,4 +19,8 @@ Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies
 - Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.
 - After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; no 4th review as is.
 
+Failure blast radius (Shyam, 2026-11-18, after a sell-recovery check blocked every Bot 1 exit for 1.5 days):
+- For any change that can stop, skip or delay an order or an exit, state what happens to EVERY open trade when the new check fails or throws, and to trades unrelated to the bad input. A check that fails closed for all trades because of one record is a major finding, even if the ticket asks for it; flag the ticket instead.
+- Ask whether real production data could contain inputs the tests do not (old id formats, test trades, partial records). If the PR's proofs only use clean fixtures, list that as a major gap for exit and order paths.
+
 When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator."""
