@@ -41,18 +41,21 @@ const CONFIRM_GAP = 400;
 const DEC_FRESH = 60000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
 const PLAN_STALE = 60000;
-const BULK_KEYS = new Set(["S", "A", "M", "F", "U"]);
+const BULK_KEYS = new Set(["S", "A", "M", "F", "U", "C"]);
 const SETTLEABLE = ["done", "fail", "stop"];
 const NOTE_KINDS = { settle: "not finished", approve: "not ready", retry: "not failed", rebase: "not conflicting", note: "no thread to reply to" };
 const ACT_OF = { Rebase: "rebase", Retry: "retry", Note: "reply" };
+const SENT_WORD = { "Send back": "sent back" };
 const srcOf = (g) => (g.kind === "ask" ? "coordinator" : g.threads.some((t) => t.review) ? "review" : "task");
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
+const SENT = new Map();
 const WT_EVERY = 30000;
 
 const DAY = 86400000;
 const SNOOZED_KEY = "snoozed";
 const RETRY_NOTE = "run it again after the last failure";
+const SEND_BACK_NOTE = "the open PR has failing CI or review feedback and nothing is working on it; read what failed, fix it, run the repo's local checks, push, and reply with what you changed";
 const REBASE_NOTE = "rebase the branch on origin/main, resolve the conflicts keeping both sides' intent, run the repo's local checks, push, and reply with what conflicted";
 const SNOOZE_CHOICES = [["tomorrow", "Until tomorrow 9am"], ["3d", "For 3 days"], ["monday", "Until next Monday 9am"], ["change", "Until it changes"]];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -77,7 +80,41 @@ const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.
 
 const REBASE_COLUMNS = ["needs", "stuck", "review"];
 
-const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
+const failedIn = (cols) => cols.stuck.groups.filter((g) => g.kind === "fail" && !g.asleep);
+
+const CLEAR_VERB = { rebase: "Rebase", retry: "Retry", sendback: "Send back" };
+const CLEAR_SKIP = { asleep: "snoozed", asked: "asked need a reply", stalled: "stalled", sent: "already sent", other: "no standard fix" };
+const CLEAR_SEND_BACK = ["ci", "changes", "unrouted"];
+
+const clearAction = (g, rebasable) => {
+  if (g.asleep) return "asleep";
+  if (g.needs.includes("asked")) return "asked";
+  if (g.needs.includes("stalled")) return "stalled";
+  if (rebasable.has(g)) return "rebase";
+  if (g.kind === "fail") return "retry";
+  return CLEAR_SEND_BACK.some((reason) => g.needs.includes(reason)) ? "sendback" : "other";
+};
+
+const planClear = (groups, rebasable, sentAs) => {
+  const actions = [];
+  const skipped = new Map();
+  const skip = (why) => skipped.set(why, (skipped.get(why) ?? 0) + 1);
+  for (const g of groups) {
+    const action = clearAction(g, rebasable);
+    if (!CLEAR_VERB[action]) skip(action);
+    else if (sentAs(g, CLEAR_VERB[action])) skip("sent");
+    else actions.push([g, action]);
+  }
+  return { actions, skipped };
+};
+
+const clearCounts = (actions) => Object.keys(CLEAR_VERB).map((action) => [action, actions.filter(([, a]) => a === action).length]).filter(([, n]) => n).map(([action, n]) => `${n} ${CLEAR_VERB[action].toLowerCase()}`).join(" · ");
+
+const clearTip = ({ actions, skipped }) => {
+  const total = [...skipped.values()].reduce((a, n) => a + n, 0);
+  const why = [...skipped].map(([reason, n]) => (skipped.size > 1 ? `${n} ${CLEAR_SKIP[reason]}` : CLEAR_SKIP[reason])).join(", ");
+  return `Send each stuck card its standard fix: ${[clearCounts(actions), total && `${total} skipped (${why})`].filter(Boolean).join(" · ")} (C)`;
+};
 
 const finishedOf = (g) => g.threads.filter((c) => SETTLEABLE.includes(c.kind));
 
@@ -190,7 +227,6 @@ export default class Board extends View {
     this.seen = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}");
     this.snoozed = JSON.parse(localStorage.getItem(SNOOZED_KEY) ?? "{}");
     this.asleepCount = 0;
-    this.sent = new Map();
     this.marks = new Set();
     this.replyMarked = false;
     this.actSeen = shared("cockpit.act")?.rev ?? 0;
@@ -574,7 +610,7 @@ export default class Board extends View {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
       g.trusted = !this.unsure();
-      g.sentAt = this.sent.get(g.key)?.at ?? 0;
+      g.sentAt = SENT.get(g.key)?.at ?? 0;
       g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", now);
       g.stalledAt = stallOf(g, now);
       const lane = laneOf(g, g.needs, () => !this.reviewBlock(g));
@@ -648,6 +684,7 @@ export default class Board extends View {
       retry: (cx) => this.openRetry(cx),
       rebase: (cx) => this.rebase(this.current(), cx),
       rebaseAll: (cx, column) => this.rebaseAll(cx, column),
+      clearStuck: (cx) => this.clearStuck(cx),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
       fold: (key, cx) => {
@@ -715,7 +752,7 @@ export default class Board extends View {
     const lanes = new Map([...cols.run.groups.filter((g) => g.lane === "backlog").map((g) => [g.key, "backlog"]), ...placed.map(([g, lane]) => [g.key, lane])]);
     const marked = this.keys().filter((k) => !this.isFolded(k)).flatMap((k) => cols[k].groups).filter((g) => this.marks.has(g.key));
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing, marked, lanes };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_COLUMNS.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, clear: this.clearPlan(cols), conflicts: Object.fromEntries(REBASE_COLUMNS.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   fan(t, placed, cb, now) {
@@ -1238,19 +1275,19 @@ export default class Board extends View {
   pruneSent(live) {
     if (this.pop || !this.board || this.unsure()) return;
     const byKey = new Map(live.map((g) => [g.key, g]));
-    for (const [key, sent] of this.sent) if (!byKey.has(key) || sent.stamp !== this.activity(byKey.get(key))) this.sent.delete(key);
+    for (const [key, sent] of SENT) if (!byKey.has(key) || sent.stamp !== this.activity(byKey.get(key))) SENT.delete(key);
   }
 
   sentAs(g, verb) {
-    const sent = this.sent.get(g.key);
+    const sent = SENT.get(g.key);
     return sent?.action === verb && sent.stamp === this.activity(g) ? sent : null;
   }
 
   sentText(g, now) {
-    const sent = this.sent.get(g.key);
+    const sent = SENT.get(g.key);
     if (!sent) return "";
     const age = ago(sent.at, now);
-    return `${sent.action.toLowerCase()} sent${age === "now" ? "" : ` ${age} ago`}`;
+    return `${SENT_WORD[sent.action] ?? `${sent.action.toLowerCase()} sent`}${age === "now" ? "" : ` ${age} ago`}`;
   }
 
   pruneSnoozed(live, now) {
@@ -1298,6 +1335,26 @@ export default class Board extends View {
       const targets = this.rebaseTargets(column).filter((g) => seen.has(g.key));
       if (!targets.length) return say("info", "No conflicting PRs to rebase");
       this.tellEach(targets.map((g) => [g, this.ask("Rebase", g, REBASE_NOTE)]), "Rebase", cx);
+    }, cx, armed);
+  }
+
+  clearPlan(cols = this.layout.cols) {
+    const plan = planClear(cols.stuck.groups, new Set(this.rebaseTargets("stuck", cols)), (g, verb) => this.sentAs(g, verb));
+    return { actions: plan.actions, tip: clearTip(plan) };
+  }
+
+  clearStuck(cx) {
+    if (!this.owns("stuck") || this.guard(false)) return;
+    const armed = new Set(this.clearPlan().actions.map(([g]) => g.key));
+    if (!armed.size) return say("info", "No stuck card has a standard fix");
+    this.confirm("clear-stuck", "stuck", (seen) => {
+      const targets = this.clearPlan().actions.filter(([g]) => seen.has(g.key));
+      if (!targets.length) return say("info", "No stuck card has a standard fix");
+      const info = this.coordinator();
+      if (!info && targets.some(([, action]) => action !== "sendback")) return say("error", "The Coordinator isn't running");
+      const deliver = (text, g, action) => (action === "sendback" ? sendReply(this.taskThread(g).key, text) : hc(["send", info.address, text]));
+      const text = (g, action) => (action === "rebase" ? this.ask("Rebase", g, REBASE_NOTE) : action === "retry" ? this.ask("Retry", g, RETRY_NOTE) : SEND_BACK_NOTE);
+      this.tellEach(targets.map(([g, action]) => [g, text(g, action), CLEAR_VERB[action], action]), "Clear", cx, deliver, clearCounts(targets));
     }, cx, armed);
   }
 
@@ -1974,18 +2031,21 @@ export default class Board extends View {
     const info = deliver ? null : this.coordinator();
     if (!deliver && !info) return say("error", "The Coordinator isn't running");
     const send = deliver ?? ((text) => hc(["send", info.address, text]));
-    const fresh = pairs.filter(([g]) => !this.sentAs(g, verb));
+    const verbOf = ([, , own]) => own ?? verb;
+    const actionOf = ([, , , action]) => action;
+    const fresh = pairs.filter((pair) => !this.sentAs(pair[0], verbOf(pair)));
     const eligibleByKey = new Map(fresh.map(([g]) => [g.key, this.seen[g.key]?.col === "needs"]));
     const skipped = pairs.length - fresh.length ? `${pairs.length - fresh.length} skipped, already sent` : "";
     if (!fresh.length) return say("info", `${verb} skipped`, skipped);
     this.attempt(`${verb} sent`, async () => {
       const failed = [];
-      for (const [g, text] of fresh) {
+      for (const pair of fresh) {
+        const [g, text] = pair;
         const eligible = eligibleByKey.get(g.key);
         try {
-          await send(text, g);
-          this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
-          this.noteAct(g, ACT_OF[verb], Date.now(), eligible);
+          await send(text, g, actionOf(pair));
+          SENT.set(g.key, { action: verbOf(pair), stamp: this.activity(g), at: Date.now() });
+          if (ACT_OF[verbOf(pair)]) this.noteAct(g, ACT_OF[verbOf(pair)], Date.now(), eligible);
         } catch {
           failed.push(g.task || this.cleanTitle(g));
         }
@@ -2124,6 +2184,7 @@ export default class Board extends View {
     else if (k === "z" && c) this.openSnoozeChooser(c, cx);
     else if (k === "Z") this.openSnoozed(cx);
     else if (k === "F") this.openRetry(cx);
+    else if (k === "C") this.clearStuck(cx);
     else if (k === "q") this.queue(c, cx);
     else if (k === "p") this.openPr(c);
     else if (k === "c") this.openFiles(c);
