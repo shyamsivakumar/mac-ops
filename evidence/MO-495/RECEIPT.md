@@ -42,6 +42,14 @@ shuts a device down, and a simulator job takes the same lock before it records
 its devices and launches its workload. A device another running job may use is
 left alone.
 
+One classification decides both paths. A job is a simulator job when its
+command is `xcodebuild`, when its command is `simctl`, or when any argument is
+`simctl`, so `xcrun simctl` is one. The job record carries that mark before
+the job waits or launches, so a job that cannot take the simulator lock still
+tells the cleanup that it uses simulators. The cleanup treats a competing job
+with that mark and no snapshot, or with an unknown baseline, as a user of every
+device, and shuts nothing down.
+
 The baseline of booted devices is captured after the job holds its project
 lock, so a device that someone else boots while the job waits for that lock is
 part of the baseline and never counts as booted by the job. A job with no
