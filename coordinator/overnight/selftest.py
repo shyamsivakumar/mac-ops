@@ -1792,11 +1792,19 @@ def worktree_base_ref():
     startFromOrigin, and leaves every other strategy and tool alone.
     """
     import ast
+    import copy
     queue_path = Path(__file__).resolve().parents[1] / "bin" / "coordq"
     tree = ast.parse(queue_path.read_text())
     function = next(node for node in tree.body
                     if isinstance(node, ast.FunctionDef) and node.name == "worktree_base")
-    namespace = {"DEFAULT_BASE_REF": "origin/main"}
+    # The default is read from coordq and checked against the literal here, so
+    # the eval cannot agree with a wrong default.
+    constant = next(node for node in tree.body
+                    if isinstance(node, ast.Assign)
+                    and any(getattr(target, "id", None) == "DEFAULT_BASE_REF" for target in node.targets))
+    default_ref = ast.literal_eval(constant.value)
+    exact(default_ref, "origin/main")
+    namespace = {"DEFAULT_BASE_REF": default_ref}
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(queue_path), "exec"), namespace)
     fill = namespace["worktree_base"]
     launch = "t3_thread_launch"
@@ -1807,10 +1815,12 @@ def worktree_base_ref():
     # An empty baseRef is a missing one.
     exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "baseRef": ""}}),
           {"workspaceStrategy": default})
-    # A caller's own baseRef and startFromOrigin are kept as given.
+    # A caller's own baseRef and startFromOrigin are kept as given. The input
+    # is a copy, so a function that changed it in place would not also change
+    # the expected value.
     own = {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture",
                                  "startFromOrigin": False}}
-    exact(fill(launch, own), own)
+    exact(fill(launch, copy.deepcopy(own)), own)
     exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture"}}),
           {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture"}})
     # A caller's own startFromOrigin is kept when only the baseRef is filled.
@@ -1820,11 +1830,11 @@ def worktree_base_ref():
     # A root or existing_worktree strategy is left alone.
     for strategy in ({"type": "root"}, {"type": "existing_worktree", "worktreePath": "/fixture"}):
         args = {"workspaceStrategy": strategy}
-        exact(fill(launch, args), args)
+        exact(fill(launch, copy.deepcopy(args)), args)
     # No other tool gets a baseRef, and a launch with no strategy is left alone.
     for tool in ("t3_thread_send", "t3_thread_list"):
         args = {"workspaceStrategy": {"type": "worktree"}}
-        exact(fill(tool, args), args)
+        exact(fill(tool, copy.deepcopy(args)), args)
     exact(fill(launch, {"message": "brief"}), {"message": "brief"})
 
 
