@@ -26,6 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 LANE_DIR = ROOT / "coordinator" / "overnight"
 REPO = "shyamsivakumar/mac-ops"
 HEAD = "a" * 40
+sys.path[:0] = [str(LANE_DIR), str(ROOT / "coordinator" / "bin")]
+import lane_driver as lane
 
 
 class ReplayTests(unittest.TestCase):
@@ -194,6 +196,103 @@ class ReplayTests(unittest.TestCase):
         result, commands = self.pass_once({}, prs)
         self.assertTrue(result.startswith("skip #20: superseded"), result)
         self.assertEqual([c for c in commands if c[0] == self.lane.COORDQ], [])
+
+
+WT = "/work/builder"
+SELECTIONS = {
+    "sonnet": {"instanceId": "claudeAgent", "model": "claude-sonnet-5-5"},
+    "terra": {"instanceId": "codex", "model": "gpt-6.1-terra"},
+    "minimax": {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
+    "glm": {"instanceId": "glm", "model": "zai/glm-5.3"},
+}
+OWN = {"type": "existing_worktree", "worktreePath": WT}
+MAIN = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
+
+
+class BlockedModelSendTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.cmds, self.git, self.root, self.dir = [], "builder/x", False, tmp.name
+        receipts = Path(tmp.name, "receipts.json")
+        receipts.write_text(json.dumps({f"ticket:{REPO}#9:a1": "t1"}))
+        env = {"COORDQ_DIR": tmp.name, "COORDINATOR_MODELS": str(ROOT / "coordinator" / "models.json")}
+        issues = {"repos": {REPO: {"issues": [{"number": 9, "labels": []}], "prs": []}}}
+
+        def run(cmd, timeout=150):
+            self.cmds.append(cmd)
+            return self.git if cmd[0] == "git" else "queued"
+
+        for patcher in (
+            patch.dict("os.environ", env),
+            patch.object(lane, "CFG", {REPO: {"key": "MO", "projectId": "p"}}),
+            patch.object(lane, "RECEIPTS", str(receipts)),
+            patch.object(lane, "SNAPSHOT", issues),
+            patch.object(lane, "DRY", False),
+            patch.object(lane, "root_workspace", lambda thread: self.root),
+            patch.object(lane, "pr_action_skip", return_value=({"headRefName": "builder/pr"}, None)),
+            patch.object(lane, "run", run),
+            patch.object(lane, "t3", lambda tool, args: {"thread": self.thread}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def thread_on(self, name, status, blocked=(), attached=False):
+        selection = SELECTIONS[name]
+        names = {lane.model_list.identity(SELECTIONS[b]): {"reason": "limit"} for b in blocked}
+        Path(self.dir, "providers-blocked.json").write_text(json.dumps({"blocked": names}))
+        pulls = [{"repository": REPO, "number": 7}] * attached
+        self.thread = {"sendable": True, "worktreePath": WT, **selection, "providerInstanceId": selection["instanceId"],
+                       "status": status, "pullRequests": pulls}
+
+    def launches(self, key):
+        starts = [json.loads(c[2]) for c in self.cmds if c[0] == lane.COORDQ]
+        return [a for a in starts if a.get("clientRequestId") == key]
+
+    def test_blocked_thread_is_replaced_on_the_next_entry(self):
+        key = f"fix:{REPO}#1"
+        cases = [("idle", "sonnet", "completed", {}, OWN, "terra", "fix"),
+                 ("running", "sonnet", "running", {}, MAIN, "terra", "fix"),
+                 ("herdr", "sonnet", "completed", {"git": "herdr/x"}, MAIN, "terra", "fix"),
+                 ("detached", "sonnet", "completed", {"git": "HEAD"}, MAIN, "terra", "fix"),
+                 ("shared", "sonnet", "completed", {"root": True}, MAIN, "terra", "fix"),
+                 ("pr", "sonnet", "running", {"pr": True}, {**MAIN, "baseRef": "origin/builder/pr"}, "terra", "fix"),
+                 ("build", "minimax", "completed", {}, OWN, "glm", "standard")]
+        for name, model, status, kw, workspace, expected, kind in cases:
+            with self.subTest(name):
+                self.cmds, self.git, self.root = [], kw.get("git", "builder/x"), kw.get("root", False)
+                self.thread_on(model, status, ("sonnet", "minimax"), kw.get("pr", False))
+                ledger = {}
+                lane.send("t1", "fix it", "t", ledger, key, repo=REPO, task_type=kind)
+                [args] = self.launches(key)
+                self.assertEqual([args[k] for k in ("modelSelection", "taskType", "message", "workspaceStrategy")],
+                                 [SELECTIONS[expected], kind, "fix it", workspace])
+                self.assertEqual(list(ledger), [key])
+
+    def test_unblocked_send_and_all_blocked_queue(self):
+        key = f"fix:{REPO}#1"
+        self.thread_on("terra", "completed")
+        lane.send("t1", "fix it", "t", {}, key, repo=REPO)
+        cmd = self.cmds[-1]
+        self.assertEqual(cmd[cmd.index("--tool") + 1], "t3_thread_send")
+        self.assertEqual(json.loads(cmd[2]), {"threadId": "t1", "message": "fix it"})
+        self.cmds = []
+        self.thread_on("sonnet", "running", ("sonnet", "terra"))
+        ledger = {}
+        out = lane.send("t1", "fix it", "t", ledger, key, repo=REPO)
+        self.assertEqual((out, self.cmds, ledger), (f"skip {key}: every fix model is blocked", [], {}))
+
+    def test_continuations_keep_a_key_only_for_a_blocked_replacement(self):
+        key = f"continue:{REPO}#9:t1"
+        for label, blocked, replacements in (("blocked", ("sonnet",), 1), ("later", (), 2)):
+            with self.subTest(label):
+                self.cmds, ledger = [], {}
+                self.thread_on("sonnet", "completed", blocked)
+                for _ in range(2):
+                    ledger.pop("cont:t1", None)
+                    lane.unstick(REPO, ledger)
+                self.assertEqual(len(self.launches(key)), replacements)
+                self.assertEqual(key in ledger, bool(blocked))
 
 
 if __name__ == "__main__":
