@@ -590,36 +590,6 @@ def merged_restart():
                   [item_id] if board == "decisions" else [])
 
 
-def pending_fast_forward():
-    import lane_driver as lane
-    repo = "shyamsivakumar/mac-ops"
-    forwards = []
-
-    def command(cmd, timeout=150):
-        if cmd[:3] == ["gh", "pr", "list"]:
-            return "[]"
-        if cmd[:2] == ["ticket", "close"]:
-            return "closed"
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    def stopped(repo_name):
-        raise RuntimeError("stopped after the close")
-
-    ledger = {}
-    with patch.object(lane, "run", command), patch.object(lane, "DRY", False), \
-         patch.object(lane, "CFG", {repo: dict(key="MO", projectId="fixture")}), \
-         patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": []}}}):
-        with patch.object(lane, "fast_forward_main", stopped):
-            try:
-                lane.after_merge(repo, 20, "a" * 40, "10", {"threadId": "gate"}, ledger)
-            except RuntimeError:
-                pass
-        for _ in range(2):
-            with patch.object(lane, "fast_forward_main", lambda name: forwards.append(name)):
-                lane.settle_merged_prs(repo, ledger)
-    exact(forwards, [repo])
-
-
 def main_update_boundary():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
@@ -1550,26 +1520,21 @@ def api_budget():
 
 def ff_drift():
     import lane_driver as lane
-    from unittest.mock import mock_open
     repo = "fixture/repo"
     path = "/Users/shyamsivakumar/Code/fixture"
     local, origin = "a" * 40, "b" * 40
-    calls = []
+    forwards = []
     ancestor = True
 
     def run(cmd, **kwargs):
+        if cmd == ["git", "-C", path, "fetch", "origin", "main"]:
+            return ""
         if cmd == ["git", "-C", path, "rev-parse", "main", "origin/main"]:
             return f"{local} {origin}"
         if cmd == ["git", "-C", path, "merge-base", "--is-ancestor", local, origin]:
             if not ancestor:
                 raise subprocess.CalledProcessError(1, cmd)
             return ""
-        if cmd[:2] == [lane.COORDQ, "start"]:
-            exact(cmd[3:], ["--priority", "700"])
-            payload = json.loads(cmd[2])
-            exact(payload["title"], "Chore · level local main (FIX)")
-            calls.append(origin)
-            return "fixture-queued"
         raise AssertionError(f"unexpected command: {cmd}")
 
     with patch.object(lane, "PATHS", {repo: "fixture"}), \
@@ -1577,28 +1542,17 @@ def ff_drift():
          patch.object(lane, "CFG", {repo: {"key": "FIX"}}), \
          patch.object(lane, "DRY", False), \
          patch.object(lane.os.path, "isdir", return_value=True), \
-         patch.object(lane, "run", side_effect=run), \
-         patch("builtins.open", mock_open(read_data="fixture chore")):
-        ledger = {}
-        lane.drift_ff(ledger)
-        lane.drift_ff(ledger)
-        exact(calls, [origin])
-        exact(ledger, {f"ff:{repo}:{origin}": "fixture-queued"})
-        origin = "c" * 40
-        lane.drift_ff(ledger)
-        exact(calls, ["b" * 40, origin])
+         patch.object(lane, "fast_forward_main", side_effect=forwards.append), \
+         patch.object(lane, "run", side_effect=run):
+        lane.drift_ff({})
+        exact(forwards, [repo])
         local = origin
-        lane.drift_ff(ledger)
-        exact(calls, ["b" * 40, origin])
+        lane.drift_ff({})
+        exact(forwards, [repo])
         origin = "d" * 40
         ancestor = False
-        before = dict(ledger)
-        with contextlib.redirect_stdout(io.StringIO()) as output:
-            lane.drift_ff(ledger)
-        exact(output.getvalue().splitlines(), [
-            f"FIX   left alone, not fast-forwardable ({local} vs {origin})"])
-        exact(ledger, before)
-        exact(calls, ["b" * 40, "c" * 40])
+        lane.drift_ff({})
+        exact(forwards, [repo])
 
 
 def script_results():
@@ -3241,7 +3195,7 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "pending-fast-forward": pending_fast_forward, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():

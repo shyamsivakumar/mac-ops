@@ -1083,12 +1083,11 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     merged, note = merge_on_reviewed_base(repo, number, head, base)
     if not merged:
         return note
-    after_merge(repo, number, head, issue, gate, ledger)
+    after_merge(repo, number, head, issue, gate)
     return note
 
 
-def after_merge(repo, number, head, issue, gate, ledger):
-    ledger[f"ff-pending:{repo}"] = head
+def after_merge(repo, number, head, issue, gate):
     if issue:
         ref = f"{repo}#{issue}"
         output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
@@ -1096,7 +1095,6 @@ def after_merge(repo, number, head, issue, gate, ledger):
         if "is already closed" in output:
             print(f"already-closed:{ref}: {output}")
     fast_forward_main(repo)
-    ledger.pop(f"ff-pending:{repo}")
 
 
 def merged_without_gate_item(repo, number, head):
@@ -1110,9 +1108,6 @@ def merged_without_gate_item(repo, number, head):
 def settle_merged_prs(repo, ledger):
     merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "10",
                              "--json", "number,headRefOid,body,mergedAt,baseRefName"]) or "[]")
-    if f"ff-pending:{repo}" in ledger and not DRY:
-        fast_forward_main(repo)
-        ledger.pop(f"ff-pending:{repo}")
     since = ledger.setdefault("settle-since", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     for pr in merged:
         if (pr.get("mergedAt") or "") < since:
@@ -1127,7 +1122,7 @@ def settle_merged_prs(repo, ledger):
             continue
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
         if verdict == "PASS":
-            after_merge(repo, number, head, found.group(1), gate, ledger)
+            after_merge(repo, number, head, found.group(1), gate)
             ledger[lkey] = "closed"
             print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
         else:
@@ -1266,6 +1261,7 @@ def drift_ff(ledger):
             if not os.path.isdir(d):
                 print(f"{CFG[repo]['key']:5} checkout absent: {d}; skipping")
                 continue
+            run(["git", "-C", d, "fetch", "origin", "main"], timeout=120)
             out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
             ids = out.split()
             if len(ids) != 2 or ids[0] == ids[1]:
@@ -1277,27 +1273,11 @@ def drift_ff(ledger):
                     raise
                 print(f"{CFG[repo]['key']:5} left alone, not fast-forwardable ({ids[0]} vs {ids[1]})")
                 continue
-            lkey = f"ff:{repo}:{ids[1]}"
-            if lkey in ledger or DRY:
-                print(f"{CFG[repo]['key']:5} main behind ({ids[0][:8]} vs {ids[1][:8]})" + (" DRY" if DRY else " queued"))
-                if lkey in ledger:
-                    continue
-                ledger[lkey] = "pending"
+            if DRY:
+                print(f"{CFG[repo]['key']:5} main behind ({ids[0][:8]} vs {ids[1][:8]}) DRY")
                 continue
-            msg = open("/Users/shyamsivakumar/Code/coordinator/loop/ff-chore.md").read().replace(
-                "Three repositories have a local main that trails their origin/main, so new tickets can branch from stale code:",
-                "This repository's local main trails origin/main, so tools read stale code:").replace(
-                "- /Users/shyamsivakumar/Code/strategy-replay-workbench: local ceb1c509, origin c9daf467\n- /Users/shyamsivakumar/Code/fantasy-football-toolkit: local 6d4611d5, origin 764832d1\n- /Users/shyamsivakumar/Code/concerning: local 30b1c55, origin b6206ab\n",
-                f"- {d}: local {ids[0][:9]}, origin {ids[1][:9]}\n").replace(
-                "For each checkout in order:", "For this checkout:").replace(
-                "Report one line per repo: the two commit ids before, the single commit id after (or \"left alone, not fast-forwardable\").",
-                "Report the two commit ids before and the single commit id after (or \"left alone, not fast-forwardable\").")
-            args = {"projectId": "f093cc9b-5332-48eb-a719-2187eb8cbabc", "title": f"Chore · level local main ({CFG[repo]['key']})",
-                    "taskType": "chore", "runtimeMode": "full-access",
-                    "workspaceStrategy": {"type": "root"}, "message": msg}
-            out2 = run([COORDQ, "start", json.dumps(args), "--priority", "700"]).splitlines()[-1]
-            ledger[lkey] = out2
-            print(f"{CFG[repo]['key']:5} ff chore: {out2}")
+            fast_forward_main(repo)
+            print(f"{CFG[repo]['key']:5} main fast-forwarded ({ids[0][:8]} -> {ids[1][:8]})")
 
 
 def group_of(title):
