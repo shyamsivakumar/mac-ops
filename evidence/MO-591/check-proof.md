@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `e33afd618c5623d2632697a8efc607ad842dcd17`
+Checked commit: `89df3dc9717ec64349d685e8e4d5f9df1df2bb12`
 Working tree clean when the checks ran: no
 Run result: passed
 
@@ -12,7 +12,7 @@ Run result: passed
 | python syntax: scripts/bot1_rollback_dry_run.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' scripts/bot1_rollback_dry_run.py` | passed |  |
 | python syntax: tests/test_bot1_rollback_dry_run.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_bot1_rollback_dry_run.py` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 86 findings, all in the baseline |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-uy3gknr2 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-uy3gknr2/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-qxgyik5a -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-qxgyik5a/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_bot1_rollback_dry_run | `python3 -m unittest tests.test_bot1_rollback_dry_run` | passed |  |
 
@@ -21,4 +21,4 @@ so every check after it is `not run`. A tool that is not on this machine
 is recorded as `not run` too, and leaves the run incomplete: the run is
 then not a pass.
 
-Device, handset, and live-service testing: WAIVED (Shyam 2026-11-14).
+Device, handset and live-service testing: waived by Shyam on 2026-11-14; not run.

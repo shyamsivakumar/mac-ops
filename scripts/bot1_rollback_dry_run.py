@@ -55,6 +55,13 @@ def deployment_sha(deployment):
 
 def plan(deployments):
     """Return (production deployment, rollback SHA) from the deployment history."""
+    if not isinstance(deployments, list) or any(
+        not isinstance(d, dict)
+        or not isinstance(d.get("meta", {}), dict)
+        or not isinstance(d.get("createdAt", ""), str)
+        for d in deployments
+    ):
+        raise RollbackRecordError("the Bot 1 deployment history contains an invalid record")
     deployments = sorted(
         deployments, key=lambda d: d.get("createdAt", ""), reverse=True
     )
@@ -71,22 +78,20 @@ def plan(deployments):
     current_sha = deployment_sha(production)
     if not isinstance(current_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", current_sha):
         raise RollbackRecordError("the production deployment has no valid commit SHA")
-    rollback = next(
-        (
-            deployment_sha(d)
-            for d in deployments[deployments.index(production) + 1 :]
-            if d.get("status") in ("SUCCESS", "REMOVED")
-            and deployment_sha(d)
-            and deployment_sha(d) != deployment_sha(production)
-        ),
-        None,
-    )
+    rollback = None
+    for deployment in deployments[deployments.index(production) + 1 :]:
+        if deployment.get("status") not in ("SUCCESS", "REMOVED"):
+            continue
+        sha = deployment_sha(deployment)
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+            raise RollbackRecordError("the rollback deployment has no valid commit SHA")
+        if sha.lower() != current_sha.lower():
+            rollback = sha
+            break
     if rollback is None:
         raise RollbackRecordError(
             "no earlier Bot 1 deployment ran a different commit, so no rollback SHA is recorded"
         )
-    if not isinstance(rollback, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", rollback):
-        raise RollbackRecordError("the rollback deployment has no valid commit SHA")
     return production, rollback
 
 
