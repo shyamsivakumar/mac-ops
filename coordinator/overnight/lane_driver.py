@@ -393,7 +393,7 @@ def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False
     return (state, action) if builder else ("needs-you", "needs-you")
 
 
-def gate_verdict(repo, number, head):
+def gate_verdict(repo, number, head, base):
     receipts = json.load(open(RECEIPTS))
     key = f"gate:{repo}#{number}:{head}"
     current = receipts.get(key)
@@ -408,6 +408,8 @@ def gate_verdict(repo, number, head):
         return "FAIL", gate, reply
     if not reply.endswith("VERDICT: PASS"):
         return "none", gate, reply
+    if receipts.get(f"base:{current}") != base:
+        return "absent", None, ""
     earlier = {v for k, v in receipts.items() if k.startswith(key + ":") and v != current}
     if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in sorted(earlier)):
         return "SPLIT", gate, reply
@@ -1081,11 +1083,12 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     merged, note = merge_on_reviewed_base(repo, number, head, base)
     if not merged:
         return note
-    after_merge(repo, number, head, issue, gate)
+    after_merge(repo, number, head, issue, gate, ledger)
     return note
 
 
-def after_merge(repo, number, head, issue, gate):
+def after_merge(repo, number, head, issue, gate, ledger):
+    ledger[f"ff-pending:{repo}"] = head
     if issue:
         ref = f"{repo}#{issue}"
         output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
@@ -1093,6 +1096,7 @@ def after_merge(repo, number, head, issue, gate):
         if "is already closed" in output:
             print(f"already-closed:{ref}: {output}")
     fast_forward_main(repo)
+    ledger.pop(f"ff-pending:{repo}")
 
 
 def merged_without_gate_item(repo, number, head):
@@ -1105,7 +1109,10 @@ def merged_without_gate_item(repo, number, head):
 
 def settle_merged_prs(repo, ledger):
     merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "10",
-                             "--json", "number,headRefOid,body,mergedAt"]) or "[]")
+                             "--json", "number,headRefOid,body,mergedAt,baseRefName"]) or "[]")
+    if f"ff-pending:{repo}" in ledger and not DRY:
+        fast_forward_main(repo)
+        ledger.pop(f"ff-pending:{repo}")
     since = ledger.setdefault("settle-since", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     for pr in merged:
         if (pr.get("mergedAt") or "") < since:
@@ -1118,9 +1125,9 @@ def settle_merged_prs(repo, ledger):
         if DRY:
             print(f"DRY after-merge #{number}")
             continue
-        verdict, gate, _ = gate_verdict(repo, number, head)
+        verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
         if verdict == "PASS":
-            after_merge(repo, number, head, found.group(1), gate)
+            after_merge(repo, number, head, found.group(1), gate, ledger)
             ledger[lkey] = "closed"
             print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
         else:
@@ -1168,7 +1175,8 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
-    verdict, gate, reply = gate_verdict(repo, number, head)
+    base = pr.get("baseRefName") or "main"
+    verdict, gate, reply = gate_verdict(repo, number, head, base)
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "SPLIT":
@@ -1213,7 +1221,7 @@ def act_on_pr(repo, number, ledger):
     if not reviewers:
         return f"#{number}: no gate reviewer is available"
     model = reviewers[0]["selection"]
-    if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
+    if verdict == "none" and f"regate:{repo}#{number}:{head}:{base}" in ledger:
         if "quota" in reply.lower() and "exhaust" in reply.lower() and len(reviewers) > 1:
             tag, model = "fallbackgate", reviewers[1]["selection"]
         else:
@@ -1226,9 +1234,9 @@ def act_on_pr(repo, number, ledger):
         brief += f"\n{OPEN_FINDINGS_INSTRUCTION}\n"
     key = CFG[repo]["key"]
     args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"gate:{repo}#{number}:{head}:{tag}:lane",
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"gate:{repo}#{number}:{head}:{tag}:{base}:lane",
             "message": brief}
-    return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
+    return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}:{base}")
 
 
 def fast_forward_main(repo):
