@@ -34,7 +34,7 @@ RELATIVE = re.compile(rf"(?:resets?|retry|try(?:\s+again)?)\s+(?:in|after)\s+((?
 # at 3:20am (America/Los_Angeles)", "will reset at 2026-11-18 11:58:52
 # (Asia/Shanghai)". The zone is the one the message states beside the clock:
 # an offset, then a named zone, then a bare UTC.
-ZONE_TEXT = r"(?:UTC|GMT)?[+-]\d{2}:?\d{2}|[A-Za-z_]+/[A-Za-z0-9_+-]+|UTC|GMT|Z\b"
+ZONE_TEXT = r"(?:UTC|GMT)?[+-]\d{2}:?\d{2}|[A-Za-z_]+(?:/[A-Za-z0-9_+-]+)+|UTC|GMT|Z\b"
 ABSOLUTE = re.compile(
     r"reset(?:s|ting at| at)?\s+(?:at\s+)?(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{1,2}:\d{2}(?::\d{2})?)"
     r"(?:\s*([ap]\.?m\.?)(?![A-Za-z]))?"
@@ -42,12 +42,12 @@ ABSOLUTE = re.compile(
 PROVIDER_ERROR = re.compile(
     r"\b(?:http|status|code|error)\b[\s:=]*(?:401|402|403|429)\b"
     r"|^\s*(?:401|402|403|429)(?=\s*(?:$|[;:,.-]|unauthorized|forbidden|too many|payment))"
-    r"|usage limit|rate limit|too many requests|no credits|out of credits|credit balance"
+    r"|(?:usage limit|rate limit|too many requests|no credits|out of credits|credit balance"
     r"|insufficient[_ ]quota|quota (?:exceeded|exhausted)|payment required|invalid api key"
-    r"|authentication_error",
+    r"|authentication_error)(?:ed|s)?(?!\w|\.\w)",
     re.I,
 )
-LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full", re.I)
+LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full|no such file|filenotfounderror", re.I)
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
