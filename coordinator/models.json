@@ -1,28 +1,26 @@
 {
   "build": [
     {
-      "id": "minimax",
-      "selection": {
-        "instanceId": "minimax",
-        "model": "minimax/MiniMax-M3.1-Flash"
-      },
-      "vendor": "minimax"
-    },
-    {
-      "id": "glm",
-      "selection": {
-        "instanceId": "glm",
-        "model": "zai/glm-5.3"
-      },
-      "vendor": "zhipu"
-    },
-    {
       "id": "deepseek",
       "selection": {
         "instanceId": "pi",
-        "model": "deepseek/deepseek-flash"
+        "model": "morph/morph-dsv41flash"
       },
       "vendor": "deepseek"
+    },
+    {
+      "id": "kimi",
+      "selection": {
+        "instanceId": "pi",
+        "model": "morph/morph-kimik31"
+      },
+      "vendor": "moonshot",
+      "leads": [
+        "rca",
+        "risky",
+        "design",
+        "hard"
+      ]
     },
     {
       "id": "cursor",
@@ -38,33 +36,68 @@
         "instanceId": "codex",
         "model": "gpt-6.1-terra"
       },
-      "vendor": "openai"
+      "vendor": "openai",
+      "only": [
+        "quick",
+        "chore",
+        "standard",
+        "ui",
+        "research"
+      ]
     },
     {
-      "id": "sonnet",
+      "id": "sol",
       "selection": {
-        "instanceId": "claudeAgent",
-        "model": "claude-sonnet-5-5"
+        "instanceId": "codex",
+        "model": "gpt-6.2-sol"
       },
-      "vendor": "anthropic"
+      "vendor": "openai",
+      "only": [
+        "rca",
+        "risky",
+        "design",
+        "hard"
+      ]
     }
   ],
   "fix": [
     {
-      "id": "terra",
+      "id": "deepseek",
       "selection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-terra"
+        "instanceId": "pi",
+        "model": "morph/morph-dsv41flash"
       },
-      "vendor": "openai"
+      "vendor": "deepseek"
     },
     {
-      "id": "sonnet",
+      "id": "kimi",
       "selection": {
-        "instanceId": "claudeAgent",
-        "model": "claude-sonnet-5-5"
+        "instanceId": "pi",
+        "model": "morph/morph-kimik31"
       },
-      "vendor": "anthropic"
+      "vendor": "moonshot"
+    },
+    {
+      "id": "cursor",
+      "selection": {
+        "instanceId": "cursor",
+        "model": "default"
+      },
+      "vendor": "cursor"
+    },
+    {
+      "id": "sol-max",
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6.2-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "max"
+          }
+        ]
+      },
+      "vendor": "openai"
     }
   ],
   "review": [
@@ -97,14 +130,6 @@
       "selection": {
         "instanceId": "claudeAgent",
         "model": "claude-opus-5-5"
-      },
-      "vendor": "anthropic"
-    },
-    {
-      "id": "sonnet",
-      "selection": {
-        "instanceId": "claudeAgent",
-        "model": "claude-sonnet-5-5"
       },
       "vendor": "anthropic"
     }
@@ -144,12 +169,12 @@
     }
   ],
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order",
-    "fix and finish rounds": "use the fix list in order",
-    "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: quick, chore, standard, ui, research run DeepSeek V4.1 Flash, Kimi K3.1, Cursor auto, Terra; rca, risky, design, hard run Kimi K3.1, DeepSeek V4.1 Flash, Cursor auto, Sol",
+    "fix and finish rounds": "use the fix list in order: DeepSeek V4.1 Flash, Kimi K3.1, Cursor auto, Sol at max reasoning",
+    "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor; reviews are Astra then Opus",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
     "builder:<id> label": "tries that entry first, then the list",
-    "panel": "runs only when Shyam asks for one; nothing starts a panel on its own",
-    "never": "Sol or other OpenAI API models as builders"
+    "panel": "runs only when Shyam asks for one (Fable on request); nothing starts a panel on its own",
+    "never": "OpenAI API models (instance openai-api) as builders"
   }
 }

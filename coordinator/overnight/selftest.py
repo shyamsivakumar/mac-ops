@@ -124,8 +124,8 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    for kind, label, expected in [("standard", None, "minimax/MiniMax-M3.1-Flash"), ("risky", None, "minimax/MiniMax-M3.1-Flash"),
-                                  ("chore", "glm", "zai/glm-5.3")]:
+    for kind, label, expected in [("standard", None, "morph/morph-dsv41flash"), ("risky", None, "morph/morph-kimik31"),
+                                  ("chore", "kimi", "morph/morph-kimik31"), ("chore", None, "morph/morph-dsv41flash")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
         item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
@@ -147,6 +147,14 @@ def start_routing():
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
                                        print_brief=False, dry_run=False))
         exact(len(commands), 1)
+    morph = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
+    for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["cursor", "sol"])]:
+        blocked = set(morph)
+        for expected_id in walk:
+            exact(lane.model_list.first_available("build", None, blocked, kind)["id"], expected_id)
+            blocked.add(lane.model_list.identity(lane.model_list.first_available("build", None, blocked, kind)["selection"]))
+    exact(lane.model_list.first_available("fix")["selection"]["model"], "morph/morph-dsv41flash")
+    exact(lane.model_list.entries("fix")[-1]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
                    priority=1, title=title) for n, title in [(10, "bot"), (11, "census"), (12, "dashboard")]]
@@ -468,7 +476,7 @@ def gate_pipeline():
                 return ""
             if cmd[:2] == ["ticket", "gate"]:
                 if "--print-model" in cmd:
-                    return json.dumps(lane.model_list.reviewers(["minimax"]))
+                    return json.dumps(lane.model_list.reviewers(["morph/morph-kimik31"]))
                 return f"Gate exact head {head}"
             if cmd[:2] == ["ticket", "close"]:
                 actions.append("provides")

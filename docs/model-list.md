@@ -9,13 +9,38 @@ Nothing else keeps a copy of a model id.
 
 | List | Used for | Order rule |
 | --- | --- | --- |
-| `build` | Every build type: standard, risky, design, large, ui, research, rca and chore. | The first entry that is not blocked. A `builder:<id>` label puts that entry first. |
+| `build` | Every build type: standard, risky, design, large, ui, research, rca and chore. | The first entry that is not blocked, led by the entries whose `leads` names the task type. A `builder:<id>` label puts that entry first. |
 | `fix` | Fix and finish rounds. | The first entry that is not blocked. |
 | `review` | The gate. | The first entry that is not blocked and whose vendor differs from the builder's executed vendor. A `reviewer:<id>` label puts that entry first. |
 | `panel` | A panel, only when Shyam asks for one. | Nothing starts a panel on its own. |
 
-A builder that ran on Terra (OpenAI) is reviewed by an Anthropic entry.
-Sol and other OpenAI API models never build.
+The workhorses are the two Morph models, DeepSeek V4.1 Flash (vendor deepseek)
+and Kimi K3.1 (vendor moonshot), both through the `pi` provider instance. Cursor
+auto (`cursor`, model `default`) is the third choice and no other Cursor model
+is listed. The build list order is DeepSeek, Kimi, Cursor, Terra, Sol. Two
+optional entry fields shape it per task type. `leads` puts an entry first for
+the types it names (Kimi leads rca, risky, design and hard). `only` limits an
+entry to the types it names (Terra serves quick, chore, standard, ui and
+research; Sol serves rca, risky, design and hard). Without a task type the
+whole list applies in order.
+
+| Task types | Order |
+| --- | --- |
+| quick, chore, standard, ui, research | DeepSeek, Kimi, Cursor, Terra |
+| rca, risky, design, hard | Kimi, DeepSeek, Cursor, Sol |
+| fix | DeepSeek, Kimi, Cursor, Sol at max reasoning (`sol-max`) |
+
+`sol-max` carries `options: [{"id": "reasoningEffort", "value": "max"}]` in its
+selection. `models.py` and `coordq` pass a selection through unchanged, and T3
+stores it in that shape. Reviews are Astra, then Opus. Fable runs only when
+Shyam asks for it. `coordq` and `ticket start` pass the task type to
+`models.py`, and the installer builds each `ROUTES` row from the same order
+(pi models only), so one file holds the preference. When a model is blocked,
+the next entry of the type's order runs.
+
+A builder that ran on Kimi, DeepSeek or Cursor is reviewed by Astra first. A
+builder that ran on Terra or Sol (OpenAI) is reviewed by an Anthropic entry
+(Opus). OpenAI API instance models (`openai-api`) never build.
 
 ## Blocked providers
 
