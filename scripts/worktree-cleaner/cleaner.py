@@ -1843,14 +1843,33 @@ def _tree_matches(
     return current == snapshot
 
 
-def _link_copy(source: Path, destination: Path) -> dict[str, tuple[int, int, int, int]] | None:
-    """Hard link every file of a checkout into a copy that shares its inodes.
+def _changed_names(
+    path: Path, snapshot: dict[str, dict[str, tuple[int, int, int, int, int]]]
+) -> list[str]:
+    """The relative paths whose stamp differs between the snapshot and now.
 
-    A save or a mode change that lands through the inode after the last
-    check is visible through the copy, so it can be found and kept after
-    the checkout is gone. None means the copy could not be made.
+    An entry that appeared, disappeared or changed its stamp is named. A tree
+    that cannot be opened is reported as a change of its root.
     """
-    stamps: dict[str, tuple[int, int, int, int]] = {}
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return ["."]
+    try:
+        current = _snapshot_all(descriptor)
+    finally:
+        os.close(descriptor)
+    before = {prefix + name: stamp for prefix, entries in snapshot.items() for name, stamp in entries.items()}
+    after = {prefix + name: stamp for prefix, entries in current.items() for name, stamp in entries.items()}
+    return sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+
+
+def _link_copy(source: Path, destination: Path) -> bool:
+    """Hard link every file of a checkout into a mirror that shares its inodes.
+
+    The root `.git` file is left out because the mirror gets its own. False
+    means the mirror could not be made.
+    """
     try:
         destination.mkdir(mode=0o700, parents=True)
         for directory, names, files in os.walk(source, followlinks=False):
@@ -1867,26 +1886,11 @@ def _link_copy(source: Path, destination: Path) -> dict[str, tuple[int, int, int
                     os.symlink(os.readlink(origin), destination / relative / name)
                     continue
                 if not stat.S_ISREG(info.st_mode):
-                    return None
+                    return False
                 os.link(origin, destination / relative / name, follow_symlinks=False)
-                stamps[str(relative / name)] = (info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode)
     except OSError:
-        return None
-    return stamps
-
-
-def _late_changes(copy: Path, stamps: dict[str, tuple[int, int, int, int]]) -> list[str]:
-    """The files of the copy that no longer match the stamp taken with it."""
-    changed: list[str] = []
-    for name, stamp in stamps.items():
-        try:
-            info = os.lstat(copy / name)
-        except OSError:
-            changed.append(name)
-            continue
-        if (info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode) != stamp:
-            changed.append(name)
-    return changed
+        return False
+    return True
 
 
 def _remove_verified_worktree(
@@ -1894,53 +1898,76 @@ def _remove_verified_worktree(
 ) -> tuple[bool, str, list[str]]:
     """Remove the worktree that was verified, through git.
 
-    The checkout is renamed to a private name first and its registration is
-    pointed at that name, so `git worktree remove` can only reach this
-    registration and never a different worktree that takes the path later.
-    The hard linked copy made before the removal keeps any save that lands
-    after git has checked the checkout. A prune of the repository is never
-    run: it would drop the registration of an unrelated worktree.
+    The checkout itself moves, whole, into a holding area under the cleanup
+    trash. It keeps its inodes there, so a descriptor that an editor holds on
+    it and a rename inside it both land in the holding copy. Git is never
+    given that copy. It removes a mirror of hard links that sits at a private
+    name next to the checkout, with the registration pointed at the mirror,
+    so git can only delete the mirror and never a different worktree that
+    takes the path later.
+
+    The holding copy is stamped before the mirror is linked. A write that
+    lands later, in place, by a mode change, by a rename over a tracked file
+    or as a new file, makes the holding copy differ from the stamp, and a
+    write that landed earlier is in the mirror, where git's own check sees it
+    and refuses. When the holding copy still matches its stamp it is deleted.
+    When it does not, it is kept, recorded for the sweep and its changed
+    names are returned. A prune of the repository is never run: it would
+    drop the registration of an unrelated worktree.
     """
-    aside = path.parent / f".cleaner-removing-{os.getpid()}-{os.urandom(6).hex()}"
+    storage = _trash_for(state_root / "cleanup-trash", path)
+    storage.mkdir(parents=True, exist_ok=True)
+    holding = storage / f"late-saves-{os.getpid()}-{os.urandom(6).hex()}"
+    mirror = path.parent / f".cleaner-removing-{os.getpid()}-{os.urandom(6).hex()}"
 
     def put_back(reason: str) -> tuple[bool, str, list[str]]:
-        if _rename_exclusive(aside, path):
+        if _rename_exclusive(holding, path):
             run(["git", "-C", str(repo_root), "worktree", "repair", str(path)])
         return False, reason, []
 
-    if not _rename_exclusive(path, aside):
+    def drop_mirror_and_put_back(reason: str) -> tuple[bool, str, list[str]]:
+        shutil.rmtree(mirror, ignore_errors=True)
+        return put_back(reason)
+
+    if not _rename_exclusive(path, holding):
         return False, "worktree_move_failed", []
     try:
-        info = os.lstat(aside)
+        info = os.lstat(holding)
     except OSError:
         info = None
     if info is None or f"{info.st_dev}:{info.st_ino}" != identity:
         return put_back("worktree_replaced_before_remove")
-    repaired = run(["git", "-C", str(repo_root), "worktree", "repair", str(aside)])
-    if repaired.returncode != 0 or not _registration_belongs_to(registration, repo_root, aside):
-        return put_back("worktree_registration_mismatch")
-    storage = _trash_for(state_root / "cleanup-trash", path)
-    copy = storage / f"late-saves-{os.getpid()}-{os.urandom(6).hex()}"
-    stamps = _link_copy(aside, copy)
-    if stamps is None:
-        shutil.rmtree(copy, ignore_errors=True)
+    try:
+        descriptor = os.open(holding, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
         return put_back("worktree_copy_failed")
-    removal = run(["git", "-C", str(repo_root), "worktree", "remove", str(aside)])
+    try:
+        snapshot = _snapshot_all(descriptor)
+    finally:
+        os.close(descriptor)
+    if not _link_copy(holding, mirror):
+        return drop_mirror_and_put_back("worktree_copy_failed")
+    try:
+        (mirror / ".git").write_bytes((holding / ".git").read_bytes())
+    except OSError:
+        return drop_mirror_and_put_back("worktree_copy_failed")
+    repaired = run(["git", "-C", str(repo_root), "worktree", "repair", str(mirror)])
+    if repaired.returncode != 0 or not _registration_belongs_to(registration, repo_root, mirror):
+        return drop_mirror_and_put_back("worktree_registration_mismatch")
+    removal = run(["git", "-C", str(repo_root), "worktree", "remove", str(mirror)])
     if removal.returncode != 0:
-        if (aside / ".git").exists():
-            shutil.rmtree(copy, ignore_errors=True)
-            return put_back("worktree_removal_refused")
-        _record_recovery(state_root, copy)
+        if (mirror / ".git").exists():
+            return drop_mirror_and_put_back("worktree_removal_refused")
+        _record_recovery(state_root, holding)
         return False, "worktree_not_fully_removed", []
     if registration.exists():
-        _record_recovery(state_root, copy)
+        _record_recovery(state_root, holding)
         return False, "worktree_not_fully_removed", []
-    changed = _late_changes(copy, stamps)
-    if changed:
-        _record_recovery(state_root, copy)
-        return True, "", changed
-    shutil.rmtree(copy, ignore_errors=True)
-    return True, "", []
+    if _tree_matches(holding, snapshot):
+        shutil.rmtree(holding)
+        return True, "", []
+    _record_recovery(state_root, holding)
+    return True, "", _changed_names(holding, snapshot)
 
 
 def _claim_index_lock(worktree: Path) -> Path | None:
