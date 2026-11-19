@@ -388,11 +388,12 @@ def gate_pipeline():
     failures = []
     # The reviewer chain is one list now (#552): the first entry is the gate's
     # reviewer, the last is the fallback when its quota is exhausted.
+    full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
     chain = [entry["selection"]["instanceId"] for entry in lane.model_list.entries("review")]
     cases = [
         ("checked-head", repo, "absent", "", {}, [chain[0]], None),
-        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
-        ("prompt-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"],
+        ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
+        ("prompt-pass", repo, "PASS", f"CHECK: PASS {head}\nVERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
         ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
@@ -401,16 +402,18 @@ def gate_pipeline():
         ("quota", repo, "none", "Astra quota exhausted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"},
          [chain[chain.index(chain[0]) + 1]], None),
-        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
+        ("manual", "digitized/Concerning", "PASS", full, {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
         ("stray-pass-ignored", repo, "absent", "", {}, [chain[0]], None),
-        ("earlier-fail-later-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"], None),
-        ("retry-replaced-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
-        ("merge-timeout-but-merged", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
-        ("older-running-newer-pass", repo, "PASS", "VERDICT: PASS", {}, [], None),
-        ("older-pass-newer-pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], None),
+        ("earlier-fail-later-pass", repo, "PASS", full, {}, ["decisions"], None),
+        ("retry-replaced-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
+        ("merge-timeout-but-merged", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
+        ("older-running-newer-pass", repo, "PASS", full, {}, [], None),
+        ("older-pass-newer-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
+        ("pass-without-provides", repo, "none", f"CHECK: PASS {head}\nVERDICT: PASS", {}, [chain[0]], None),
+        ("pass-check-wrong-head", repo, "none", f"PROVIDES: PASS {head}\nCHECK: PASS {'b' * 40}\nVERDICT: PASS", {}, [chain[0]], None),
         ("no-receipts-file", repo, "absent", "", {}, [chain[0]], None),
-        ("retargeted-after-pass", repo, "PASS", "VERDICT: PASS", {}, [chain[0]], None),
+        ("retargeted-after-pass", repo, "PASS", full, {}, [chain[0]], None),
     ]
     gate_key = f"gate:{repo}#20:{head}"
     extra = {"stray-pass-ignored": {"stray": "VERDICT: PASS"},
@@ -418,8 +421,8 @@ def gate_pipeline():
              "retry-replaced-pass": {gate_key + ":old:retry": "old"},
              "older-running-newer-pass": {gate_key + ":old:retry": "old"},
              "older-pass-newer-pass": {gate_key + ":old:retry": "old"}}
-    replies = {"stray": "VERDICT: PASS", "old": "dead\nVERDICT: FAIL"}
-    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": "VERDICT: PASS"}}
+    replies = {"stray": full, "old": "dead\nVERDICT: FAIL"}
+    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": full}}
     live_by_case = {"older-running-newer-pass": {"old"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
@@ -553,19 +556,24 @@ def merged_restart():
     merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z", baseRefName="main"),
               dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z", baseRefName="main")]
     for repo, key, receipts, reply, expected, board in [
-        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"}, "VERDICT: PASS",
+        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"},
+         f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS",
          ["provides", "ff"], None),
+        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"},
+         f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS", ["provides"], "close-failed"),
         ("shyamsivakumar/mac-ops", "MO", {}, "", [], "owner"),
         ("shyamsivakumar/strategy-replay-workbench", "SRW", {}, "", [], "decisions"),
     ]:
         actions = []
 
-        def command(cmd, timeout=150, actions=actions):
+        def command(cmd, timeout=150, actions=actions, board=board):
             if cmd[:3] == ["gh", "pr", "list"]:
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:
                 exact(cmd[3:5], ["--pr", "20"])
                 actions.append("provides")
+                if board == "close-failed":
+                    raise subprocess.CalledProcessError(1, cmd)
                 return "closed"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
@@ -596,7 +604,8 @@ def merged_restart():
             owner = [i["id"] for i in json.loads(owner_path.read_text())["items"]] if owner_path.exists() else []
             exact(owner, [item_id] if board == "owner" else [])
             exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
-                  [item_id] if board == "decisions" else [])
+                  [item_id] if board == "decisions" else
+                  ["lane-close-failed-MO-20"] if board == "close-failed" else [])
 
 
 def main_update_boundary():
