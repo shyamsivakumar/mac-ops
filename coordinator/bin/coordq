@@ -1598,7 +1598,7 @@ def gate_candidates(config):
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
-        for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
+        for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100", fresh=True):
             if pr["draft"]:
                 continue
             head, number = pr["head"]["sha"], pr["number"]
