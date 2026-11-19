@@ -33,15 +33,37 @@ SUFFIXLESS_PYTHON = (
 
 DEFAULT_PROOF = "evidence/check-proof.md"
 
-# Ruff runs through uvx at a pinned version, so the check never installs an
-# unpinned tool. Only the pyflakes and bugbear rule sets are on.
-RUFF_VERSION = "0.14.0"
+# Every lint tool runs through uvx at the version pinned here, so the check
+# never installs an unpinned tool. This table is the only place a version lives.
+TOOL_VERSIONS = {"ruff": "0.14.0", "mypy": "1.18.2"}
+RUFF_VERSION = TOOL_VERSIONS["ruff"]
+# Only the pyflakes and bugbear rule sets are on.
 RUFF_RULES = "F,B"
+# mypy checks these modules only; each one is added once it is clean.
+MYPY_TARGETS = ("board_resources.py",)
 RUFF_BASELINE = "scripts/ruff-baseline.txt"
 
 
 class NotRun(Exception):
     """A check that could not run: recorded as `not run`, not as a failure."""
+
+
+def uvx_command(tool, *args):
+    """The command that runs `tool` through uvx at its pinned version."""
+    return ["uvx", f"{tool}@{TOOL_VERSIONS[tool]}", *args]
+
+
+def require_tool(tool):
+    """Raise NotRun unless uvx can run `tool` at its pinned version.
+
+    A tool the machine cannot run is `not run` in the proof file, never a pass.
+    """
+    if shutil.which("uvx") is None:
+        raise NotRun("uvx is not installed")
+    probe = subprocess.run(uvx_command(tool, "--version"), cwd=ROOT,
+                           capture_output=True, text=True, timeout=300)
+    if probe.returncode != 0:
+        raise NotRun(f"{tool} {TOOL_VERSIONS[tool]} is not available through uvx")
 
 
 def ruff_command(*extra):
@@ -52,8 +74,8 @@ def ruff_command(*extra):
     in a runner is a finding like any other.
     """
     runners = [name for name in SUFFIXLESS_PYTHON if (ROOT / name).is_file()]
-    return ["uvx", f"ruff@{RUFF_VERSION}", "check", "--select", RUFF_RULES,
-            "--output-format", "json", ".", *runners, *extra]
+    return uvx_command("ruff", "check", "--select", RUFF_RULES,
+                       "--output-format", "json", ".", *runners, *extra)
 
 
 def ruff_counts():
@@ -62,12 +84,7 @@ def ruff_counts():
     Raises NotRun when Ruff cannot be reached, so the proof file records
     `not run` instead of a pass the run did not earn.
     """
-    if shutil.which("uvx") is None:
-        raise NotRun("uvx is not installed")
-    probe = subprocess.run(["uvx", f"ruff@{RUFF_VERSION}", "--version"], cwd=ROOT,
-                           capture_output=True, text=True, timeout=300)
-    if probe.returncode != 0:
-        raise NotRun(f"ruff {RUFF_VERSION} is not available through uvx")
+    require_tool("ruff")
     command = ruff_command()
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=300)
     if result.returncode not in (0, 1):
@@ -163,6 +180,30 @@ def check_ruff():
             f"{sum(count for _, count in extra)} Ruff findings are not in the baseline; "
             f"first: {name} {code} {message}")
     return f"{sum(counts.values())} findings, all in the baseline"
+
+
+def mypy_command():
+    """The pinned mypy command. Imports are followed silently, so only the
+    target modules are reported on."""
+    return uvx_command("mypy", "--follow-imports=silent", "--ignore-missing-imports",
+                       *MYPY_TARGETS)
+
+
+def check_mypy():
+    """Run the pinned mypy over the target modules; any error fails the check."""
+    require_tool("mypy")
+    result = subprocess.run(mypy_command(), cwd=ROOT, capture_output=True, text=True,
+                            timeout=300)
+    if result.returncode == 0:
+        return f"{len(MYPY_TARGETS)} modules, no issues"
+    lines = result.stdout.strip().splitlines()
+    errors = [line for line in lines if ": error:" in line]
+    if result.returncode == 1 and errors:
+        for line in errors:
+            print(f"fast-check: mypy: {line}", flush=True)
+        raise RuntimeError(f"{len(errors)} mypy errors; first: {errors[0]}")
+    detail = (result.stderr or result.stdout).strip().splitlines()
+    raise RuntimeError(f"mypy exited {result.returncode}: {detail[0] if detail else 'no output'}")
 
 
 def git(*args):
@@ -374,6 +415,7 @@ def main():
 
     ruff = ruff_command()
     proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
+    proof.check("mypy", shlex.join(mypy_command()), check_mypy)
 
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
