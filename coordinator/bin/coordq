@@ -1636,7 +1636,10 @@ def gate_candidates(config):
                 continue
             head, number = pr["head"]["sha"], pr["number"]
             gated_key = f"gate:{repo}#{number}:{head}"
-            if gated_key in queue.get("gatedHeads", {}) and gate_thread_to_judge(queue, gated_key, receipts) is None:
+            if gated_key in queue.get("gatedHeads", {}):
+                if gate_thread_to_judge(queue, gated_key, receipts) is None:
+                    continue
+            elif any(k.startswith(gated_key + ":") and k.endswith(":lane") for k in receipts):
                 continue
             body = pr.get("body") or ""
             refs = re.findall(r"\bRefs #(\d+)\b", body)

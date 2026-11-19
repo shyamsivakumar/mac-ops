@@ -180,6 +180,14 @@ class FirstRetryTest(RetryLimitBase):
         self.assertNotIn("regating", out)
         self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 0)
 
+    def test_a_head_the_lane_already_gated_is_not_queued(self):
+        receipts = {RECEIPT["requestId"]: "builder-1", self.key: "gate-1",
+                    f"{self.key}:gate:main:lane": "gate-1"}
+        coordq.load_receipts = lambda: receipts
+        self.write_queue()
+        self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+
     def test_a_gate_with_a_verdict_is_not_retried(self):
         coordq.call = lambda tool, args, rules=None: (
             0, json.dumps({"thread": {"status": "completed"},
