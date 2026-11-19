@@ -13,10 +13,11 @@ each tool checks tools, and written into the scope files as prose.
 2. No reads or edits of secret files: `.env` files, `auth.json`, key and token
    files, `~/.ssh`.
 3. No force-push in any form, and no push to `main` or `master`.
-4. No `gh pr merge` for a builder. Only a gate thread merges, and only with the
-   pinned `--match-head-commit` head given as a merge argument.
+4. A command whose working directory is inside the Ascend tree is refused.
 
-The list only denies. Nothing here allows anything.
+The list only denies. Nothing here allows anything. Merges are owned by the
+lane and the merge pass (#647/#649), not enforced by this hook, because a
+command parser cannot stop `gh api .../merge`.
 
 ## How a push is decided
 
@@ -39,26 +40,6 @@ guards never ask git where a push would go.
 - Only the shell's real commands count, including one behind `heavy`,
   `timeout`, `bash -c` or `eval`. A protected branch name in a PR body, an `hc`
   message, a commit message or a heredoc is text, not a push.
-
-Global `gh` options such as `-R owner/repo` are skipped before the merge rule
-reads the subcommand.
-
-## The gate role
-
-A pinned merge is allowed only when both hold:
-
-- The caller is a gate. The role is read from the environment the agent was
-  launched with (`MAC_OPS_ROLE=gate`), never from the command.
-- The pin is a merge argument: a commit id given to `--match-head-commit` in
-  the same merge invocation. A flag and id inside a quoted argument are text.
-
-T3 sets a thread's environment from its provider instance, so the role is
-carried by the `claudeAgentGate` instance, which the installer writes to
-`~/.t3/userdata/settings.json`. An existing instance keeps its `enabled` flag
-and other environment entries. The hook refuses a thread launch, send or batch
-create that names this instance from a caller without the role. No launcher
-selects the instance in this change (part 2 of #534), so every agent-typed
-merge is refused until it lands.
 
 ## Where each rule is installed
 
@@ -87,7 +68,7 @@ changes anything. If any step fails, the snapshot is put back, so a failed
 reinstall never leaves fewer protections than the install it replaced. The
 receipt records what install added and the prior content of each file it
 replaced. Uninstall removes only those additions and restores the prior files,
-hook, guards and gate instance.
+hook and guards.
 
 ## Proof
 

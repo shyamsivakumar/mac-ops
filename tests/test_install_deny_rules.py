@@ -80,13 +80,7 @@ class InstallTest(FakeHome):
         blocks = settings["hooks"]["PreToolUse"]
         self.assertEqual(len(blocks), 1)
         matcher = re.compile(blocks[0]["matcher"])
-        for tool in (
-            "Bash",
-            "mcp__t3-code__t3_thread_launch",
-            "t3_thread_send",
-            "create_threads",
-        ):
-            self.assertTrue(matcher.search(tool), tool)
+        self.assertTrue(matcher.search("Bash"))
         self.assertFalse(matcher.search("Read"))
         for path in self.installer.scope_paths(SPEC):
             self.assertIn(install_deny_rules.BEGIN, path.read_text())
@@ -105,7 +99,7 @@ class InstallTest(FakeHome):
     def test_status_and_uninstall(self):
         self.installer.install(SPEC)
         status = self.installer.status(SPEC)
-        self.assertTrue(status["installed"] and status["t3_gate_instance"])
+        self.assertTrue(status["installed"])
         self.assertEqual(status["claude_deny_missing"], [])
         self.assertTrue(all(v == "installed" for v in status["pi_guards"].values()))
         self.installer.uninstall(SPEC)
@@ -119,17 +113,6 @@ class InstallTest(FakeHome):
             "existing prose\n",
         )
         self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
-        self.assertFalse(self.installer.status(SPEC)["t3_gate_instance"])
-
-    def test_reinstall_keeps_a_gate_the_owner_disabled(self):
-        self.installer.install(SPEC)
-        t3_path = self.installer.t3_settings(SPEC)
-        gate_id = SPEC["t3_gate_instance"]["instanceId"]
-        settings = load(t3_path)
-        settings["providerInstances"][gate_id]["enabled"] = False
-        t3_path.write_text(json.dumps(settings))
-        self.installer.install(SPEC)
-        self.assertFalse(load(t3_path)["providerInstances"][gate_id]["enabled"])
 
     def test_uninstall_restores_what_install_replaced(self):
         kept = install_deny_rules.claude_deny(SPEC, self.home)[0]
@@ -139,17 +122,10 @@ class InstallTest(FakeHome):
         hook = self.installer.hook_target(SPEC)
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text("# user hook\n")
-        t3_path = self.installer.t3_settings(SPEC)
-        t3_path.parent.mkdir(parents=True)
-        prior = {"driver": "claudeAgent", "displayName": "mine", "enabled": False}
-        instance_id = SPEC["t3_gate_instance"]["instanceId"]
-        t3_path.write_text(json.dumps({"providerInstances": {instance_id: prior}}))
         self.installer.install(SPEC)
-        self.assertFalse(load(t3_path)["providerInstances"][instance_id]["enabled"])
         self.installer.uninstall(SPEC)
         self.assertEqual(load(self.settings_path)["permissions"]["deny"], [kept])
         self.assertEqual(hook.read_text(), "# user hook\n")
-        self.assertEqual(load(t3_path)["providerInstances"][instance_id], prior)
 
     def test_an_unmanaged_guard_is_refused_and_nothing_changes(self):
         guard = self.installer.guard_targets(SPEC)[1]
@@ -206,7 +182,6 @@ class InstallTest(FakeHome):
         with self.block_last_guard(), self.assertRaises(OSError):
             self.installer.install(SPEC)
         self.assertEqual(self.managed_bytes(), before)
-        self.assertFalse(self.installer.status(SPEC)["t3_gate_instance"])
 
     def test_a_failed_reinstall_restores_the_previous_install(self):
         self.installer.install(SPEC)
@@ -215,7 +190,7 @@ class InstallTest(FakeHome):
             self.installer.install(SPEC)
         self.assertEqual(self.managed_bytes(), before)
         status = self.installer.status(SPEC)
-        self.assertTrue(status["installed"] and status["t3_gate_instance"])
+        self.assertTrue(status["installed"])
         self.assertEqual(status["claude_deny_missing"], [])
         self.assertTrue(all(v == "installed" for v in status["pi_guards"].values()))
 
@@ -295,7 +270,6 @@ class ListTest(unittest.TestCase):
             self.assertFalse(combined.search(command), command)
 
 
-PIN = "5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"
 PR_TEXT = "Rule: no git push origin main, no git push --force."
 DENIED_PUSHES = [
     "git push",
@@ -365,15 +339,13 @@ ALLOWED_COMMANDS = [
     "gh pr view 1 -R x/y",
     "gh --repo x/y pr list",
 ]
-UNPINNED_MERGES = [
+MERGES_NOT_ENFORCED = [
     "gh pr merge 531",
     "gh pr merge 531 -R x/y --squash --delete-branch",
     "gh -R x/y pr merge 531 --squash",
     "gh --repo=x/y pr merge 531",
     "gh pr -R x/y merge 531",
     "hc send c 'gh pr merge is gated' && gh pr merge 531 --squash",
-    f"gh pr merge 531 --body 'see --match-head-commit {PIN}'",
-    f"gh pr merge 531 --subject 'Merge --match-head-commit {PIN}'",
     "gh pr merge 531 --match-head-commit",
     "gh pr merge 531 --match-head-commit main",
     "if true; then gh pr merge 531 --squash; fi",
@@ -382,8 +354,6 @@ UNPINNED_MERGES = [
 
 
 class HookTest(unittest.TestCase):
-    PINNED = f"gh pr merge 531 -R x/y --squash --match-head-commit {PIN}"
-
     def run_hook(self, payload, role=None):
         env = {k: v for k, v in os.environ.items() if k != "MAC_OPS_ROLE"}
         if role is not None:
@@ -431,31 +401,10 @@ class HookTest(unittest.TestCase):
                 command,
             )
 
-    def test_unpinned_merges_are_denied_for_every_role(self):
+    def test_merge_commands_are_not_enforced_here(self):
         for role in (None, "gate"):
-            for command in UNPINNED_MERGES:
-                self.assertIsNotNone(self.decided(command, role), (role, command))
-
-    def test_a_pinned_merge_needs_the_gate_role(self):
-        for role in (None, "builder", ""):
-            self.assertIsNotNone(self.decided(self.PINNED, role), role)
-        self.assertIsNone(self.decided(self.PINNED, "gate"))
-        self.assertIsNone(
-            self.decided(self.PINNED.replace("gh pr", "gh -R x/y pr"), "gate")
-        )
-
-    def test_launching_a_thread_on_the_gate_instance_needs_the_gate_role(self):
-        def payload(instance):
-            return {
-                "tool_name": "mcp__t3-code__t3_thread_launch",
-                "tool_input": {"modelSelection": {"instanceId": instance}},
-            }
-
-        self.assertEqual(
-            self.run_hook(payload("claudeAgentGate"))["permissionDecision"], "deny"
-        )
-        self.assertIsNone(self.run_hook(payload("claudeAgentGate"), role="gate"))
-        self.assertIsNone(self.run_hook(payload("pi")))
+            for command in MERGES_NOT_ENFORCED:
+                self.assertIsNone(self.decided(command, role), (role, command))
 
     def test_a_command_in_or_moving_into_the_ascend_tree_is_denied(self):
         ascend = Path.home() / "Code/slash-eureka/x"
@@ -505,7 +454,6 @@ console.log(JSON.stringify(out));
         ascend = str(self.home / "Code/slash-eureka/README.md")
         (self.home / "Code/slash-eureka").mkdir(parents=True)
         (self.home / "link").symlink_to(self.home / "Code/slash-eureka")
-        gate = {"MAC_OPS_ROLE": "gate"}
 
         def bash(command, env=None, cwd=None):
             event = {"toolName": "bash", "input": {"command": command}}
@@ -523,10 +471,8 @@ console.log(JSON.stringify(out));
             (bash("git push"), True),
             (bash("git push origin t3/x --force"), True),
             (bash("git push origin HEAD:main"), True),
-            (bash("gh -R x/y pr merge 531 --squash"), True),
-            (bash(HookTest.PINNED), True),
+            (bash("gh -R x/y pr merge 531 --squash"), False),
             (bash("ls ~/.ssh; cat ~/.ssh/id_rsa"), True),
-            (bash(HookTest.PINNED, gate), False),
             (bash("git push -u origin t3/x"), False),
             (bash("git push main task"), False),
             (bash("gh -R x/y pr view 531"), False),

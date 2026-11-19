@@ -149,9 +149,6 @@ class Installer:
     def settings(self) -> Path:
         return self.root / ".claude/settings.json"
 
-    def t3_settings(self, spec: dict) -> Path:
-        return Path(expand(spec["t3_gate_instance"]["settings"], self.root))
-
     def hook_target(self, spec: dict) -> Path:
         return Path(expand(spec["claude_code"]["hook"]["target"], self.root))
 
@@ -168,7 +165,6 @@ class Installer:
     def managed_paths(self, spec: dict) -> list[Path]:
         return [
             self.settings(),
-            self.t3_settings(spec),
             self.hook_target(spec),
             self.receipt,
             *self.guard_targets(spec),
@@ -288,47 +284,6 @@ class Installer:
         write_json(self.settings(), settings)
         return "cleaned"
 
-    def merge_t3_gate(self, spec: dict, enabled: bool | None) -> dict | None:
-        conf = spec["t3_gate_instance"]
-        settings = load_json(self.t3_settings(spec))
-        instances = dict(settings.get("providerInstances") or {})
-        prior = instances.get(conf["instanceId"])
-        base = prior or {}
-        role = {
-            "name": conf["env"]["name"],
-            "value": conf["env"]["value"],
-            "sensitive": False,
-        }
-        others = [
-            e for e in base.get("environment") or [] if e.get("name") != role["name"]
-        ]
-        instances[conf["instanceId"]] = {
-            **base,
-            "driver": base.get("driver", conf["driver"]),
-            "displayName": base.get("displayName", conf["displayName"]),
-            "enabled": base.get("enabled", True) if enabled is None else enabled,
-            "environment": others + [role],
-        }
-        settings["providerInstances"] = instances
-        write_json(self.t3_settings(spec), settings)
-        return prior
-
-    def unmerge_t3_gate(self, spec: dict, saved: dict) -> str:
-        settings = load_json(self.t3_settings(spec))
-        instances = settings.get("providerInstances") or {}
-        instance_id = spec["t3_gate_instance"]["instanceId"]
-        if instance_id not in instances:
-            return "absent"
-        prior = saved.get("t3_prior")
-        if prior is not None:
-            instances[instance_id] = prior
-        else:
-            del instances[instance_id]
-        if not instances:
-            settings.pop("providerInstances", None)
-        write_json(self.t3_settings(spec), settings)
-        return "restored" if prior is not None else "removed"
-
     def install(self, spec: dict) -> dict:
         repo_scope = ROOT_REPO / spec["scope_files"]["repo"]
         if "\n".join(spec["scope_section"]) not in repo_scope.read_text():
@@ -349,13 +304,10 @@ class Installer:
         stamp = str(time.time_ns())
         snapshot = self.snapshot(spec, self.backups / stamp / "snapshot")
         self.prior = self.backups / stamp / "prior"
-        gate_id = spec["t3_gate_instance"]["instanceId"]
-        instances = load_json(self.t3_settings(spec)).get("providerInstances") or {}
-        enabled = instances.get(gate_id, {}).get("enabled") if saved else None
         try:
             if saved:
                 self.uninstall(spec)
-            return self.apply(spec, enabled)
+            return self.apply(spec)
         except BaseException:
             self.restore(snapshot)
             raise
@@ -364,7 +316,7 @@ class Installer:
         saved = self.copy_aside(path, self.prior)
         prior_files[str(path)] = str(saved) if saved else None
 
-    def apply(self, spec: dict, enabled: bool | None) -> dict:
+    def apply(self, spec: dict) -> dict:
         prior_files: dict = {}
         added, registered = self.merge_claude(spec)
         actions = [
@@ -376,7 +328,6 @@ class Installer:
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.unlink(missing_ok=True)
         atomic_write(hook, render_hook(spec, self.root), 0o700)
-        t3_prior = self.merge_t3_gate(spec, enabled)
         guard = render_guard(spec, self.root)
         for target in self.guard_targets(spec):
             self.claim(target, prior_files)
@@ -393,8 +344,6 @@ class Installer:
                 "managed_deny": added,
                 "hook_registered": registered,
                 "prior_files": prior_files,
-                "t3_touched": True,
-                "t3_prior": t3_prior,
             },
         )
         return {"owner": OWNER, "actions": actions, "backups": str(self.prior)}
@@ -411,7 +360,6 @@ class Installer:
             if path.is_file() and not path.is_symlink():
                 check_markers(path.read_text(), path)
         actions = ["claude settings: " + self.unmerge_claude(saved, spec)]
-        actions.append("t3 gate instance: " + self.unmerge_t3_gate(spec, saved))
         for target, backup in (saved.get("prior_files") or {}).items():
             Path(target).unlink(missing_ok=True)
             if backup:
@@ -425,14 +373,12 @@ class Installer:
     def status(self, spec: dict) -> dict:
         deny = (load_json(self.settings()).get("permissions") or {}).get("deny") or []
         guard = render_guard(spec, self.root)
-        instances = load_json(self.t3_settings(spec)).get("providerInstances") or {}
         return {
             "installed": bool(load_json(self.receipt)),
             "claude_deny_missing": [
                 e for e in claude_deny(spec, self.root) if e not in deny
             ],
             "merge_hook_file": self.hook_target(spec).is_file(),
-            "t3_gate_instance": spec["t3_gate_instance"]["instanceId"] in instances,
             "pi_guards": {
                 str(t): (
                     "installed"

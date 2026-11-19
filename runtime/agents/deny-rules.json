@@ -65,22 +65,12 @@
   ],
   "ascend_bash_reason": "reads and edits under ~/Code/slash-eureka (Ascend) are denied",
   "secret_bash_reason": "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) are denied",
-  "t3_gate_instance": {
-    "settings": "~/.t3/userdata/settings.json",
-    "instanceId": "claudeAgentGate",
-    "driver": "claudeAgent",
-    "displayName": "Claude gate",
-    "env": {
-      "name": "MAC_OPS_ROLE",
-      "value": "gate"
-    }
-  },
   "claude_code": {
     "settings": "~/.claude/settings.json",
     "hook": {
       "source": "runtime/agents/deny-merge-guard.py",
       "target": "~/.claude/hooks/deny-merge-guard.py",
-      "matcher": "Bash|.*(?:thread_launch|thread_send|create_threads).*"
+      "matcher": "Bash"
     }
   },
   "scope_files": {
@@ -100,7 +90,6 @@
     "- No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).",
     "- No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.",
     "- No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.",
-    "- No `gh pr merge` for a builder. Only a gate thread merges, and only with the pinned `--match-head-commit` head given as a merge argument.",
     ""
   ]
 }
