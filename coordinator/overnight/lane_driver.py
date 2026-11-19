@@ -453,6 +453,23 @@ def root_workspace(thread):
     return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
 
 
+def reusable_worktree(thread):
+    """Say whether an idle thread's worktree may carry a replacement.
+
+    The worktree has to be a linked worktree of its own, and its checked
+    out branch has to be readable and not a `herdr/` branch: Shyam merges
+    those, so lane work never runs on one.
+    """
+    path = thread.get("worktreePath")
+    if not path or root_workspace(thread):
+        return False
+    try:
+        branch = run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=60).strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return bool(branch) and not branch.startswith("herdr/")
+
+
 def branch_on_origin(repo, branch):
     """Say whether a branch is on origin, so a worktree can start there.
 
@@ -498,6 +515,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
     may_send = model_list.may_take_send(thread_model)
+    first_fix = model_list.first_available("fix")
+    first_fix_model = first_fix["selection"] if first_fix else None
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
             _, skip = pr_action_skip(repo, attached["number"])
@@ -516,10 +535,12 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         # dropped without a thread to carry it.
         sendable = False
         reroute = "model may not take a send"
-    if sendable and worktree_only and root_workspace(thread):
+    if sendable and root_workspace(thread) and (worktree_only or not model_list.same_selection(thread_model, first_fix_model)):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
-        # worktree instead of the thread that works there.
+        # worktree instead of the thread that works there. A thread that
+        # is not on the first available fix model takes a direct send
+        # only from a worktree of its own, on every path.
         sendable = False
         reroute = "root workspace"
     if sendable:
@@ -536,9 +557,10 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         entry = model_list.first_available(list_name)
         if entry is None:
             return f"skip {lkey}: every {list_name} model is blocked"
-        if reroute == "model may not take a send" and not live and not root_workspace(thread):
-            # The thread is idle and works in a worktree of its own, so
-            # the replacement starts there and the work keeps its place.
+        if reroute == "model may not take a send" and not live and reusable_worktree(thread):
+            # The thread is idle and works in a worktree of its own on a
+            # branch the lane may use, so the replacement starts there
+            # and the work keeps its place.
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             # A live thread still holds its checkout, so a replacement
