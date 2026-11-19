@@ -249,6 +249,42 @@ def board_update(target, alarm_id, action, item=None, attempts=5):
     return "failed"
 
 
+OWNER_IDS = re.compile(
+    r"factory-zero-merge|factory-overnight-stall"
+    r"|prompt-merge-MO-\d+|lane-gate-rounds-shyamsivakumar-mac-ops-\d+")
+
+
+def board_for(decisions, alarm_id):
+    """The board file an item id belongs to.
+
+    The mac-ops tooling alarms go to the mac-ops owner's board, which sits
+    beside the decisions board unless COORDINATOR_OWNER_BOARD moves it.
+    Every other id stays on the decisions board."""
+    if not OWNER_IDS.fullmatch(str(alarm_id)):
+        return Path(decisions)
+    return Path(os.environ.get("COORDINATOR_OWNER_BOARD")
+                or Path(decisions).with_name("mac-ops-owner.json"))
+
+
+def route_update(decisions, alarm_id, action, item=None):
+    """board_update on the board the id belongs to, clearing any stale copy.
+
+    An owner item is raised or removed on the owner board, and the same id
+    is taken off the decisions board when it is still there. Return
+    "wrote" or "failed"."""
+    target = board_for(decisions, alarm_id)
+    if target == Path(decisions):
+        return board_update(decisions, alarm_id, action, item)
+    if action == "raise" and not target.exists():
+        write_board(target, {"items": []})
+    if board_update(target, alarm_id, action, item) != "wrote":
+        return "failed"
+    _, stale = read_board(Path(decisions))
+    if stale and any(isinstance(e, dict) and e.get("id") == alarm_id for e in stale["items"]):
+        return board_update(decisions, alarm_id, "remove")
+    return "wrote"
+
+
 def read_board(path):
     """Return (the board's bytes, the board) or (bytes, None)."""
     try:

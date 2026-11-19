@@ -1218,6 +1218,9 @@ def zero_merge_fixture(scratch):
     import lane_driver as lane
     other = {"id": "unrelated"}
     state = {"items": [other]}
+    owner = {"items": []}
+    def held():
+        return state["items"] + owner["items"]
     now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
     class Clock(dt.datetime):
         @classmethod
@@ -1249,11 +1252,12 @@ def zero_merge_fixture(scratch):
     mute = str(scratch / "mute-state.json")
 
     def read_board(path):
-        return b"", json.loads(json.dumps(state))
+        return b"", json.loads(json.dumps(owner if Path(path).name == "mac-ops-owner.json" else state))
 
     def write_board(path, board):
-        state.clear()
-        state.update(json.loads(json.dumps(board)))
+        target = owner if Path(path).name == "mac-ops-owner.json" else state
+        target.clear()
+        target.update(json.loads(json.dumps(board)))
         return True
 
     import alarms
@@ -1271,7 +1275,7 @@ def zero_merge_fixture(scratch):
                 ([], [other, alert])]:
             rows = [{"mergedAt": stamp} for stamp in stamps]
             lane.zero_merge(snapshot)
-            exact(state["items"], expected)
+            exact(held(), expected)
         exact(calls, ["fixture/one", "fixture/two"] * 5)
         with patch.object(lane, "read_json", side_effect=RuntimeError("fixture read failure")):
             try:
@@ -1280,7 +1284,7 @@ def zero_merge_fixture(scratch):
                 exact(str(exc), "fixture read failure")
             else:
                 raise AssertionError("read failure was swallowed")
-        exact(state["items"], [other, alert])
+        exact(held(), [other, alert])
 
         snapshot["repos"]["fixture/one"]["prs"] = []
         # A healthy tick raises nothing, so it says nothing about an alarm:
@@ -1288,7 +1292,7 @@ def zero_merge_fixture(scratch):
         healthy = io.StringIO()
         with contextlib.redirect_stdout(healthy):
             lane.zero_merge(snapshot)
-        exact(state["items"], [other])
+        exact(held(), [other])
         exact(len(calls), 10)
         # A board that cannot be written is reported, not swallowed: the
         # alarm is nowhere, and the tick has to say so.
@@ -1317,7 +1321,7 @@ def zero_merge_fixture(scratch):
         snapshot["repos"]["fixture/two"]["prs"] = []
         rows = []
         lane.zero_merge(snapshot)
-        first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        first = [i for i in held() if i["id"] == "factory-zero-merge"]
         exact(len(first), 1)
         exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
         # The answer goes to the mute state the shift keeps. The replace
@@ -1330,14 +1334,19 @@ def zero_merge_fixture(scratch):
         exact(mute_rules.muted(mute_rules.load_state(), answered, now), True)
         # The answered cause is quiet: the same wait raises no board item.
         lane.zero_merge(snapshot)
-        exact([i for i in state["items"] if i["id"] == "factory-zero-merge"], [])
+        exact([i for i in held() if i["id"] == "factory-zero-merge"], [])
         # A repository that starts waiting is a different cause, so it
         # alarms at once under its own key.
         snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
         lane.zero_merge(snapshot)
-        raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        raised = [i for i in held() if i["id"] == "factory-zero-merge"]
         exact(len(raised), 1)
         exact(raised[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one, fixture/two")
+        exact(state["items"], [other])
+        state["items"].append(dict(alert))
+        lane.zero_merge(snapshot)
+        exact([i["id"] for i in state["items"]], ["unrelated"])
+        exact([i["id"] for i in owner["items"]], ["factory-zero-merge"])
 
 
 def board_integrity():
@@ -1582,7 +1591,8 @@ def gate_round_cap():
     repo = "shyamsivakumar/mac-ops"
     heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
     sent = []
-    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
+    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions:
+        board = decisions.with_name("mac-ops-owner.json")
 
         def command(cmd, timeout=150):
             if cmd[:3] == ["gh", "pr", "view"]:
@@ -2369,7 +2379,7 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-def alarm_mute():
+def alarm_mute_on_one_board():
     import datetime as dt
     import alarms
     import lane_driver as lane
@@ -3008,6 +3018,29 @@ def alarm_mute():
             exact(ids, [])
 
 
+
+
+def alarm_mute():
+    """The mute rule on one board, then the routing of the owner alarms."""
+    import alarms
+    import stall as rule
+    with patch.object(alarms, "board_for", lambda decisions, alarm_id: Path(decisions)):
+        alarm_mute_on_one_board()
+    with tempfile.TemporaryDirectory() as scratch, \
+            patch.object(alarms, "MUTE_PATH", str(Path(scratch) / "mute-state.json")):
+        decisions = Path(scratch) / "decisions.json"
+        owner = Path(scratch) / "mac-ops-owner.json"
+        stale = {"id": "factory-overnight-stall", "cause": "stale"}
+        decisions.write_text(json.dumps({"items": [{"id": "SRW-1"}, stale]}))
+        target, action = rule.alert("no board progress for 3 ticks", None, decisions)
+        exact(action, "wrote")
+        exact([i["id"] for i in json.loads(owner.read_text())["items"]], ["factory-overnight-stall"])
+        exact([i["id"] for i in json.loads(decisions.read_text())["items"]], ["SRW-1"])
+        exact(alarms.route_update(decisions, "SRW-1", "remove"), "wrote")
+        exact(alarms.route_update(decisions, "factory-overnight-stall", "remove"), "wrote")
+        exact(json.loads(owner.read_text())["items"], [])
+        exact(alarms.board_for(decisions, "prompt-merge-SRW-4"), decisions)
+        exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}

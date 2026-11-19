@@ -363,9 +363,9 @@ A board that stopped moving gets one alert, not one per tick: the alert
 is written again after the board moves and stalls a second time. The flag
 that says "the board was alerted" is set only after the alert was written,
 so a board whose alert could not be written asks again on the next tick
-instead of going quiet for good. The alert goes to the coordinator's board
-(`factory-overnight-stall`), the same board the merge alert and the
-watchdog use. The board is swept again in the same tick, so the shift
+instead of going quiet for good. The alert goes to the mac-ops owner board
+(`factory-overnight-stall`), the same board the merge alert uses. The
+watchdog stays on the decisions board. The board is swept again in the same tick, so the shift
 keeps working on a fresh board.
 
 The tracking is bounded: an item's idle count stops at the cap, and an
@@ -804,9 +804,12 @@ now checked instead of remembered. One list lives in
   merge order. The brief says do not merge and close nothing, and names the
   change as prompt text.
 - The lane driver checks the same list before it merges a passing pull
-  request. On a prompt change it merges nothing and writes one item to
-  `~/Code/coordinator/decisions.json` (`kind: action`, id
-  `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
+  request. On a prompt change it merges nothing and writes one item
+  (`kind: action`, id `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The
+  item goes to `~/Code/coordinator/decisions.json`, except for mac-ops (key
+  `MO`), which goes to the mac-ops owner board
+  `~/Code/coordinator/mac-ops-owner.json` (`COORDINATOR_OWNER_BOARD` moves
+  it). The item is keyed by
   id, so a second pass replaces it instead of adding a second one. A pass
   also takes the item down, but only once the pull request itself reports
   `MERGED` or `CLOSED`: the open list a pass holds stops at 200 requests, so
@@ -1041,7 +1044,11 @@ Device, handset and live-service testing remain waived, not failed.
 `python3 coordinator/overnight/overnight selftest` now registers `zero-merge`.
 The lane driver's normal command checks the monitored board after its pass.
 With open PRs and no merge in the preceding 60 minutes, it writes one
-`factory-zero-merge` action to decisions.json. A merge anywhere in the monitored
+`factory-zero-merge` action to the mac-ops owner board
+`~/Code/coordinator/mac-ops-owner.json`, not decisions.json. The same board
+takes `factory-overnight-stall` and the mac-ops `lane-gate-rounds-*` items.
+`alarms.route_update` picks the board by id and removes any copy of that id
+still on decisions.json. A merge anywhere in the monitored
 repos at or after the cutoff clears the action. No open PRs also clears it.
 The check uses the existing board snapshot and budgeted GitHub read adapter;
 failed reads abort before changing the action. Dry runs skip the check.

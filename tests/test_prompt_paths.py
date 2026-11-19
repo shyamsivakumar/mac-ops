@@ -7,6 +7,7 @@ tests here pin the list and both call sites.
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -748,9 +749,13 @@ class LanePassTest(unittest.TestCase):
             calls.append((path, alarm_id, action, item))
             return "wrote"
 
-        with patch.object(self.lane.alarms, "board_update", board_update):
-            self.assertEqual(self.lane.publish_decision(self.item), "wrote")
-        self.assertEqual(calls, [(self.lane.DECISIONS_PATH, "prompt-merge-MO-544", "raise", self.item)])
+        with tempfile.TemporaryDirectory() as scratch:
+            decisions = Path(scratch) / "decisions.json"
+            with patch.object(self.lane, "DECISIONS_PATH", str(decisions)), \
+                    patch.object(self.lane.alarms, "board_update", board_update):
+                self.assertEqual(self.lane.publish_decision(self.item), "wrote")
+        self.assertEqual(calls, [(Path(scratch) / "mac-ops-owner.json",
+                                  "prompt-merge-MO-544", "raise", self.item)])
 
 
 class BoardReconcileTest(unittest.TestCase):
