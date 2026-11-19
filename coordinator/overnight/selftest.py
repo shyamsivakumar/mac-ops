@@ -1621,25 +1621,29 @@ def decisions_board_guard():
     The lane raises one item on the decisions board when a pull request
     uses its review rounds. The board path comes from the environment, so
     a test points it at a scratch file. This eval runs the path that
-    raises the item and checks that the board Shyam reads is byte for
-    byte what it was before.
+    raises the item and checks that every write names the scratch file as
+    its destination. The board Shyam reads is not compared before and
+    after, because the coordinator may publish to it while this runs.
     """
     import lane_driver as lane
-    real = Path("/Users/shyamsivakumar/Code/coordinator/decisions.json")
-    before = real.read_bytes() if real.exists() else None
+    targets = []
+    real_update = lane.alarms.board_update
+
+    def record(target, *args, **kwargs):
+        targets.append(str(target))
+        return real_update(target, *args, **kwargs)
+
     with tempfile.TemporaryDirectory() as scratch:
         board = Path(scratch) / "decisions.json"
         board.write_text(json.dumps({"items": []}))
-        with patch.object(lane, "DECISIONS_PATH", str(board)):
+        with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                patch.object(lane.alarms, "board_update", record):
             lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
-            # A second pass over the same pull request finds the item
-            # already on the board, so the board holds one item.
             lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
         items = json.loads(board.read_text())["items"]
+        exact(targets, [str(board)] * 2)
         exact(len(items), 1)
         exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
-    after = real.read_bytes() if real.exists() else None
-    exact(after, before)
 
 
 def send_integrity():
