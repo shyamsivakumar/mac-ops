@@ -172,23 +172,60 @@ A change PR declares one claim before the trial runs.
 4. Median cost and median wall-clock time are each no more than 25% above
    baseline.
 5. Median diff size ratio is no more than 1.5x baseline.
+6. Total passed runs under the change arm exceed the baseline's, and the rise
+   is larger than the absolute difference in total passed runs between the two
+   A/A runs. The sign test counts tasks and ignores how many runs each task
+   moved, so this condition stops a few large losses hiding behind many small
+   gains.
 
 **Claim B, it does no harm and cuts cost or time.** This is the claim for
 trimming a rule file or a skill. Accept when all of these hold.
 
-1. Down minus up is at most 2, and down is at most 4.
-2. Down is no more than the A/A run's down count plus 2.
-3. Median cost or median wall-clock time falls by at least 15%, and neither
+1. Total passed runs fall by at most 5% of the runs in an arm (3 of 60 at
+   stage 1, 6 of 120 at stage 2). That is the allowed pass-rate loss, and it is
+   tested directly on run counts.
+2. Down minus up is at most 2, and down is at most 4.
+3. Down is no more than the A/A run's down count plus 2.
+4. Median cost or median wall-clock time falls by at least 15%, and neither
    one rises by more than 5%.
-4. Conditions 3 and 5 of claim A hold.
+5. Conditions 3 and 5 of claim A hold.
 
-At 20 tasks a small real loss can still pass rule 1. Rule 3 is the reason claim
-B asks for a measured saving, so a change is only kept when it buys something
-in return for the risk.
+The 5% allowance is a stated cost, not a proof of no harm. At 20 tasks the
+test cannot rule out a real loss of that size or a little more. Rule 4 is the
+reason claim B asks for a measured saving, so a change is only kept when it
+buys something in return for the risk.
 
-A change that fails its claim is reverted or not merged. A change that has no
-builder-visible effect (a loop-policy change) is marked `untrialed` in the PR
-and watched on the live metrics for 14 days, then kept or reverted on those.
+A change that fails its claim is reverted or not merged.
+
+### Keep or revert rule for loop-policy changes
+
+A loop-policy change has no builder-visible effect a container trial can see,
+so it is marked `untrialed` in the PR and decided on live data. The PR names one
+target metric before merge. The metrics split into quality and effort.
+
+- Quality metric: rework rate, the share of merged PRs followed by a revert or
+  a fix that references them within 7 days.
+- Effort metrics: gate rounds per PR, and the share of builder turns over 10
+  minutes (from the turn cap log named under the last section).
+
+The decision uses two windows of merged PRs, the 14 days after the change
+merges and the 14 days before it. Each window needs at least 30 merged PRs.
+
+1. **Quality outranks effort.** If rework rate rises by 5 percentage points or
+   more, revert. An effort gain never offsets a quality loss, so rework up and
+   gate rounds down is a revert.
+2. **Keep** when rework rate has not risen by 5 points or more and the target
+   metric improved by at least 15% relative to the window before.
+3. **Revert** when the target metric did not improve by 15%. The change has not
+   shown that it helps.
+4. **Too little data.** If either window has fewer than 30 merged PRs, extend
+   both to 28 days. If it is still short, revert, because the default is the
+   state before the change.
+
+These windows are not controlled, since other changes land in the same weeks.
+Where another loop-policy change merged inside either window, say so in the
+decision and do not stack both on one window. The thresholds are proposals,
+like every other number in this note.
 
 The [eval scorecard](evals.md) says scorecards never block a merge, and that
 holds for the governor and controller. Loop, prompt and skill changes are a
@@ -201,7 +238,7 @@ confirm that split when he reviews this note.
 ```mermaid
 flowchart TD
     A[Change PR declares claim A or B] --> B{Builder-visible?}
-    B -- no --> U[Mark untrialed, watch live metrics 14 days]
+    B -- no --> U[Mark untrialed, apply the loop-policy keep or revert rule]
     B -- yes --> C[Build baseline and change arms]
     C --> D[Run A/A baseline if none exists for this main]
     D --> E[Run both arms, stage 1: 20 tasks x 3 repeats, through heavy]
