@@ -575,6 +575,7 @@ class CoordqGateTest(unittest.TestCase):
                                                SubprocessError=subprocess.SubprocessError)
         with patch.object(coordq, "subprocess", fake_subprocess), \
                 patch.object(coordq.gh_gateway, "run", return_value=quiet), \
+                patch.object(coordq.gh_gateway, "cached_login", lambda _directory, read: read()), \
                 patch.object(coordq, "reviewer_model",
                              return_value={"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}), \
                 patch.object(coordq, "gh_json", fake_gh), \
@@ -629,6 +630,7 @@ class CoordqGateTest(unittest.TestCase):
                                                SubprocessError=subprocess.SubprocessError)
         with patch.object(coordq, "subprocess", fake_subprocess), \
                 patch.object(coordq.gh_gateway, "run", return_value=quiet), \
+                patch.object(coordq.gh_gateway, "cached_login", lambda _directory, read: read()), \
                 patch.object(coordq, "reviewer_model",
                              return_value={"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}), \
                 patch.object(coordq, "gh_json", fake_gh), \

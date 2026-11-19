@@ -1298,7 +1298,7 @@ def with_ticket_lock(repo, n):
 
 
 def authed_login():
-    return gh(["api", "user", "-q", ".login"]).strip()
+    return gh_gateway.cached_login(QUEUE_DIR, lambda: gh(["api", "user", "-q", ".login"]).strip())
 
 
 def cmd_start(a):

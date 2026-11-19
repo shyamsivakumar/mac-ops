@@ -496,12 +496,33 @@ def immutable(argv):
                for pattern, queries in IMMUTABLE_ROUTES)
 
 
+SINGLE_OBJECT_ROUTES = (
+    r"repos/[^/]+/[^/]+/(?:issues|pulls)/\d+",
+    r"repos/[^/]+/[^/]+/git/ref/.+",
+)
+
+
+def single_object(argv):
+    """True for a plain GET of one issue, pull or ref.
+
+    These are never kept for a TTL, because the object moves. They can still
+    be revalidated: a 304 is the live object, so it is always fresh."""
+    if not _gh(argv) or not cache_enabled() or has_body(argv) or unknown_short_flag(argv):
+        return False
+    if not context(argv)[1]:
+        return False
+    path = endpoint(argv)
+    if not path or "?" in path or method(argv) != "GET":
+        return False
+    return any(re.fullmatch(route, path.lstrip("/")) for route in SINGLE_OBJECT_ROUTES)
+
+
 def conditional(argv):
     """True when a read can be made conditional, so a 304 costs no core call.
 
-    Only a single-page `gh api` GET qualifies: a paginated read answers with
+    Only a single-page `gh api` GET of a list or of one object qualifies: a paginated read answers with
     one header block per page, and a write is never conditional."""
-    if not cacheable(argv):
+    if not (cacheable(argv) or single_object(argv)):
         return False
     words = [str(word) for word in argv[1:]]
     if not words or words[0] != "api":
@@ -607,6 +628,21 @@ def _conditional_run(argv, timeout, caller_name=None):
         # would otherwise make the next identical read a fresh core call.
         store(argv, body)
     return subprocess.CompletedProcess(argv, result.returncode, body, result.stderr)
+
+
+def cached_login(directory, read):
+    """The authenticated login, read once and kept in `directory`.
+
+    `read` is the caller's own lookup and runs only when no login is on disk."""
+    login_file = Path(directory) / "gh-login"
+    try:
+        login = login_file.read_text().strip()
+    except OSError:
+        login = ""
+    if not login:
+        login = read()
+        _atomic_write(login_file, login)
+    return login
 
 
 def _hosts_account(host):

@@ -86,12 +86,25 @@ def require_api_budget():
     return remaining
 
 
-def read_json(cmd):
+def read_json(cmd, fresh=False):
     require_api_budget()
-    result = gh_gateway.run(cmd, timeout=300, caller_name=LANE_CALLER)
+    result = gh_gateway.run(cmd, timeout=300, caller_name=LANE_CALLER, fresh=fresh)
     if result.returncode:
         raise RuntimeError(f"snapshot read failed: {cmd[:3]} (exit {result.returncode})")
     return json.loads(result.stdout)
+
+
+PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles"
+PASS_PRS = {}
+
+
+def open_prs(repo):
+    """The open pull requests of one repository, read once per pass."""
+    if repo not in PASS_PRS:
+        rows = read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200",
+                          "--json", PR_FIELDS], fresh=True)
+        PASS_PRS[repo] = {row["number"]: row for row in rows}
+    return PASS_PRS[repo]
 
 
 def board_snapshot(ledger, force=False):
@@ -106,10 +119,10 @@ def board_snapshot(ledger, force=False):
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles"
+    PASS_PRS.clear()
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
-            "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
+            "prs": list(open_prs(repo).values()),
             "issues": read_json(["gh", "issue", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", "number,title,labels,state"]),
         }
     snapshot["refreshed_at"] = time.time()
@@ -466,8 +479,8 @@ def start(args, prio, ledger, lkey):
 
 
 def pr_action_skip(repo, number):
-    pr = read_json(["gh", "pr", "view", str(number), "-R", repo,
-                    "--json", "number,state,headRefName,baseRefName"])
+    pr = open_prs(repo).get(number) or read_json(
+        ["gh", "pr", "view", str(number), "-R", repo, "--json", PR_FIELDS])
     branches = [pr.get(field) for field in ("headRefName", "baseRefName")]
     if any(not isinstance(branch, str) or not branch for branch in branches):
         return pr, f"skip #{number}: missing PR branch names"
@@ -1174,10 +1187,6 @@ def act_on_pr(repo, number, ledger):
             withdraw_decision(f"prompt-merge-{CFG[repo]['key']}-{number}")
         return skip
     pr = {**pr, **current_pr}
-    state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
-                            "--json", "state,mergedAt"]))
-    if state.get("state") != "OPEN" or state.get("mergedAt"):
-        return f"skip #{number}: PR is merged or closed"
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
     if issue and superseded_by(repo, number, int(issue)):
@@ -1937,8 +1946,7 @@ def recover_dead_runs(ledger):
             for pr in thread.get("pullRequests") or []:
                 if pr.get("repository") != repo or not pr.get("number"):
                     continue
-                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid,headRefName,baseRefName"])
-                _, skip = pr_action_skip(repo, pr["number"])
+                current_pr, skip = pr_action_skip(repo, pr["number"])
                 if skip:
                     print(skip)
                     protected_pr = True
@@ -2033,6 +2041,7 @@ def recover_dead_runs(ledger):
 def run_pass(ledger):
     global SNAPSHOT, STALL_STATE
     ledger.pop("_item_failures", None)
+    PASS_PRS.clear()
     watchdog()
     drift_ff(ledger)
     SNAPSHOT = board_snapshot(ledger)
