@@ -27,7 +27,7 @@ import json
 import re
 import subprocess
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -68,6 +68,28 @@ def local_day(ts: datetime) -> str:
 
 
 @dataclass
+class DayUsage:
+    """What the turns of one session that fell on one local day cost."""
+
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    first: datetime | None = None
+    last: datetime | None = None
+
+    def add(self, other: "DayUsage") -> None:
+        self.cost_usd += other.cost_usd
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        if other.first is not None and (self.first is None or other.first < self.first):
+            self.first = other.first
+        if other.last is not None and (self.last is None or other.last > self.last):
+            self.last = other.last
+
+
+@dataclass
 class SessionCost:
     """One pi session and what its API usage cost."""
 
@@ -84,6 +106,7 @@ class SessionCost:
     started_at: str | None = None
     ended_at: str | None = None
     day: str | None = None
+    daily: dict[str, "DayUsage"] = field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:
@@ -140,6 +163,8 @@ def read_session(path: Path, pi_root: Path) -> SessionCost | None:
     cost = 0.0
     inp = out = cache = 0
     models: list[str] = []
+    daily: dict[str, DayUsage] = {}
+    unstamped: DayUsage | None = None
     cwd: str | None = None
     name: str | None = None
     first: datetime | None = None
@@ -183,16 +208,32 @@ def read_session(path: Path, pi_root: Path) -> SessionCost | None:
                 if not isinstance(usage, dict):
                     continue
                 price = usage.get("cost") or {}
-                if isinstance(price, dict):
-                    cost += float(price.get("total") or 0.0)
-                inp += int(usage.get("input") or 0)
-                out += int(usage.get("output") or 0)
-                cache += int(usage.get("cacheRead") or 0)
+                turn = DayUsage(
+                    cost_usd=float(price.get("total") or 0.0)
+                    if isinstance(price, dict)
+                    else 0.0,
+                    input_tokens=int(usage.get("input") or 0),
+                    output_tokens=int(usage.get("output") or 0),
+                    cache_read_tokens=int(usage.get("cacheRead") or 0),
+                    first=moment,
+                    last=moment,
+                )
+                cost += turn.cost_usd
+                inp += turn.input_tokens
+                out += turn.output_tokens
+                cache += turn.cache_read_tokens
+                if moment is None:
+                    unstamped = unstamped or DayUsage()
+                    unstamped.add(turn)
+                else:
+                    daily.setdefault(local_day(moment), DayUsage()).add(turn)
                 model = message.get("model")
                 if isinstance(model, str) and model and model not in models:
                     models.append(model)
     if first is None and not name:
         return None
+    if unstamped is not None and first is not None:
+        daily.setdefault(local_day(first), DayUsage()).add(unstamped)
     return SessionCost(
         session_id=session_id,
         path=str(path),
@@ -207,7 +248,38 @@ def read_session(path: Path, pi_root: Path) -> SessionCost | None:
         started_at=first.isoformat().replace("+00:00", "Z") if first else None,
         ended_at=last.isoformat().replace("+00:00", "Z") if last else None,
         day=local_day(first) if first else None,
+        daily=daily,
     )
+
+
+def split_by_day(session: SessionCost) -> list[SessionCost]:
+    """One slice of a session per local day it spent money on.
+
+    A session that runs past midnight prices each turn on the day the turn
+    ran, so a day's cost is what was spent that day and not what the
+    session started that day.
+    """
+    days = {day: usage for day, usage in session.daily.items() if day}
+    if not days:
+        return [session]
+    return [
+        replace(
+            session,
+            cost_usd=usage.cost_usd,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            started_at=_iso(usage.first) or session.started_at,
+            ended_at=_iso(usage.last) or session.ended_at,
+            day=day,
+            daily={},
+        )
+        for day, usage in sorted(days.items())
+    ]
+
+
+def _iso(moment: datetime | None) -> str | None:
+    return moment.isoformat().replace("+00:00", "Z") if moment else None
 
 
 def collect_sessions(pi_root: Path, days: list[str]) -> list[SessionCost]:
@@ -215,9 +287,9 @@ def collect_sessions(pi_root: Path, days: list[str]) -> list[SessionCost]:
     out: list[SessionCost] = []
     for path in session_files(pi_root, days):
         session = read_session(path, pi_root)
-        if session is None or session.day not in days:
+        if session is None:
             continue
-        out.append(session)
+        out.extend(part for part in split_by_day(session) if part.day in days)
     return out
 
 
@@ -321,10 +393,16 @@ class PrIndex:
                 return row
         return None
 
-    def by_branch(self, repo: str, branch: str) -> dict[str, Any] | None:
+    def by_branch_at(
+        self, repo: str, branch: str, moment: str | None
+    ) -> dict[str, Any] | None:
+        """The pull request of a branch that existed by a moment."""
         for row in self.prs(repo):
-            if row.get("headRefName") == branch:
-                return row
+            if row.get("headRefName") != branch:
+                continue
+            if moment and str(row.get("createdAt") or "") > moment:
+                continue
+            return row
         return None
 
     def by_issue(self, repo: str, issue: int) -> list[dict[str, Any]]:
@@ -421,7 +499,7 @@ def attribute(
             )
 
     if repo and branch:
-        row = index.by_branch(repo, branch)
+        row = index.by_branch_at(repo, branch, session.started_at)
         if row is not None:
             return _with_pr(out, row, "branch")
 
@@ -628,9 +706,9 @@ def build_report(
         if repo is None:
             repo = learned.get(repo_dir_name(key) or "")
         attributions.append(attribute(session, index, repo=repo, branch=branch))
-    day_attributions = [a for a in attributions if a.session.day == day]
     if repos:
-        day_attributions = [a for a in day_attributions if a.repo in repos]
+        attributions = [a for a in attributions if a.repo in repos]
+    day_attributions = [a for a in attributions if a.session.day == day]
     buckets = _bucket(day_attributions)
     total = sum(a.session.cost_usd for a in day_attributions)
     attributed = sum(b["cost_usd"] for b in buckets.values() if b["number"])
