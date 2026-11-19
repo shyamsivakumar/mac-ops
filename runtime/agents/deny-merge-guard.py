@@ -82,6 +82,9 @@ COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "gh", "eval"}
 KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
 SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
+ASCEND_ROOTS = ["~/Code/slash-eureka"]
+ASCEND_REASON = "reads and edits under ~/Code/slash-eureka (Ascend) are denied"
+DIRECTORY_CHANGERS = {"cd", "pushd"}
 
 
 def deny(reason):
@@ -359,9 +362,32 @@ def push_reason(args):
     return None
 
 
-def command_reason(command, environ):
+def in_ascend(path):
+    real = os.path.realpath(path)
+    for root in ASCEND_ROOTS:
+        root = os.path.realpath(os.path.expanduser(root))
+        if real == root or real.startswith(root + os.sep):
+            return True
+    return False
+
+
+def directory_reason(commands, cwd):
+    """Refuse a command whose working directory, or any `cd` target in it, is inside the Ascend tree."""
+    here = cwd or os.getcwd()
+    if in_ascend(here):
+        return ASCEND_REASON
+    for words in commands:
+        targets = [w for w in words[1:] if not w.startswith("-")]
+        if os.path.basename(words[0]) in DIRECTORY_CHANGERS and targets:
+            here = os.path.join(here, os.path.expandvars(os.path.expanduser(targets[0])))
+            if in_ascend(here):
+                return ASCEND_REASON
+    return None
+
+
+def command_reason(command, environ, cwd=None):
     commands = list(real_commands(command))
-    reason = merge_reason(commands, environ)
+    reason = merge_reason(commands, environ) or directory_reason(commands, cwd)
     for words in commands:
         args = push_arguments(words) if os.path.basename(words[0]) == "git" else None
         reason = reason or (push_reason(args) if args is not None else None)
@@ -379,7 +405,9 @@ def main():
         return 0
     reason = None
     if tool_name == "Bash":
-        reason = command_reason(str(tool_input.get("command") or ""), os.environ)
+        reason = command_reason(
+            str(tool_input.get("command") or ""), os.environ, payload.get("cwd")
+        )
     elif (
         any(name in tool_name for name in THREAD_TOOLS)
         and not is_gate(os.environ)

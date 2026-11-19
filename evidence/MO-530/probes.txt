@@ -1,8 +1,8 @@
 PASS installer: install twice over a scratch home, then status: installed=True
-PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-nacdczaj/home/.pi/agent/extensions/deny-guar
+PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-ezn5gybi/home/.pi/agent/extensions/deny-guar
 PASS installer: claude deny list complete: missing=[]
-PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-nacdczaj/home/.claude/hooks/deny-merge-guard.py
-PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-nacdczaj/home/.claude/hooks/deny-merge-guard.py']
+PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-ezn5gybi/home/.claude/hooks/deny-merge-guard.py
+PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-ezn5gybi/home/.claude/hooks/deny-merge-guard.py']
 not run claude permissions.deny: read under slash-eureka: Read(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: edit under slash-eureka: Edit(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: read an env file: Read(**/.env) installed; Claude evaluates it in a session, so the decision is not run here
@@ -67,6 +67,10 @@ PASS claude hook: pinned merge from a gate role (not executed): allow (no decisi
 PASS claude hook: pinned merge with -R before pr from a gate role: allow (no decision)
 PASS claude hook: pin mentioned in a body, not a merge argument: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a gate thread, with th)
 PASS claude hook: pin quoted inside a multiword subject: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a gate thread, with th)
+PASS claude hook: cwd inside the Ascend tree, cat README.md: deny
+PASS claude hook: cwd in mac-ops, cat README.md: allow
+PASS claude hook: cd into the Ascend tree, then ls: deny
+PASS claude hook: relative cd into the Ascend tree: deny
 PASS claude hook: a bare push says to name the branch: reason names `git push -u origin <task-branch>`
 PASS pi guard agent: task-branch push beside PR text naming main: allowed
 PASS pi guard agent: task-branch push, then a PR heredoc naming a main push: allowed
@@ -473,4 +477,4 @@ PASS pi guard agent-anthropic-api: write prose that mentions .env: allowed
 PASS pushing a task branch is still allowed (scratch remote): ['refs/heads/t3/deny-probe']
 PASS scratch remote has no main branch: ['refs/heads/t3/deny-probe']
 
-467 passed, 0 failed, 7 not run
+471 passed, 0 failed, 7 not run

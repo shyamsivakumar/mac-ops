@@ -250,13 +250,22 @@ def run(command: list[str], **options) -> subprocess.CompletedProcess:
     )
 
 
-def hook_decision(command: str, env_extra: dict) -> dict | None:
+CWD_ROWS = [
+    ("cwd inside the Ascend tree, cat README.md", "cat README.md", HOME / "Code/slash-eureka/x", True),
+    ("cwd in mac-ops, cat README.md", "cat README.md", HOME / "Code/mac-ops", False),
+    ("cd into the Ascend tree, then ls", "cd ~/Code/slash-eureka/x && ls", HOME / "Code/mac-ops", True),
+    ("relative cd into the Ascend tree", "cd ../slash-eureka && ls", HOME / "Code/mac-ops", True),
+]
+
+
+def hook_decision(command: str, env_extra: dict, cwd: Path = SCRATCH) -> dict | None:
     env = {k: v for k, v in os.environ.items() if k != "MAC_OPS_ROLE"} | env_extra
+    env["HOME"] = str(HOME)
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": command},
-        "cwd": str(SCRATCH),
+        "cwd": str(cwd),
     }
     proc = run([sys.executable, str(HOOK)], input=json.dumps(payload), env=env)
     if proc.returncode != 0:
@@ -329,6 +338,14 @@ def probe_claude_hook() -> None:
             f"claude hook: {label}",
             got == ("deny" if refused else "allow"),
             f"{got} ({detail})",
+        )
+    for label, command, cwd, refused in CWD_ROWS:
+        decision = hook_decision(command, {}, cwd)
+        got = (decision or {}).get("permissionDecision", "allow")
+        record(
+            f"claude hook: {label}",
+            got == ("deny" if refused else "allow"),
+            got,
         )
     bare = hook_decision("git push", {})
     record(
