@@ -48,7 +48,10 @@ SNAPSHOT = {}
 # Where each lane repository is checked out. The path is the shared root
 # of the repository: work there moves the branch everyone installs from.
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalogue": "catalogue"}
+# The branches herdr owns. Work never goes to one of them: herdr merges
+# them, and a builder that pushes there moves the branch Shyam works on.
+PROTECTED_BRANCH = "herdr/"
 # The calls left in reserve before an optional read is skipped. The lane
 # driver, gatekeep and the overnight shift share this one floor.
 API_FLOOR = gh_gateway.floor()
@@ -453,6 +456,39 @@ def root_workspace(thread):
     return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
 
 
+def workspace_branch(path):
+    """Return the branch a workspace is on, or none when it cannot be read.
+
+    The full ref is read, so a tag named like a branch cannot hide it.
+    """
+    try:
+        ref = run(["git", "-C", path, "symbolic-ref", "--quiet", "HEAD"], timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return None
+    ref = ref.strip()
+    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None
+
+
+def barred_workspace(thread):
+    """Return why a thread's workspace may not take work, or none when it may.
+
+    The shared root of a repository is refused: work there moves the
+    branch everyone installs from. A branch under `herdr/` is Shyam's,
+    so no work goes there. A workspace whose branch cannot be read is
+    refused as well: a destination that cannot be shown to be safe is
+    not safe.
+    """
+    path = thread.get("worktreePath")
+    if root_workspace(thread):
+        return "root workspace"
+    branch = workspace_branch(path)
+    if branch is None:
+        return "branch unreadable"
+    if branch.startswith(PROTECTED_BRANCH):
+        return f"herdr branch {branch}"
+    return None
+
+
 def branch_on_origin(repo, branch):
     """Say whether a branch is on origin, so a worktree can start there.
 
@@ -470,13 +506,14 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
-    With `worktree_only` the work belongs in a worktree of its own: a
-    thread that works in a shared checkout of a repository never takes
-    it, and the work starts a fresh worktree instead. That is the
-    fix-check path's rule; the other paths keep their own routing.
+    A thread whose workspace may not take work never takes it: the
+    shared root of a repository moves the branch everyone installs
+    from, and a branch under `herdr/` is Shyam's. Such a send is
+    refused with one line in the log, and the work starts a fresh
+    thread in a worktree of its own.
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -508,12 +545,15 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if thread.get("status") in {"completed", "interrupted", "failed"}:
             sendable = False
             reroute = "model is not first available"
-    if sendable and worktree_only and root_workspace(thread):
-        # Pull request work in a shared checkout of the repository moves
-        # the branch everyone installs from, so it starts a fresh
-        # worktree instead of the thread that works there.
+    barred = barred_workspace(thread)
+    refused = ""
+    if sendable and barred:
+        # The work starts a fresh worktree instead of the thread that
+        # works there. The refusal is one line in the log.
         sendable = False
-        reroute = "root workspace"
+        reroute = barred
+        refused = barred
+        print(f"SEND REFUSED {thread_id}: {barred}")
     if sendable:
         workspace = None
         args = {"threadId": thread_id, "message": message}
@@ -522,14 +562,17 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute == "model is not first available" and not root_workspace(thread):
+        if reroute == "model is not first available" and not barred:
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
-                return f"skip {lkey}: no verified PR branch for relaunch"
-            if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
-                return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
-            workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
+                # No pull request names a branch, so the work starts at
+                # the default branch. The work is not dropped.
+                workspace = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
+            else:
+                if not branch_on_origin(repo, pr["headRefName"]):
+                    return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
+                workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
@@ -550,7 +593,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     out = receipt.splitlines()[-1]
     ledger[lkey] = out
     if not sendable:
-        print(f"SEND REROUTE {thread_id}: {out}")
+        if not refused:
+            print(f"SEND REROUTE {thread_id}: {out}")
         return f"fresh ({thread_id} {reroute}): {out}"
     return out
 
@@ -579,7 +623,7 @@ def park(repo, number, issue, head, reply, ledger):
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Open every new ticket with `ticket open --repo {repo} --title \"<title>\" --body-file <file> --label stage:todo,type:<type>,priority:<n>`; the tool mints the key, so never type the key yourself and never use `gh issue create`. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "taskType": "design", "modelSelection": recutter["selection"],
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "900"]).splitlines()[-1]
     ledger[lkey] = out
     return f"#{number}: parked, re-cut {out}"
@@ -774,7 +818,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -1007,7 +1051,7 @@ def unstick(repo, ledger, excl=frozenset()):
         return "unstick waits, every builder is blocked"
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]
     stamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
     for n in batch:
@@ -1536,6 +1580,7 @@ def recover_dead_runs(ledger):
                 moved = issue.get("state") == "CLOSED"
             unknown_open_pr = False
             protected_pr = False
+            pr_branch = ""
             for pr in thread.get("pullRequests") or []:
                 if pr.get("repository") != repo or not pr.get("number"):
                     continue
@@ -1555,6 +1600,8 @@ def recover_dead_runs(ledger):
                     moved = True
                 if current_pr.get("state") == "OPEN" and not recorded_head:
                     unknown_open_pr = True
+                if current_pr.get("state") == "OPEN" and current_pr.get("headRefName"):
+                    pr_branch = current_pr["headRefName"]
             if protected_pr:
                 continue
             attempt = re.search(r":a(\d+)$", receipt_key)
@@ -1607,13 +1654,27 @@ def recover_dead_runs(ledger):
             if unknown_open_pr:
                 print(f"DEAD {thread_id}: coordinator needed, open PR head cannot be compared")
                 continue
-            worktrees = run(["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo],
-                             "worktree", "list", "--porcelain"])
-            if not any(line == f"worktree {path}" for line in worktrees.splitlines()):
-                print(f"DEAD {thread_id}: coordinator needed, worktree is unavailable")
-                continue
+            reason = barred_workspace(full_thread)
+            if reason:
+                # The worktree may not take work: the shared root of a
+                # repository moves the branch everyone installs from, and
+                # a branch under `herdr/` is Shyam's. The work starts
+                # again in a worktree of the pull request's branch.
+                if not pr_branch or not branch_on_origin(repo, pr_branch):
+                    print(f"DEAD {thread_id}: coordinator needed, {reason} may not take work")
+                    continue
+                workspace = {"type": "worktree", "baseRef": "origin/" + pr_branch, "startFromOrigin": True}
+                where = "a fresh worktree of the pull request branch"
+            else:
+                worktrees = run(["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo],
+                                 "worktree", "list", "--porcelain"])
+                if not any(line == f"worktree {path}" for line in worktrees.splitlines()):
+                    print(f"DEAD {thread_id}: coordinator needed, worktree is unavailable")
+                    continue
+                workspace = {"type": "existing_worktree", "worktreePath": path}
+                where = "this existing worktree"
             ticket_url = f"https://github.com/{repo}/issues/{ticket}"
-            message = (f"Continue {repo}#{ticket} ({ticket_url}) in this existing worktree. The prior thread {thread_id} stopped. "
+            message = (f"Continue {repo}#{ticket} ({ticket_url}) in {where}. The prior thread {thread_id} stopped. "
                        "Read the ticket and current diff, preserve completed work, finish the acceptance checks, and report the exact remaining blocker. "
                        "Do not create a new ticket or move the work to another checkout.")
             next_attempt = max((int(match.group(1)) for key in receipts
@@ -1621,7 +1682,7 @@ def recover_dead_runs(ledger):
                                 and (match := re.search(r":a(\d+)$", key))), default=0) + 1
             args = {"projectId": project_id, "clientRequestId": f"{work_key}:a{next_attempt}",
                     "title": f"Continue {repo}#{ticket}: {title}", "taskType": "worker", "modelSelection": model,
-                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "existing_worktree", "worktreePath": path}, "message": message}
+                    "runtimeMode": "full-access", "workspaceStrategy": workspace, "message": message}
             print(f"DEAD {thread_id}: relaunch {model['model']}")
             if not DRY:
                 result = run([COORDQ, "start", json.dumps(args), "--priority", "800"]).strip()

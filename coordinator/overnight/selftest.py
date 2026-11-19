@@ -264,6 +264,7 @@ def dead_run_recovery():
          patch.object(lane, "DRY", False), patch.object(lane, "t3", side_effect=t3), \
          patch.object(lane, "last_reply", return_value="provider individual spend limit"), \
          patch.object(lane, "stall_receipts", return_value={f"ticket:{repo}#7:a1": "fixture-dead"}), \
+         patch.object(lane, "barred_workspace", return_value=None), \
          patch.object(lane, "read_json", return_value={"state": "OPEN"}), patch.object(lane, "run", side_effect=run):
         ledger = {}
         lane.recover_dead_runs(ledger)
@@ -385,6 +386,8 @@ def gate_pipeline():
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
         def command(cmd, timeout=150):
+            if cmd[0] == "git" and "ls-remote" in cmd:
+                return "abc123\trefs/heads/builder/fixture"
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == [lane.COORDQ, "list"]:
@@ -437,6 +440,7 @@ def gate_pipeline():
                  scratch_board(scratch), \
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                 patch.object(lane, "barred_workspace", return_value=None), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
@@ -568,6 +572,7 @@ def no_parking(status="interrupted"):
     with tempfile.TemporaryDirectory() as scratch, \
          scratch_board(scratch), \
          patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+         patch.object(lane, "barred_workspace", return_value=None), \
          patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
@@ -1544,6 +1549,7 @@ def gate_round_cap():
             snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                 patch.object(lane, "barred_workspace", return_value=None), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "gate_verdict", return_value=verdict), \
                  patch.object(lane, "read_json", return_value=dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
@@ -1663,6 +1669,8 @@ def send_integrity():
                 reads.append("read")
                 return {"thread": {**fixer_identity(), **thread}}
             def command(cmd, timeout=150):
+                if cmd[0] == "git":
+                    return "abc123\trefs/heads/builder/fixture"
                 exact(reads, ["read"])
                 exact(cmd[:2], [lane.COORDQ, "start"])
                 payload = json.loads(cmd[2])
@@ -1681,6 +1689,7 @@ def send_integrity():
             with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
                  patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
                  patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "barred_workspace", return_value=None), \
                  patch.object(lane, "run", command), contextlib.redirect_stdout(output):
                 try:
                     result = lane.send("old", "brief", "fix", ledger, key, repo=repo, pr_number=385)
@@ -1694,6 +1703,7 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
+         patch.object(lane, "barred_workspace", return_value=None), \
          patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": "running"}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
@@ -1720,12 +1730,13 @@ def send_integrity():
              patch.object(lane, "t3", return_value={"thread": {"status": "deleted"}}), \
              patch.object(lane, "run", command):
             result = lane.unstick(repo, ledger)
-        exact(actions, [])
-        exact(f"cont:old" in ledger, True)
+        exact(actions, ["fresh"])
         if failure:
+            exact("cont:old" in ledger, False)
             exact("started" in result, False)
         else:
-            exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
+            exact(f"cont:old" in ledger, True)
+            exact(result, "continue #385: fresh (old unreachable): receipt")
 
 
 def root_workspace():
@@ -1752,7 +1763,7 @@ def root_workspace():
                       "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
 
     def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
-                worktree_only=True):
+                branch="refs/heads/builder/fixture"):
         actions = []
         def read(tool, args):
             return {"thread": {**fixer_identity(), **thread}}
@@ -1760,6 +1771,8 @@ def root_workspace():
             if cmd[0] == "git":
                 if "rev-parse" in cmd:
                     return git
+                if "symbolic-ref" in cmd:
+                    return branch
                 exact(cmd[1:4], ["-C", root, "ls-remote"])
                 exact(cmd[4:], ["--heads", "origin", "builder/fixture"])
                 return listing
@@ -1776,8 +1789,7 @@ def root_workspace():
              patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
              patch.object(lane, "read_json", return_value=pull), \
              patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
-            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
-                               worktree_only=worktree_only)
+            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512)
         return result, actions
 
     # A thread without a worktree works in the shared root.
@@ -1802,12 +1814,17 @@ def root_workspace():
     result, actions = send_to({"status": "running", "worktreePath": worktree})
     exact(result, "receipt")
     exact(actions, ["send"])
-    # The other lane paths keep their own routing: a thread in a shared
-    # checkout still takes their work.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
-                               worktree_only=False)
-    exact(result, "receipt")
-    exact(actions, ["send"])
+    # The rule holds on every path of the lane, not only on the check
+    # path: a thread in a shared checkout takes no work either.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # A thread whose worktree is on a herdr branch takes no work either:
+    # a herdr branch is Shyam's to merge.
+    result, actions = send_to({"status": "running", "worktreePath": worktree},
+                               branch="refs/heads/herdr/gh-trim")
+    exact(result, "fresh (old herdr branch herdr/gh-trim): receipt")
+    exact(actions, ["fresh"])
     # A branch that is not on origin has no safe worktree, so no work is
     # dispatched at all.
     result, actions = send_to({"status": "running"}, listing="")
