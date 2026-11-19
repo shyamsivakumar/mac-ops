@@ -1244,17 +1244,20 @@ def _board_restart_tick():
     return board_restart.tick()
 
 
-def controller_tick(*, board_control=True, cfg=None):
-    _ensure_state_dir(create=True)
-    helper = _heavy_module()
-    entry = {"schema": 1, "mode": "controller", "board_control": bool(board_control),
-             "runtime": str(SCRIPT_DIR)}
+def _reap_dead_jobs(helper, entry):
     try:
         reaped = helper.reap_dead_jobs()
         if reaped:
             entry["dead_jobs_reaped"] = reaped
     except Exception as exc:
         entry["reap_error"] = type(exc).__name__ + ": " + (str(exc).splitlines() or [""])[0][:180]
+
+
+def controller_tick(*, board_control=True, cfg=None):
+    _ensure_state_dir(create=True)
+    helper = _heavy_module()
+    entry = {"schema": 1, "mode": "controller", "board_control": bool(board_control),
+             "runtime": str(SCRIPT_DIR)}
     boot_id = None
     sample = None
     census = None
@@ -1267,6 +1270,7 @@ def controller_tick(*, board_control=True, cfg=None):
             raise ValueError("Kernel boot identity is invalid")
         sample = _smoothed_cpu_sample(helper, helper.sample_with_emergency())
         compressor = board_resources.compressor_snapshot()
+        _reap_dead_jobs(helper, entry)
         census = board_resources.active_heavy_census()
         entry["active_count"] = census["active"]
         entry["census"] = census
