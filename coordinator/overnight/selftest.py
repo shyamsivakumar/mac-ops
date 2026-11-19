@@ -1741,6 +1741,9 @@ def gate_round_cap():
         # The line must sit right before the final VERDICT line.
         at_cap(33, f"{lane.OPEN_FINDINGS_NONE}\nfinding\nVERDICT: FAIL")
         exact(merged, [(30, heads[2])])
+        at_cap(37, f"finding\n{lane.OPEN_FINDINGS_NONE}  \n\nVERDICT: FAIL")
+        exact(merged[-1], (37, heads[2]))
+        merged.pop()
         # (d) round 1 FAIL with the none line is a normal fix round.
         sent.clear()
         with patch.object(lane, "merge_on_reviewed_base", merge):

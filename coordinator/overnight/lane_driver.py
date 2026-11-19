@@ -659,9 +659,9 @@ OPEN_FINDINGS_INSTRUCTION = (
 
 
 def no_open_findings(reply):
-    """True when the report's line before the final VERDICT line says no critical or major finding is open."""
-    lines = reply.splitlines()
-    return len(lines) >= 2 and lines[-2].strip() == OPEN_FINDINGS_NONE
+    """True when the last non-blank line before the final VERDICT line says no critical or major finding is open."""
+    lines = [line.strip() for line in reply.splitlines() if line.strip()]
+    return len(lines) >= 2 and lines[-1].startswith("VERDICT:") and lines[-2] == OPEN_FINDINGS_NONE
 
 
 def gate_round_item(repo, number, head):
