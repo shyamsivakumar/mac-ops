@@ -68,11 +68,15 @@ def validate(data):
     return data
 
 
+def reject_constant(token):
+    raise ValueError(f"{token} is not a JSON value")
+
+
 def read_json(file_path):
     """The parsed file. A missing file raises FileNotFoundError; any other failure to read it is a ModelsError."""
     try:
         with open(file_path) as f:
-            return json.load(f)
+            return json.load(f, parse_constant=reject_constant)
     except FileNotFoundError:
         raise
     except OSError as e:

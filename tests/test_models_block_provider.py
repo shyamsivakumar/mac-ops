@@ -58,7 +58,7 @@ class BlockProviderTest(unittest.TestCase):
         self.assertEqual([p.name for p in self.dir.glob(".*")], [])
 
     def test_corrupt_file_is_refused_and_left_alone(self):
-        for raw in ("{not json", '{"blocked": []}'):
+        for raw in ("{not json", '{"blocked": []}', '{"blocked": {"old:m": {"expires_at": 5, "reason": NaN}}}'):
             self.file.write_text(raw)
             log = StringIO()
             with redirect_stderr(log), self.assertRaises(models.ModelsError):
