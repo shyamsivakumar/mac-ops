@@ -10,8 +10,8 @@
         "download_dir": null,
         "source": null
     },
-    "trial_name": "example__NHRQnK8",
-    "trials_dir": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/logs/pi-run/2026-11-18__18-41-44",
+    "trial_name": "example__PcBT4HU",
+    "trials_dir": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/logs/oracle-run/2026-11-18__18-49-03",
     "install_only": false,
     "timeout_multiplier": 1.0,
     "agent_timeout_multiplier": null,
@@ -19,12 +19,12 @@
     "agent_setup_timeout_multiplier": null,
     "environment_build_timeout_multiplier": null,
     "agent": {
-        "name": "pi",
+        "name": "oracle",
         "import_path": null,
-        "model_name": "MiniMax-M3.1-Flash",
-        "base_url": "https://api.minimax.io/anthropic",
-        "model_api_key_name": "MINIMAX_API_KEY",
-        "model_api_format": "anthropic_messages",
+        "model_name": null,
+        "base_url": null,
+        "model_api_key_name": null,
+        "model_api_format": null,
         "skip_model_parsing": false,
         "n_concurrent": null,
         "concurrency_group": null,
@@ -66,6 +66,6 @@
     "artifacts": [],
     "extra_instruction_paths": [],
     "extra_instructions": [],
-    "job_id": "946c9a34-9449-4548-a14a-1c8bdb2debdc",
+    "job_id": "8a3dae2c-5aab-4039-81a8-370259204197",
     "source_trial": null
 }

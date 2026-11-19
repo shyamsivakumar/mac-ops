@@ -1,14 +1,14 @@
 {
     "schema_version": 1,
-    "id": "97b2021a-6287-423e-97c8-55db94ff3e97",
+    "id": "0377cd0c-6554-4bb4-9b28-6ee890310d4f",
     "task_name": "mac-ops/example",
-    "trial_name": "example__NHRQnK8",
-    "trial_uri": "file:///Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/logs/pi-run/2026-11-18__18-41-44/example__NHRQnK8",
+    "trial_name": "example__PcBT4HU",
+    "trial_uri": "file:///Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/logs/oracle-run/2026-11-18__18-49-03/example__PcBT4HU",
     "task_id": {
         "path": "evals/harbor/tasks/example"
     },
     "source": null,
-    "task_checksum": "cbe616af0dedf87d8c5e052582a22ec8cf6c5fb3c7482d66a93e1f2bae957a99",
+    "task_checksum": "95eb528654c39c74606ebb643fd4b46e0ef5d3f9c6c8480b4d71b7851b8269a7",
     "config": {
         "schema_version": 1,
         "task": {
@@ -21,8 +21,8 @@
             "download_dir": null,
             "source": null
         },
-        "trial_name": "example__NHRQnK8",
-        "trials_dir": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/logs/pi-run/2026-11-18__18-41-44",
+        "trial_name": "example__PcBT4HU",
+        "trials_dir": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-67e97431-4202727db21da554/evals/harbor/logs/oracle-run/2026-11-18__18-49-03",
         "install_only": false,
         "timeout_multiplier": 1.0,
         "agent_timeout_multiplier": null,
@@ -30,12 +30,12 @@
         "agent_setup_timeout_multiplier": null,
         "environment_build_timeout_multiplier": null,
         "agent": {
-            "name": "pi",
+            "name": "oracle",
             "import_path": null,
-            "model_name": "MiniMax-M3.1-Flash",
-            "base_url": "https://api.minimax.io/anthropic",
-            "model_api_key_name": "MINIMAX_API_KEY",
-            "model_api_format": "anthropic_messages",
+            "model_name": null,
+            "base_url": null,
+            "model_api_key_name": null,
+            "model_api_format": null,
             "skip_model_parsing": false,
             "n_concurrent": null,
             "concurrency_group": null,
@@ -77,30 +77,20 @@
         "artifacts": [],
         "extra_instruction_paths": [],
         "extra_instructions": [],
-        "job_id": "946c9a34-9449-4548-a14a-1c8bdb2debdc",
+        "job_id": "8a3dae2c-5aab-4039-81a8-370259204197",
         "source_trial": null
     },
     "agent_info": {
-        "name": "pi",
-        "version": "1.5.2",
-        "model_info": {
-            "name": "MiniMax-M3.1-Flash",
-            "provider": null
-        }
+        "name": "oracle",
+        "version": "1.0.0",
+        "model_info": null
     },
     "agent_result": {
-        "n_input_tokens": 3423,
-        "n_cache_tokens": 1280,
-        "n_output_tokens": 134,
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
         "cost_usd": null,
-        "model_usage": {
-            "harbor-endpoint/MiniMax-M3.1-Flash": {
-                "n_input_tokens": 3423,
-                "n_cache_tokens": 1280,
-                "n_output_tokens": 134,
-                "cost_usd": null
-            }
-        },
+        "model_usage": null,
         "rollout_details": null,
         "metadata": null
     },
@@ -111,23 +101,23 @@
     },
     "verifier_environment_mode": "shared",
     "exception_info": null,
-    "started_at": "2026-11-19T02:41:47.336075Z",
-    "finished_at": "2026-11-19T02:42:21.165655Z",
+    "started_at": "2026-11-19T02:49:04.609821Z",
+    "finished_at": "2026-11-19T02:49:10.241419Z",
     "environment_setup": {
-        "started_at": "2026-11-19T02:41:47.366626Z",
-        "finished_at": "2026-11-19T02:41:50.759195Z"
+        "started_at": "2026-11-19T02:49:04.641497Z",
+        "finished_at": "2026-11-19T02:49:07.534559Z"
     },
     "agent_setup": {
-        "started_at": "2026-11-19T02:41:50.759274Z",
-        "finished_at": "2026-11-19T02:42:10.566276Z"
+        "started_at": "2026-11-19T02:49:07.534634Z",
+        "finished_at": "2026-11-19T02:49:07.534694Z"
     },
     "agent_execution": {
-        "started_at": "2026-11-19T02:42:10.566721Z",
-        "finished_at": "2026-11-19T02:42:17.697578Z"
+        "started_at": "2026-11-19T02:49:07.534798Z",
+        "finished_at": "2026-11-19T02:49:07.870761Z"
     },
     "verifier": {
-        "started_at": "2026-11-19T02:42:18.076709Z",
-        "finished_at": "2026-11-19T02:42:18.613089Z"
+        "started_at": "2026-11-19T02:49:08.186164Z",
+        "finished_at": "2026-11-19T02:49:08.638473Z"
     },
     "step_results": null,
     "reward_valid": true

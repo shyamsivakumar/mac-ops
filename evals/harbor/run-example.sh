@@ -19,6 +19,13 @@ if ! command -v harbor >/dev/null 2>&1; then
   "$ROOT/evals/harbor/install.sh"
 fi
 
+installed_version=$(harbor --version 2>/dev/null | tr -d '[:space:]')
+if [ "$installed_version" != "$HARBOR_VERSION" ]; then
+  echo "run-example.sh: harbor $installed_version is installed; this harness pins $HARBOR_VERSION." >&2
+  echo "run-example.sh: run evals/harbor/install.sh to install the pinned release." >&2
+  exit 1
+fi
+
 if [ "$(python3 -c 'import os,sys;sys.stdout.write("yes" if os.environ.get(sys.argv[1]) else "")' "$API_KEY_NAME")" != "yes" ]; then
   echo "run-example.sh: $API_KEY_NAME is not set in the environment." >&2
   echo "run-example.sh: set it to the model API key, then run this script again." >&2

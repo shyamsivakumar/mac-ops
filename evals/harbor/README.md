@@ -79,10 +79,10 @@ transcript, the trajectory and the reward file.
 
 | Run | Agent | Result |
 | --- | --- | --- |
-| `logs/oracle-run/2026-11-18__18-41-03` | oracle | reward 1.0, 10s |
-| `logs/pi-run/2026-11-18__18-41-44` | pi, MiniMax-M3.1-Flash | reward 1.0, 33s |
+| `logs/oracle-run/2026-11-18__18-49-03` | oracle | reward 1.0, 5s |
+| `logs/pi-run/2026-11-18__18-49-19` | pi, MiniMax-M3.1-Flash | reward 1.0, 32s |
 
-The pi run used 3423 input tokens, 1280 cache tokens and 134 output tokens.
+The pi run used 3344 input tokens, 1792 cache tokens and 56 output tokens.
 `cost_usd` is `null` in the result file: Harbor prices the providers it knows,
 and a custom endpoint has no price row. A run against a priced provider fills
 the field, which is what steps 4 and 5 need for the cost column.
