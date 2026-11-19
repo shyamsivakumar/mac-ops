@@ -531,7 +531,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             sendable = False
             reroute = "model is not first available"
     barred = barred_workspace(thread)
-    if sendable and barred:
+    if barred and (sendable or reroute == "model is not first available"):
         sendable, reroute = False, barred
         print(f"SEND REFUSED {thread_id}: {barred}")
     if sendable:

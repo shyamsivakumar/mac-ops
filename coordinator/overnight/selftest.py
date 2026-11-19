@@ -1833,6 +1833,7 @@ def root_workspace():
     fresh({"status": "running", "worktreePath": worktree}, "root workspace", git="")
     fresh({"status": "running", "worktreePath": worktree}, "herdr branch herdr/gh-trim", branch="refs/heads/herdr/gh-trim")
     fresh({"status": "running", "worktreePath": worktree}, "branch unreadable", branch="")
+    fresh({"status": "completed", "model": "other-model", "worktreePath": worktree}, "herdr branch herdr/gh-trim", branch="refs/heads/herdr/gh-trim")
     exact(send_to({"status": "running", "worktreePath": worktree}), ("receipt", ["send"]))
     checked_out({"status": "running"}, listing="")
     checked_out({"status": "running"}, listing="c" * 40 + "\trefs/heads/builder/fixture")
