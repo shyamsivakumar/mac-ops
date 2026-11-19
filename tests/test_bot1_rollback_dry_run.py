@@ -60,6 +60,8 @@ class Bot1RollbackDryRunTests(unittest.TestCase):
             [success, deployment(3, 1, CURRENT), older],
             [success, deployment(1, "REMOVED", PREVIOUS, meta="unavailable")],
             [success, None],
+            [success, deployment(4, "REMOVED", PREVIOUS), older],
+            [deployment(4, "REMOVED", PREVIOUS), success, older],
         ):
             code, out, err = run_main(history)
             self.assertEqual((code, out, len(err.splitlines())), (1, "", 1))
