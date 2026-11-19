@@ -226,6 +226,33 @@ def queued_launch_args(tool, args):
     return args
 
 
+# The ref a worktree launch branches from when the caller names none. The lane
+# rule is that a builder branches from the fetched origin/main, never from a
+# local main, and coordq sees only a projectId at send time, so it cannot look
+# up a repository's default branch here.
+DEFAULT_BASE_REF = "origin/main"
+
+
+def worktree_base(tool, args):
+    """A worktree launch always names the ref it branches from.
+
+    T3 0.1.10 refuses a worktree launch with no baseRef, and a hand-built
+    payload that leaves it out is dropped after three attempts. The default is
+    filled here, where every dispatch passes, so an item already in the queue
+    gets it too. A caller's own baseRef and startFromOrigin are kept as given,
+    and a root or existing_worktree strategy is left alone."""
+    if tool != "t3_thread_launch":
+        return args
+    strategy = args.get("workspaceStrategy")
+    if not isinstance(strategy, dict) or strategy.get("type") != "worktree":
+        return args
+    if strategy.get("baseRef"):
+        return args
+    filled = {**strategy, "baseRef": DEFAULT_BASE_REF}
+    filled.setdefault("startFromOrigin", True)
+    return {**args, "workspaceStrategy": filled}
+
+
 def is_gate_model(selection):
     return model_list.find(selection, ("review",)) is not None
 
@@ -262,6 +289,7 @@ def call(tool, args, rules=None):
             if rules is None:
                 return 1, "agent rules were not loaded"
             args = with_rules(args, rules)
+    args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
