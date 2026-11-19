@@ -219,7 +219,7 @@ def drop_lock(handle):
         pass
 
 
-def board_update(target, alarm_id, action, item=None, attempts=5):
+def board_update(target, alarm_id, action, item=None, attempts=5, create=False):
     """Write one alarm onto the board, serialized or by compare-and-swap.
 
     The board lock is taken first, and the board is read, changed and
@@ -230,12 +230,13 @@ def board_update(target, alarm_id, action, item=None, attempts=5):
     A publication that cannot be made safe after a few tries says so.
 
     `action` is "raise" to put the item on the board and "remove" to take
-    it off. Return "wrote" or "failed"."""
+    it off. `create` makes a missing board under the lock, so two first
+    publishers cannot overwrite one another. Return "wrote" or "failed"."""
     path = Path(target)
     handle = take_lock(str(path) + ".lock")
     try:
         if handle is not None:
-            return "wrote" if write_alarm(path, alarm_id, action, item) else "failed"
+            return "wrote" if write_alarm(path, alarm_id, action, item, create) else "failed"
     finally:
         if handle is not None:
             drop_lock(handle)
@@ -275,14 +276,45 @@ def route_update(decisions, alarm_id, action, item=None):
     target = board_for(decisions, alarm_id)
     if target == Path(decisions):
         return board_update(decisions, alarm_id, action, item)
-    if action == "raise" and not target.exists():
-        write_board(target, {"items": []})
-    if board_update(target, alarm_id, action, item) != "wrote":
+    if board_update(target, alarm_id, action, item, create=action == "raise") != "wrote":
         return "failed"
-    _, stale = read_board(Path(decisions))
-    if stale and any(isinstance(e, dict) and e.get("id") == alarm_id for e in stale["items"]):
-        return board_update(decisions, alarm_id, "remove")
-    return "wrote"
+    return clear_stale(decisions, alarm_id)
+
+
+def clear_stale(decisions, alarm_id, attempts=5):
+    """Take an id off the decisions board when it is still there.
+
+    The board is replaced only when its bytes still match the read, under
+    the board lock, because the watchdog writes the same file without the
+    lock. A board that keeps changing returns "failed" for the next tick."""
+    path = Path(decisions)
+    handle = take_lock(str(path) + ".lock")
+    try:
+        for _ in range(attempts):
+            _, board = read_board(path)
+            if board is None or not any(
+                    isinstance(e, dict) and e.get("id") == alarm_id for e in board["items"]):
+                return "wrote"
+            result = swap_alarm(path, alarm_id, "remove", None)
+            if result != "retry":
+                return result
+        return "failed"
+    finally:
+        if handle is not None:
+            drop_lock(handle)
+
+
+def migrate_stale(decisions, alarm_id):
+    """Move an owner item still on the decisions board to the owner board.
+
+    The card is moved as it is, so a card Shyam answered is not raised
+    again. Return "wrote" or "failed"."""
+    _, board = read_board(Path(decisions))
+    held = [e for e in (board or {"items": []})["items"]
+            if isinstance(e, dict) and e.get("id") == alarm_id]
+    if not held or board_for(decisions, alarm_id) == Path(decisions):
+        return "wrote"
+    return route_update(decisions, alarm_id, "raise", held[0])
 
 
 def read_board(path):
@@ -315,9 +347,11 @@ def change_board(board, alarm_id, action, item):
     return board, changed
 
 
-def write_alarm(path, alarm_id, action, item):
+def write_alarm(path, alarm_id, action, item, create=False):
     """Read, change and replace the board under the caller's lock."""
     _, board = read_board(path)
+    if board is None and create and not path.exists():
+        board = {"items": []}
     if board is None:
         return False
     board, _ = change_board(board, alarm_id, action, item)

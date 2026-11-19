@@ -1260,6 +1260,10 @@ def zero_merge_fixture(scratch):
         target.update(json.loads(json.dumps(board)))
         return True
 
+    def swap_alarm(path, alarm_id, action, item):
+        state["items"] = [i for i in state["items"] if i.get("id") != alarm_id]
+        return "wrote"
+
     import alarms
     with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
          patch("builtins.open", side_effect=opened), patch.object(lane.json, "dump", side_effect=saved), \
@@ -1267,6 +1271,7 @@ def zero_merge_fixture(scratch):
          patch.object(lane, "DECISIONS_PATH", str(Path(mute).parent / "decisions.json")), \
          patch.object(alarms, "read_board", side_effect=read_board), \
          patch.object(alarms, "write_board", side_effect=write_board), \
+         patch.object(alarms, "swap_alarm", side_effect=swap_alarm), \
          patch.object(lane.os, "replace") as replace:
         for stamps, expected in [([], [other, alert]),
                 (["2026-11-15T10:59:59Z"], [other, alert]),

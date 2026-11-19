@@ -683,6 +683,8 @@ def gate_round_decision(repo, number, head, ledger):
     """
     lkey = f"rounds-decision:{repo}#{number}"
     if lkey in ledger:
+        if not DRY:
+            alarms.migrate_stale(DECISIONS_PATH, gate_round_item(repo, number, "")["id"])
         return f"#{number}: no fix round, the decisions item is on the board"
     item = gate_round_item(repo, number, head)
     if DRY:
