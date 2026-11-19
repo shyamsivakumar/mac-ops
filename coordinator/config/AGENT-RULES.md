@@ -12,6 +12,7 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - A tidy commit never changes behavior (Kent Beck, Tidy First?). A commit that only renames, moves or reorders code must leave what the program does exactly the same.
 - Never read, print or commit secrets or `.env` files.
 - Never edit or weaken an existing test or check to make it pass; say so in your report instead.
+- Before opening or updating a PR, run one review pass of your own diff with a different model (a reviewer sub-agent), against the ticket and the review bar's blast-radius and convergence rules; fix every critical and major it finds, then open the PR and list in the PR body what the self-review found and fixed.
 - Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
 - Builders and gates must not create follow-up issues. Put leftover work in the PR body under `Left for later`. Only the Coordinator or Sol may create issues for a re-cut, with at most two tickets per re-cut.
 - Open pull requests as READY, never as draft, unless the brief says draft.
