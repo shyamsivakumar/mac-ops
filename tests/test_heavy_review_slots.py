@@ -220,8 +220,6 @@ class ReviewSlotTests(unittest.TestCase):
     def test_watchdog_never_kills_after_a_failed_ownership_read(self):
         workload = {'pid': 5, 'task_key': 'k', 'uid': os.getuid(), 'boot_id': 'b'}
         now = 10_000_000_000_000
-        claim = {'reason': heavy.WALL_CLOCK_REASON, 'claimant_pid': os.getppid(),
-                 'requested_ns': now - 1_000_000_000}
         base = {
             'job_id': 'job', 'state': 'terminating', 'task_key': 'k',
             'uid': os.getuid(), 'created_ns': 1, 'supervisor': {'boot_id': 'b'},
