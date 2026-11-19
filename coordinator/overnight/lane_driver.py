@@ -49,9 +49,6 @@ SNAPSHOT = {}
 # of the repository: work there moves the branch everyone installs from.
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
          "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
-# The branches herdr owns. Work never goes to one of them: herdr merges
-# them, and a builder that pushes there moves the branch Shyam works on.
-PROTECTED_BRANCH = "herdr/"
 # The calls left in reserve before an optional read is skipped. The lane
 # driver, gatekeep and the overnight shift share this one floor.
 API_FLOOR = gh_gateway.floor()
@@ -99,14 +96,14 @@ def board_snapshot(ledger, force=False):
     current_pass = ledger.get("_pass", 0) + 1
     ledger["_pass"] = current_pass
     if isinstance(cached, dict) and any(
-        "headRefName" not in pr or "baseRefName" not in pr or "isCrossRepository" not in pr
+        "headRefName" not in pr or "baseRefName" not in pr
         for data in cached.get("repos", {}).values() for pr in data.get("prs", [])
     ):
         force = True
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,body,mergeable,isDraft,statusCheckRollup"
+    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup"
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
@@ -414,7 +411,7 @@ def start(args, prio, ledger, lkey):
 
 def pr_action_skip(repo, number):
     pr = read_json(["gh", "pr", "view", str(number), "-R", repo,
-                    "--json", "number,state,headRefName,baseRefName,isCrossRepository,headRefOid"])
+                    "--json", "number,state,headRefName,baseRefName,headRefOid"])
     branches = [pr.get(field) for field in ("headRefName", "baseRefName")]
     if any(not isinstance(branch, str) or not branch for branch in branches):
         return pr, f"skip #{number}: missing PR branch names"
@@ -456,102 +453,52 @@ def root_workspace(thread):
     return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
 
 
-def workspace_branch(path):
-    """Return the branch a workspace is on, or none when it cannot be read."""
-    try:
-        ref = run(["git", "-C", path, "symbolic-ref", "--quiet", "HEAD"], timeout=60)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return None
-    ref = ref.strip()
-    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None
-
-
 def barred_workspace(thread):
-    """Return why a thread's workspace may not take work, or none when it may.
-
-    The shared root of a repository is refused: work there moves the
-    branch everyone installs from. A branch under `herdr/` is Shyam's, so
-    no work goes there. A workspace whose branch cannot be read is
-    refused as well.
-    """
-    path = thread.get("worktreePath")
     if root_workspace(thread):
         return "root workspace"
-    branch = workspace_branch(path)
-    if branch is None:
+    try:
+        ref = run(["git", "-C", thread.get("worktreePath"), "symbolic-ref", "--quiet", "HEAD"], timeout=60).strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        ref = ""
+    if not ref.startswith("refs/heads/"):
         return "branch unreadable"
-    if branch.startswith(PROTECTED_BRANCH):
-        return f"herdr branch {branch}"
-    return None
+    branch = ref[len("refs/heads/"):]
+    return f"herdr branch {branch}" if branch.startswith("herdr/") else None
 
 
 def pull_base(repo, pr, reviewer=False):
-    """Return the ref a worktree of pull request work starts at, and the note that goes with it.
-
-    The branch of the pull request when the pull request is not from a
-    fork and the branch on origin is at the head commit of the pull
-    request. A branch name alone proves nothing: a fork can use the name
-    of a branch that origin has too. Every other pull request has its
-    head only as `refs/pull/<number>/head` on the base repository: the
-    work starts at the default branch and the note says how to get the
-    code and how to check that it is the head commit.
-
-    A reviewer gets the note without the checkout: the review brief says
-    to check out nothing, and the head commit is enough to inspect.
-    """
     if not pr:
         return "origin/main", ""
-    branch = pr.get("headRefName") or ""
-    number = pr.get("number")
-    head = pr.get("headRefOid")
-    if branch and head and pr.get("isCrossRepository") is False and branch_on_origin(repo, branch) == head:
+    branch, number, head = pr["headRefName"], pr["number"], pr["headRefOid"]
+    if branch_on_origin(repo, branch) == head:
         return "origin/" + branch, ""
-    if branch and number:
-        head = pr["headRefOid"]
-        where = ("is on a fork and is not on origin" if pr.get("isCrossRepository") is not False
-                 else "is not at its head commit on origin")
-        return "origin/main", (f"\n\nThe branch {branch} of pull request #{number} {where}. Fetch its code "
-                               f"with `git fetch origin refs/pull/{number}/head`, then check that "
-                               f"`git rev-parse FETCH_HEAD` prints {head}. If it prints another commit, stop "
-                               "and report that, and change nothing. "
-                               + ("The head commit is enough: inspect it where it is and check out nothing."
-                                  if reviewer else
-                                  "Only when it matches, check it out with `git checkout FETCH_HEAD` before you "
-                                  "change anything."))
-    return "origin/main", ""
+    last = ("inspect that commit where it is and check out nothing." if reviewer
+            else "check it out with `git checkout FETCH_HEAD` before you change anything.")
+    return "origin/main", (f"\n\nThe branch {branch} of pull request #{number} is not on origin at its head commit. "
+                           f"Fetch the head with `git fetch origin refs/pull/{number}/head`, then check that "
+                           f"`git rev-parse FETCH_HEAD` prints {head}. If it prints another commit, stop, report "
+                           f"that, and change nothing. Otherwise {last}")
 
 
 def branch_on_origin(repo, branch):
-    """Return the commit a branch is at on origin, or none when it cannot be read.
+    """Return the commit a branch is at on origin, or none, so a worktree can start there.
 
     A worktree that cannot start at its base ref would fall back to the
     shared root of the repository, so a branch that is not on origin is
-    not a safe base for pull request work. The commit lets the caller
-    check that the branch holds the code of the pull request.
+    not a safe base for pull request work.
     """
     root = repo_root(repo)
     if not root or not os.path.isdir(root):
         return None
     try:
-        listing = run(["git", "-C", root, "ls-remote", "--heads", "origin", branch], timeout=60)
+        listing = run(["git", "-C", root, "ls-remote", "--heads", "origin", "refs/heads/" + branch], timeout=60)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return None
-    for line in listing.splitlines():
-        commit, _, ref = line.partition("\t")
-        if ref == "refs/heads/" + branch:
-            return commit
-    return None
+    return listing.split("\t")[0] or None
 
 
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
-    """Send work to a thread, or start a fresh one when it cannot take it.
-
-    A thread whose workspace may not take work never takes it: the
-    shared root of a repository moves the branch everyone installs
-    from, and a branch under `herdr/` is Shyam's. Such a send is
-    refused with one line in the log, and the work starts a fresh
-    thread in a worktree of its own.
-    """
+    """Send work to a thread, or start a fresh one when it cannot take it."""
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
     if pr_number is not None:
@@ -569,10 +516,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             attached_pr, skip = pr_action_skip(repo, attached["number"])
             if skip:
                 return skip
-            if pr is None:
-                # The thread's own pull request names the branch the work
-                # belongs to, so the replacement starts there.
-                pr = attached_pr
+            pr = pr or attached_pr
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
@@ -587,13 +531,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             sendable = False
             reroute = "model is not first available"
     barred = barred_workspace(thread)
-    refused = ""
     if sendable and barred:
-        # The work starts a fresh worktree instead of the thread that
-        # works there. The refusal is one line in the log.
-        sendable = False
-        reroute = barred
-        refused = barred
+        sendable, reroute = False, barred
         print(f"SEND REFUSED {thread_id}: {barred}")
     if sendable:
         workspace = None
@@ -606,9 +545,6 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if reroute == "model is not first available" and not barred:
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
-            # The work starts in a worktree of its own: at the branch of
-            # the pull request when that branch is on origin, at the
-            # default branch otherwise. The work is never dropped.
             base, note = pull_base(repo, pr)
             message += note
             workspace = {"type": "worktree", "baseRef": base, "startFromOrigin": True}
@@ -632,7 +568,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     out = receipt.splitlines()[-1]
     ledger[lkey] = out
     if not sendable:
-        if not refused:
+        if reroute != barred:
             print(f"SEND REROUTE {thread_id}: {out}")
         return f"fresh ({thread_id} {reroute}): {out}"
     return out
@@ -1626,7 +1562,7 @@ def recover_dead_runs(ledger):
             for pr in thread.get("pullRequests") or []:
                 if pr.get("repository") != repo or not pr.get("number"):
                     continue
-                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid,headRefName,baseRefName,isCrossRepository"])
+                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "number,state,headRefOid,headRefName,baseRefName"])
                 _, skip = pr_action_skip(repo, pr["number"])
                 if skip:
                     print(skip)
@@ -1643,7 +1579,7 @@ def recover_dead_runs(ledger):
                 if current_pr.get("state") == "OPEN" and not recorded_head:
                     unknown_open_pr = True
                 if current_pr.get("state") == "OPEN" and current_pr.get("headRefName"):
-                    open_pr = {**current_pr, "number": pr["number"]}
+                    open_pr = current_pr
             if protected_pr:
                 continue
             attempt = re.search(r":a(\d+)$", receipt_key)
@@ -1693,22 +1629,13 @@ def recover_dead_runs(ledger):
             if unknown_open_pr:
                 print(f"DEAD {thread_id}: coordinator needed, open PR head cannot be compared")
                 continue
-            reason = barred_workspace(full_thread)
-            known = False
-            if path:
-                worktrees = run(["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo],
-                                 "worktree", "list", "--porcelain"])
-                known = any(line == f"worktree {path}" for line in worktrees.splitlines())
-            if reason or not known:
-                # The worktree may not take work, or it is gone: the work
-                # starts again in a worktree of the pull request's branch.
-                base, note = pull_base(repo, open_pr)
-                workspace = {"type": "worktree", "baseRef": base, "startFromOrigin": True}
-                where = "a fresh worktree of the pull request branch"
+            worktrees = [] if barred_workspace(full_thread) else run(
+                ["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo], "worktree", "list", "--porcelain"]).splitlines()
+            if f"worktree {path}" in worktrees:
+                workspace, where, note = {"type": "existing_worktree", "worktreePath": path}, "this existing worktree", ""
             else:
-                note = ""
-                workspace = {"type": "existing_worktree", "worktreePath": path}
-                where = "this existing worktree"
+                base, note = pull_base(repo, open_pr)
+                workspace, where = {"type": "worktree", "baseRef": base, "startFromOrigin": True}, "a fresh worktree of the pull request branch"
             ticket_url = f"https://github.com/{repo}/issues/{ticket}"
             message = (f"Continue {repo}#{ticket} ({ticket_url}) in {where}. The prior thread {thread_id} stopped. "
                        "Read the ticket and current diff, preserve completed work, finish the acceptance checks, and report the exact remaining blocker. "
