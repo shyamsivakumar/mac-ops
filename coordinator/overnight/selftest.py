@@ -614,7 +614,7 @@ def merge_pass():
     full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
 
     def replay(repo, reply=full, brief="lane-merges", passes=1, merge_fails=False, checkout=True,
-               earlier=None, finished=True, ledger=None):
+               earlier=None, finished=True, ledger=None, live_base="main"):
         key = f"gate:{repo}#20:{head}"
         receipts = {key: "gate", "base:gate": "main", "brief:gate": brief} if brief else {}
         replies = {"gate": reply}
@@ -651,7 +651,7 @@ def merge_pass():
 
         def read(cmd):
             gh_calls.append(cmd)
-            return dict(number=20, state="OPEN", headRefName="builder/x", baseRefName="main", headRefOid=head,
+            return dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
                         body="Refs #10", changedFiles=1)
 
         def threads(tool, args):
@@ -688,7 +688,16 @@ def merge_pass():
     exact(items, [])
     actions, calls, _, _, _ = replay(repo, ledger=ledger)
     exact((actions, calls), ([], 0))
+    exact(replay(repo, live_base="other")[0], [])
     exact(replay(repo, brief="reviewer-merges")[:3], ([], 0, []))
+    seen = []
+    for allowed, expected in (({"shyamsivakumar/mac-ops"}, []), (None, ["shyamsivakumar/tunerise"])):
+        with patch.object(lane, "MERGE_REPOS", ["shyamsivakumar/tunerise"]), \
+             patch.object(lane, "merge_pass", lambda target, ledger: seen.append(target)):
+            lane.restrict_merge_repos(allowed)
+            lane.merge_passes({})
+        exact(seen, expected)
+        seen.clear()
     exact(replay(repo, brief=None)[:3], ([], 0, []))
     exact(replay(repo, finished=False)[:3], ([], 0, []))
     exact(replay(repo, reply="interrupted")[:3], ([], 0, []))
