@@ -420,15 +420,17 @@ class CoordqGateTest(unittest.TestCase):
                              prompt_paths.UNKNOWN)
 
     def test_the_open_pulls_read_is_never_served_from_the_cache(self):
-        seen = []
+        seen = {}
 
         def run(argv, **kwargs):
-            seen.append((argv[-1], kwargs.get("fresh")))
-            return subprocess.CompletedProcess(argv, 0, "me\n" if "user" in argv else "[[]]", "")
+            seen[argv[-1]] = kwargs.get("fresh")
+            return subprocess.CompletedProcess(argv, 0, "[[]]", "")
 
         with patch.object(self.coordq.gh_gateway, "run", run):
-            list(self.coordq.gate_candidates({"repos": {"o/r": {}}}))
-        self.assertIn(("repos/o/r/pulls?state=open&per_page=100", True), seen)
+            self.coordq.gh_json("repos/o/r/pulls?state=open&per_page=100")
+            self.coordq.gh_json("repos/o/r/issues/9/comments?per_page=100")
+        self.assertIs(seen["repos/o/r/pulls?state=open&per_page=100"], True)
+        self.assertIs(seen["repos/o/r/issues/9/comments?per_page=100"], False)
 
     def test_only_reads_of_full_shas_are_kept_for_long(self):
         import gh_gateway
@@ -553,7 +555,7 @@ class CoordqGateTest(unittest.TestCase):
         comment = {"user": {"login": "me"},
                    "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
 
-        def fake_gh(endpoint, **_kw):
+        def fake_gh(endpoint):
             if "/files" in endpoint:
                 return [{"filename": path} for path in changed]
             if endpoint.startswith(f"repos/{repo}/pulls"):
@@ -607,7 +609,7 @@ class CoordqGateTest(unittest.TestCase):
         comment = {"user": {"login": "me"},
                    "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
 
-        def fake_gh(endpoint, **_kw):
+        def fake_gh(endpoint):
             if "/files" in endpoint:
                 raise RuntimeError("transient GitHub error")
             if endpoint.startswith(f"repos/{repo}/pulls"):
