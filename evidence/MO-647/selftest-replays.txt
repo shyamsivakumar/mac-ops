@@ -5,6 +5,7 @@ PASS script-results
 PASS start-routing
 PASS dead-run-recovery
 PASS gate-pipeline
+PASS merged-restart
 PASS gate-round-cap
 PASS decisions-board-guard
 PASS no-parking
