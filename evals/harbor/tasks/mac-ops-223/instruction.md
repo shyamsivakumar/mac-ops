@@ -11,18 +11,24 @@ In: `ticket start <repo>#<n>` refuses, with a one-line reason naming the PR, whe
 Out: closing issues automatically, the dispatcher, coordq.
 
 ## Design fit
-Inside the existing start checks next to the blocker check. Stop and report if it needs a parallel path.
+Inside the existing start checks next to the blocker check.
 
 ## Stated behavior change
-`ticket start` refuses issues with an open or merged referencing PR. Update existing tests that encode the old behaviour only as far as needed and list every changed line. No new test files.
+`ticket start` refuses issues with an open or merged referencing PR. Update existing tests that encode the old behaviour only as far as needed and list every changed line.
 
 ## Acceptance and proof
-`ticket start shyamsivakumar/sams-llm-wiki#160 --dry-run` refuses naming open PR #195; `ticket start shyamsivakumar/mac-ops#219 --dry-run` refuses naming PR #220 (while open); a todo issue with no PR still passes `--dry-run`. Paste the three outputs.
+`ticket start shyamsivakumar/sams-llm-wiki#160 --dry-run` refuses naming open PR #195; `ticket start shyamsivakumar/mac-ops#219 --dry-run` refuses naming PR #220 (while open); a todo issue with no PR still passes `--dry-run`.
 
 ## Must not cause
 No change to labels, blockers or vendor checks. No writes in dry-run.
 
-## Data/secrets and stop conditions
-None. 5-minute target.
+## Interface
+
+The tests use these names and signatures, which the change must provide (names only, no behaviour implied):
+
+- `coordinator/bin/ticket`: `def references_issue(body, number, repo=None)`
+- `coordinator/bin/ticket`: `def referencing_pulls(repo, number)`
+- `coordinator/bin/ticket`: `def is_restart_comment(body)`
+- `coordinator/bin/ticket`: `def pull_guard_reasons(repo, issue)`
 
 The repository is at `/app`. Make the change there. Do not edit test files.

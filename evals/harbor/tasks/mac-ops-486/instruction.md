@@ -10,8 +10,6 @@ The coordinator tick (launchd job dev.coordinator.tick, runs every 30 minutes) w
 
 ## Acceptance and proof
 - The named cause with the log line.
-- A simulated hung GitHub call (for example pointing one call at a blackhole address) shows the tick finishing under 600 seconds and logging the skip (paste output).
-- `python3 scripts/mac_ops_fast_check.py` passes; `Builder check: PASS <full head sha>` on its own line in the PR body.
 
 ## Design fit
 Change the tick's existing call helper; no second helper.
@@ -22,10 +20,16 @@ In: bounded external calls in the tick. Out: the tick schedule and limit.
 ## Must not cause
 The tick skipping a whole cycle silently; touching coordinator/mods/.
 
-## Data/secrets and stop conditions
-No secrets. 20 minutes; commands under `timeout 300`; no new tickets.
-
 ## Context
 The tick job is dev.coordinator.tick (launchd, every 30 minutes, killed at 600 s). Recent clean ticks took 1 to 3 minutes (06:20, 06:51). The killed one started near 07:35 PT. GitHub API timeouts were seen from this Mac at the same time and cleared by 07:50.
+
+## Interface
+
+The tests use these names and signatures, which the change must provide (names only, no behaviour implied):
+
+- `coordinator/bin/coordq`: `constant T3MCP_TIMEOUT`
+- `coordinator/overnight/overnight`: `constant SKIP_LOG`
+- `coordinator/overnight/overnight`: `def run(argv: list[str], timeout: int, deadline: float, optional: bool=False)`
+- `coordinator/pi/bin/coord-tick`: `constant MODEL_CHECK_TIMEOUT`
 
 The repository is at `/app`. Make the change there. Do not edit test files.

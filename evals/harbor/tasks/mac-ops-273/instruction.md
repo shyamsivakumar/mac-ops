@@ -16,7 +16,7 @@ The T3 `t3_thread_list` tool caps `limit` at 100. `coordinator/bin/ticket` line 
 - `coordinator/bin/coordq` already uses `limit: 100` in its own `t3_thread_list` calls, so 100 is the established value in this repo.
 
 ## Scope and non-goals
-In: change that one call to `limit: 100`. If the live-thread lookup must see more than 100 threads, page it with the `cursor` the tool returns, but only if a test shows 100 is not enough; otherwise keep the single call at 100 and say so in the PR.
+In: change that one call to `limit: 100`.
 Out: no change to the other duplicate checks (queue item, `gatedHeads`, receipts), no change to `coordq`, no change to the title format, no new dependency.
 
 ## Design fit
@@ -26,14 +26,10 @@ Out: no change to the other duplicate checks (queue item, `gatedHeads`, receipts
 `ticket gate` stops refusing with an RPC error on a pull request that has no gate yet, and the duplicate checks still run in the same order.
 
 ## Acceptance and proof
-- Before and after on a real pull request that currently refuses: `ticket gate shyamsivakumar/fantasy-football-toolkit#442 --dry-run` prints the RPC error before the change and the normal dry-run plan after it. Paste both.
+- Before and after on a real pull request that currently refuses: `ticket gate shyamsivakumar/fantasy-football-toolkit#442 --dry-run` prints the RPC error before the change and the normal dry-run plan after it.
 - A test that stubs `t3_call` and asserts the pre-check never asks for more than the schema maximum, so the same mistake cannot come back.
-- `heavy python3 scripts/mac_ops_fast_check.py`.
 
 ## Must not cause
 No regression in the duplicate checks: an already-queued gate, a recorded head, or a receipt must still refuse with the same messages.
-
-## Data/secrets and stop conditions
-No secrets. Ten-minute cap. Stop and report if `limit: 100` is not enough to see the live threads, instead of inventing a second lookup.
 
 The repository is at `/app`. Make the change there. Do not edit test files.

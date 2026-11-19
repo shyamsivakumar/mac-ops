@@ -19,9 +19,21 @@ Replay of 2026-11-18 13:53 ET (TH-261118-02181/02182 CLOSE cards queued, no sell
 Orders; repeat pages for one trade.
 
 ## Design fit
-Smallest possible change in the existing owner module; HARD LIMIT about 200 changed lines including tests. If it cannot fit, stop and report what you would cut.
+Smallest possible change in the existing owner module; HARD LIMIT about 200 changed lines including tests.
 
-## Data/secrets and stop conditions
-Paper only; no secrets. 20 minutes.
+## Interface
+
+The tests use these names and signatures, which the change must provide (names only, no behaviour implied):
+
+- new file `scripts/srw1322_exit_watchdog.cjs`
+- `scripts/srw1322_exit_watchdog.cjs`: `function closeDecisions(cards, symbols)`
+- `scripts/srw1322_exit_watchdog.cjs`: `function traderDecisions(trades)`
+- `scripts/srw1322_exit_watchdog.cjs`: `function botDecisions(trades)`
+- `scripts/srw1322_exit_watchdog.cjs`: `function wakeDelayMs({ dueMs, nowMs, intervalMs, lastCheckMs })`
+- `scripts/srw1322_exit_watchdog.cjs`: `function createExitWatchdog({ readBroker, readDecisions, page, now = Date.now, graceMs = GRACE_MS, stateFile = null, log = ()`
+- `scripts/srw1322_exit_watchdog.cjs`: `function createAlpacaBrokerSource({ key, secret, base = ALPACA_PAPER_BASE, fetchImpl = fetch, now = Date.now })`
+- `scripts/srw1322_exit_watchdog.cjs`: `function renderExitMiss(miss)`
+- `scripts/srw659_alarm_service.cjs`: `function createExitWatchdogForService({ token, publisherId, channels, bots, alerter, trader = null, log = alarm641.line })`
+- `scripts/srw659_alarm_service.cjs`: `method readDecisions()`
 
 The repository is at `/app`. Make the change there. Do not edit test files.

@@ -21,23 +21,19 @@ Out of scope: which reviewer is chosen, the vendor split, the gate brief, the ma
 
 ## Design fit
 
-The change lives in `gatekeep_candidates` and its queue helper inside `coordinator/bin/coordq`, which already owns the dead-gate retry. The retry count belongs in the existing gate state that `gatedHeads` uses, not in a new file. Stop and report before coding if it cannot live there.
+The change lives in `gatekeep_candidates` and its queue helper inside `coordinator/bin/coordq`, which already owns the dead-gate retry. The retry count belongs in the existing gate state that `gatedHeads` uses, not in a new file.
 
 ## Acceptance and proof
 
 1. With a head recorded as retried twice without a verdict, `coordq gatekeep --dry-run` prints no `would queue gate:` line for that head and one line naming it as given up.
 2. A head that has never been retried still gets its first retry, and a head whose sha changes is retried again.
 3. An explicit `coordq gate <repo>#<n>` still queues a gate for a given-up head.
-4. Paste the dry-run output before and after in the PR body.
+4.
 
 ## Must not cause
 
 - A gate that died from a transient fault losing its retry.
 - Multiple gate launches for one head in a single run.
 - Changes to what the gate checks or which reviewer it uses.
-
-## Data/secrets and stop conditions
-
-No secrets, no network beyond `t3mcp` and `gh`. Stop and report if the fix would need a live install in this ticket.
 
 The repository is at `/app`. Make the change there. Do not edit test files.
