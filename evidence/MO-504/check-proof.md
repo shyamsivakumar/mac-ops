@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `7efc58823d2cfbd0852c7e868d9b62ac85796f57`
+Checked commit: `e9cd57022635c8cf9c2291c0eebba2322310dbd7`
 Working tree clean when the checks ran: yes
 Run result: passed
 
@@ -11,11 +11,9 @@ Run result: passed
 | overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
 | python syntax: session_traces/__main__.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' session_traces/__main__.py` | passed |  |
 | python syntax: session_traces/cost_report.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' session_traces/cost_report.py` | passed |  |
-| python syntax: tests/test_cost_report.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_cost_report.py` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 86 findings, all in the baseline |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-0o3autur -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-0o3autur/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-slnm9f69 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-slnm9f69/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
-| tests: tests.test_cost_report | `python3 -m unittest tests.test_cost_report` | passed |  |
 | tests: tests.test_session_traces | `python3 -m unittest tests.test_session_traces` | passed |  |
 | tests: tests.test_session_traces_fallback | `python3 -m unittest tests.test_session_traces_fallback` | passed |  |
 
