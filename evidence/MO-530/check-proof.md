@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `0552ef8a76f7bf0e27c8bcbb3b70fa5d9e159add`
+Checked commit: `2a4eaebb771f37c1791cb80e95c780e6002b0b62`
 Working tree clean when the checks ran: yes
 Run result: passed
 
@@ -15,7 +15,7 @@ Run result: passed
 | python syntax: tests/test_install_deny_rules.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_install_deny_rules.py` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 77 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-q7zav0v8 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-q7zav0v8/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-0fxcpuzn -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-0fxcpuzn/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_install_deny_rules | `python3 -m unittest tests.test_install_deny_rules` | passed |  |
 
