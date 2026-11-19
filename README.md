@@ -348,6 +348,15 @@ when `POSTHOG_API_KEY` is set (ask the coordinator before creating a key). See
 [docs/session-traces.md](docs/session-traces.md); daily command:
 `./scripts/session-traces/daily.sh`.
 
+## Agent cost per pull request (MO-504)
+
+A report-only measurement of what each pull request cost, priced from the usage
+records pi writes for every API turn, and what a refactor changed: the cost per
+pull request of a repository in the days before a refactor merged and the days
+after. It reads the session logs and writes a report; it changes no code and
+blocks no merge. Command: `python3 mo124 cost --day 2026-11-17`. See
+[docs/session-traces.md](docs/session-traces.md).
+
 ## Worktree cleaner (MO-125)
 
 The [worktree cleaner](docs/worktree-cleaner.md) checks GitHub, local Git state,

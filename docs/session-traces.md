@@ -55,6 +55,35 @@ Optional export: set `POSTHOG_API_KEY` (or `POSTHOG_API_KEY_FILE`), and
 optionally `POSTHOG_HOST` (default `https://us.i.posthog.com`). Export is a
 no-op without a key.
 
+## Agent cost per pull request (MO-504)
+
+A report-only measurement: what one pull request cost, and what a refactor
+changed. It reads the pi session logs and nothing else, so it changes no
+code, fails no check and blocks no merge.
+
+The cost of a turn is the usage record pi already writes for every API call:
+`usage.cost.total` per assistant message in the session log under
+`~/.pi/agent*/sessions`. The report adds up the turns of every session in a
+local day (America/Los_Angeles) and prices each pull request with them.
+
+A session is attributed to a pull request by the strongest name it carries:
+a review names the pull request it reviewed, a pull request number in the
+name is the pull request, a ticket key names the issue the pull request
+closes, and the branch names the pull request it was pushed from. A session
+no pull request explains is listed with its cost, so the per-pull-request
+costs and the unattributed sessions add up to the day's total. That sum is
+the acceptance: the report reconciles with the session totals.
+
+```sh
+python3 mo124 cost --day 2026-11-17              # report for one local day
+python3 mo124 cost --day 2026-11-17 --repo shyamsivakumar/mac-ops
+python3 mo124 cost --day 2026-11-17 --out evidence/agent-cost-504
+```
+
+The before and after rows compare the cost per pull request of the same
+repository in the days before a refactor merged and the days after it
+merged. A window with no session data says so instead of showing a zero.
+
 ## Daily job
 
 Plist: `scripts/session-traces/com.shyam.session-traces-daily.plist`

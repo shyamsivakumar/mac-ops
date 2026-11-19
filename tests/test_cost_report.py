@@ -1,0 +1,281 @@
+"""Unit tests for the agent cost report (no network, no real session).
+
+The fixture is a fake pi home: session logs written into a temporary
+directory, and a fake ``gh`` that answers with in-memory pull requests. Every
+string in the fixture is synthetic and no real secret is used anywhere.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from session_traces import cost_report
+from session_traces.cost_report import (
+    PrIndex,
+    SessionCost,
+    attribute,
+    build_report,
+    is_refactor,
+    read_session,
+    render_markdown,
+)
+
+REPO = "shyamsivakumar/mac-ops"
+
+PRS = [
+    {
+        "number": 487,
+        "title": "Write down how the board's calls are bounded",
+        "body": "Refs #482",
+        "headRefName": "t3/bounded-calls",
+        "state": "MERGED",
+        "mergedAt": "2026-11-17T18:14:00Z",
+        "createdAt": "2026-11-17T17:00:00Z",
+        "url": "https://github.com/shyamsivakumar/mac-ops/pull/487",
+    },
+    {
+        "number": 501,
+        "title": "Rename the lane driver module",
+        "body": "Refs #500",
+        "headRefName": "t3/rename-lane",
+        "state": "MERGED",
+        "mergedAt": "2026-11-16T18:00:00Z",
+        "createdAt": "2026-11-16T12:00:00Z",
+        "url": "https://github.com/shyamsivakumar/mac-ops/pull/501",
+    },
+]
+
+
+def _session_file(
+    root: Path,
+    *,
+    name: str,
+    stamp: str,
+    cwd: str,
+    cost: float,
+    model: str = "test-model-1",
+) -> Path:
+    directory = root / "agent" / "sessions" / "worktree"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{stamp}_session.jsonl"
+    lines = [
+        {
+            "type": "session",
+            "version": 3,
+            "id": "session",
+            "timestamp": stamp,
+            "cwd": cwd,
+        },
+        {"type": "session_info", "name": name, "timestamp": stamp},
+        {
+            "type": "message",
+            "timestamp": stamp,
+            "message": {
+                "role": "assistant",
+                "model": model,
+                "usage": {
+                    "input": 100,
+                    "output": 200,
+                    "cacheRead": 300,
+                    "totalTokens": 600,
+                    "cost": {
+                        "input": cost / 2,
+                        "output": cost / 2,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                        "total": cost,
+                        "totalFromProvider": False,
+                    },
+                },
+            },
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+class CostReportTests(unittest.TestCase):
+    def test_read_session_sums_usage_cost_and_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = _session_file(
+                root,
+                name="MO-482 review #487",
+                stamp="2026-11-17T18:00:00.000Z",
+                cwd="/tmp/worktree",
+                cost=1.25,
+            )
+            session = read_session(path, root)
+        self.assertIsNotNone(session)
+        self.assertEqual(session.name, "MO-482 review #487")
+        self.assertEqual(session.cwd, "/tmp/worktree")
+        self.assertAlmostEqual(session.cost_usd, 1.25)
+        self.assertEqual(session.input_tokens, 100)
+        self.assertEqual(session.output_tokens, 200)
+        self.assertEqual(session.cache_read_tokens, 300)
+        self.assertEqual(session.total_tokens, 600)
+        self.assertEqual(session.models, ["test-model-1"])
+
+    def test_read_session_skips_a_broken_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = _session_file(
+                root,
+                name="MO-482 review #487",
+                stamp="2026-11-17T18:00:00.000Z",
+                cwd="/tmp/worktree",
+                cost=0.5,
+            )
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("{not json\n")
+            session = read_session(path, root)
+        self.assertIsNotNone(session)
+        self.assertAlmostEqual(session.cost_usd, 0.5)
+
+    def test_review_name_picks_the_pull_request(self):
+        session = SessionCost(
+            session_id="s1",
+            path="/tmp/s1.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 review #487 1dfedc8",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = PRS
+        out = attribute(session, index, repo=REPO)
+        self.assertEqual(out.pr_number, 487)
+        self.assertEqual(out.kind, "review")
+        self.assertEqual(out.pr_key, f"{REPO}#487")
+
+    def test_ticket_name_picks_the_pull_request_that_closes_it(self):
+        session = SessionCost(
+            session_id="s2",
+            path="/tmp/s2.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-482 · Write down how the board's calls are bounded",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = PRS
+        out = attribute(session, index, repo=REPO)
+        self.assertEqual(out.pr_number, 487)
+        self.assertEqual(out.kind, "ticket")
+
+    def test_a_session_with_no_pull_request_is_unattributed(self):
+        session = SessionCost(
+            session_id="s3",
+            path="/tmp/s3.jsonl",
+            pi_home="/tmp",
+            cwd="/tmp",
+            name="MO-999 · nothing references this issue",
+        )
+        index = PrIndex()
+        index._by_repo[REPO] = PRS
+        out = attribute(session, index, repo=REPO)
+        self.assertIsNone(out.pr_number)
+        self.assertEqual(out.pr_key, "unattributed")
+        self.assertTrue(out.reason)
+
+    def test_report_totals_reconcile_with_the_session_totals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _session_file(
+                root,
+                name="MO-482 review #487",
+                stamp="2026-11-17T18:00:00.000Z",
+                cwd="/tmp/worktree",
+                cost=2.0,
+            )
+            _session_file(
+                root,
+                name="MO-999 · nothing references this issue",
+                stamp="2026-11-17T19:00:00.000Z",
+                cwd="/tmp/worktree",
+                cost=1.0,
+            )
+            original_prs = cost_report.gh_prs
+            original_repo = cost_report.repo_of
+            original_branch = cost_report.branch_of
+            cost_report.gh_prs = lambda repo: list(PRS)
+            cost_report.repo_of = lambda cwd: REPO
+            cost_report.branch_of = lambda cwd: None
+            try:
+                report = build_report(
+                    "2026-11-17",
+                    pi_root=root,
+                    before_days=2,
+                    after_days=1,
+                    repos=[REPO],
+                )
+            finally:
+                cost_report.gh_prs = original_prs
+                cost_report.repo_of = original_repo
+                cost_report.branch_of = original_branch
+        self.assertTrue(report["reconciled"])
+        self.assertAlmostEqual(report["total_cost_usd"], 3.0)
+        self.assertAlmostEqual(report["attributed_cost_usd"], 2.0)
+        self.assertAlmostEqual(report["unattributed_cost_usd"], 1.0)
+        self.assertAlmostEqual(
+            report["attributed_cost_usd"] + report["unattributed_cost_usd"],
+            report["total_cost_usd"],
+        )
+        self.assertEqual(report["pr_count"], 1)
+        self.assertAlmostEqual(report["cost_per_pr_usd"], 2.0)
+
+    def test_refactor_is_read_from_the_title(self):
+        self.assertTrue(is_refactor("Rename the lane driver module"))
+        self.assertFalse(is_refactor("Board: skip needs stays under a minute"))
+        self.assertFalse(is_refactor(None))
+
+    def test_markdown_names_the_totals(self):
+        report = {
+            "day": "2026-11-17",
+            "generated_at": "2026-11-18T00:00:00Z",
+            "measured_days": ["2026-11-16", "2026-11-17"],
+            "session_count": 2,
+            "total_cost_usd": 3.0,
+            "attributed_cost_usd": 2.0,
+            "unattributed_cost_usd": 1.0,
+            "reconciled": True,
+            "pr_count": 1,
+            "cost_per_pr_usd": 2.0,
+            "prs": [
+                {
+                    "pr": f"{REPO}#487",
+                    "repo": REPO,
+                    "number": 487,
+                    "title": "Write down how the board's calls are bounded",
+                    "state": "MERGED",
+                    "merged_at": "2026-11-17T18:14:00Z",
+                    "url": "https://example.invalid/487",
+                    "sessions": 1,
+                    "cost_usd": 2.0,
+                    "tokens": 600,
+                    "kinds": {"review": 1},
+                    "models": ["test-model-1"],
+                }
+            ],
+            "repos": [
+                {
+                    "repo": REPO,
+                    "prs": 1,
+                    "cost_usd": 2.0,
+                    "mean_cost_per_pr_usd": 2.0,
+                }
+            ],
+            "unattributed_sessions": [],
+            "refactor_comparison": [],
+        }
+        markdown = render_markdown(report)
+        self.assertIn("Agent cost per PR — 2026-11-17", markdown)
+        self.assertIn(f"{REPO}#487", markdown)
+        self.assertIn("Totals reconciled: **yes**", markdown)
+
+
+if __name__ == "__main__":
+    unittest.main()
