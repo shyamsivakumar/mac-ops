@@ -24,20 +24,24 @@ def covered(report):
 def judge(candidate, baseline, cfg):
     train, held = candidate["train"], candidate["heldout"]
     base_train, base_held = baseline["train"], baseline["heldout"]
-    if any(s["cost_status"] != "OK" for s in (train, base_train, held, base_held)):
-        return False, "cost UNVERIFIED on the compared tasks"
-    if None in (held["pass_rate"], base_held["pass_rate"]):
-        return False, "no held-out runs to compare"
-    if base_train["correct_per_dollar"] <= 0:
-        return False, "the baseline got nothing correct on the non-held-out tasks"
-    ratio = train["correct_per_dollar"] / base_train["correct_per_dollar"]
-    if ratio < cfg["min_cpd_ratio"] - EPSILON:
-        return False, f"correct per dollar is {ratio:.2f}x the baseline, need {cfg['min_cpd_ratio']}x"
+    if None in (train["pass_rate"], base_train["pass_rate"], held["pass_rate"], base_held["pass_rate"]):
+        return False, "no runs on one split to compare"
     if train["pass_rate"] < base_train["pass_rate"] - cfg["max_pass_drop"] - EPSILON:
         return False, "pass rate dropped on the non-held-out tasks"
     if held["pass_rate"] < base_held["pass_rate"] - cfg["max_pass_drop"] - EPSILON:
         return False, "pass rate dropped on the held-out tasks"
-    return True, f"wins clearly at {ratio:.2f}x correct per dollar"
+    gain = train["pass_rate"] - base_train["pass_rate"]
+    if gain >= cfg["min_pass_gain"] - EPSILON:
+        return True, f"wins on pass rate, up {gain:.2f} on the non-held-out tasks"
+    if candidate["quota_unit"] != baseline["quota_unit"]:
+        return False, f"quota not compared, units differ ({candidate['quota_unit']} vs {baseline['quota_unit']}); pass rate gain {gain:.2f} is under {cfg['min_pass_gain']}"
+    cand_q, base_q = train["quota_per_correct"], base_train["quota_per_correct"]
+    if cand_q is None or base_q is None:
+        return False, "quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks"
+    ratio = cand_q / base_q
+    if ratio > cfg["max_quota_ratio"] + EPSILON:
+        return False, f"quota per correct answer is {ratio:.2f}x the baseline, need at most {cfg['max_quota_ratio']}x"
+    return True, f"wins on quota, {ratio:.2f}x the baseline per correct answer ({candidate['quota_unit']})"
 
 
 def propose(models_text, promoted, baseline_id):

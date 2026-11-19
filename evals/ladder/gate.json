@@ -1,1 +1,1 @@
-{"min_cpd_ratio": 1.5, "max_pass_drop": 0.0, "consecutive_reports": 2}
+{"max_pass_drop": 0.0, "min_pass_gain": 0.10, "max_quota_ratio": 0.67, "consecutive_reports": 2}

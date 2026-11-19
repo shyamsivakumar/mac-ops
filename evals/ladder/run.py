@@ -107,7 +107,7 @@ def main(argv=None):
     record = {
         "run_id": args.run_id,
         "repeats": args.repeats,
-        "models": [{"id": m["id"], "model": m["model"]} for m in reachable],
+        "models": [{"id": m["id"], "model": m["model"], "quota_unit": m["quota_unit"]} for m in reachable],
         "unreachable": unreachable,
         "tasks": tasks,
     }

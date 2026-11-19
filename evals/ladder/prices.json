@@ -1,6 +1,0 @@
-{
-  "note": "USD per million tokens. Harbor n_input_tokens is assumed to include n_cache_tokens. A null price makes cost UNVERIFIED. Fill a price only with a source.",
-  "minimax": {"input_per_mtok": null, "cache_read_per_mtok": null, "output_per_mtok": null, "source": "not recorded yet"},
-  "glm": {"input_per_mtok": null, "cache_read_per_mtok": null, "output_per_mtok": null, "source": "not recorded yet"},
-  "deepseek": {"input_per_mtok": null, "cache_read_per_mtok": null, "output_per_mtok": null, "source": "not recorded yet"}
-}

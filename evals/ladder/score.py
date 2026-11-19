@@ -9,19 +9,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
-def trial_cost(agent_result, price):
-    if agent_result.get("cost_usd") is not None:
-        return agent_result["cost_usd"]
-    tokens = [agent_result.get(k) for k in ("n_input_tokens", "n_cache_tokens", "n_output_tokens")]
-    rates = [price.get(k) if price else None for k in ("input_per_mtok", "cache_read_per_mtok", "output_per_mtok")]
-    if None in tokens or None in rates:
+def trial_quota(path, agent_result, unit):
+    if unit == "tokens":
+        used = [agent_result.get(k) for k in ("n_input_tokens", "n_output_tokens")]
+        return None if None in used else sum(used)
+    trajectory = path.parent / "agent" / "trajectory.json"
+    if not trajectory.exists():
         return None
-    n_in, n_cache, n_out = tokens
-    r_in, r_cache, r_out = rates
-    return ((n_in - n_cache) * r_in + n_cache * r_cache + n_out * r_out) / 1_000_000
+    return sum(1 for step in json.loads(trajectory.read_text())["steps"] if step.get("source") == "agent")
 
 
-def load_trials(run_dir, prices):
+def load_trials(run_dir, units):
     trials = []
     for path in sorted(run_dir.glob("*/*/*/*/result.json")):
         model, task = path.relative_to(run_dir).parts[:2]
@@ -32,7 +30,8 @@ def load_trials(run_dir, prices):
             "model": model,
             "task": task,
             "correct": reward is not None and reward >= 1.0,
-            "cost": trial_cost(agent_result, prices.get(model)),
+            "quota": trial_quota(path, agent_result, units[model]),
+            "cost": agent_result.get("cost_usd"),
         })
     return trials
 
@@ -51,27 +50,29 @@ def missing_trials(run_dir, record):
 def summarize(trials):
     runs = len(trials)
     correct = sum(t["correct"] for t in trials)
+    quotas = [t["quota"] for t in trials]
+    measured = runs > 0 and None not in quotas
+    quota = sum(quotas) if measured else None
     costs = [t["cost"] for t in trials]
-    verified = runs > 0 and None not in costs and sum(costs) > 0
-    cost = sum(costs) if verified else None
     return {
         "runs": runs,
         "correct": correct,
         "pass_rate": correct / runs if runs else None,
-        "cost_usd": cost,
-        "cost_status": "OK" if verified else "UNVERIFIED",
-        "cost_per_correct": cost / correct if verified and correct else None,
-        "correct_per_dollar": correct / cost if verified else None,
+        "quota_used": quota,
+        "quota_status": "OK" if measured else "UNVERIFIED",
+        "quota_per_correct": quota / correct if measured and correct else None,
+        "cost_usd_informational": sum(costs) if runs and None not in costs else None,
     }
 
 
-def score_model(trials, meta):
+def score_model(trials, meta, unit):
     kind = lambda t: meta.get(t["task"], {}).get("type", "untyped")
     heldout = lambda t: meta.get(t["task"], {}).get("heldout", False)
     by_task = {}
     for t in trials:
         by_task.setdefault(t["task"], []).append(t["correct"])
     return {
+        "quota_unit": unit,
         **summarize(trials),
         "train": summarize([t for t in trials if not heldout(t)]),
         "heldout": summarize([t for t in trials if heldout(t)]),
@@ -89,13 +90,13 @@ def render_markdown(report):
     lines = [
         f"# Ladder report {report['run_id']}",
         "",
-        "| Model | Runs | Pass rate | Cost USD | Cost per correct | Flaky tasks |",
+        "| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for model, s in report["models"].items():
         lines.append(
-            f"| {model} | {s['runs']} | {fmt(s['pass_rate'], '{:.1%}')} | {fmt(s['cost_usd'], '{:.4f}')} "
-            f"| {fmt(s['cost_per_correct'], '{:.4f}')} | {len(s['flaky_tasks'])} |"
+            f"| {model} | {s['runs']} | {fmt(s['pass_rate'], '{:.1%}')} | {s['quota_unit']} "
+            f"| {fmt(s['quota_per_correct'], '{:.1f}')} | {len(s['flaky_tasks'])} |"
         )
     for model, s in report["models"].items():
         lines += ["", f"## {model}", "", "| Task type | Runs | Pass rate |", "| --- | --- | --- |"]
@@ -110,7 +111,6 @@ def render_markdown(report):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
-    parser.add_argument("--prices", type=Path, default=HERE / "prices.json")
     parser.add_argument("--out-dir", type=Path, default=HERE / "reports")
     args = parser.parse_args(argv)
 
@@ -119,13 +119,14 @@ def main(argv=None):
     if short:
         sys.exit("score: the run does not match its schedule; do not score it: " + "; ".join(short))
     meta = {t["id"]: t for t in record["tasks"]}
-    trials = load_trials(args.run_dir, json.loads(args.prices.read_text()))
+    units = {m["id"]: m.get("quota_unit", "requests") for m in record["models"]}
+    trials = load_trials(args.run_dir, units)
     report = {
         "run_id": record["run_id"],
         "repeats": record["repeats"],
         "unreachable": record["unreachable"],
         "tasks": record["tasks"],
-        "models": {m: score_model([t for t in trials if t["model"] == m], meta) for m in sorted({t["model"] for t in trials})},
+        "models": {m: score_model([t for t in trials if t["model"] == m], meta, units[m]) for m in sorted({t["model"] for t in trials})},
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / f"{record['run_id']}.json").write_text(json.dumps(report, indent=2) + "\n")
