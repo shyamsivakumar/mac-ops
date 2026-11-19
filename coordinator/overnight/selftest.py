@@ -541,9 +541,9 @@ def merged_restart():
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     merged = [dict(number=20, headRefOid=head, body="Refs #10")]
-    for name, receipts, reply, expected in [
-        ("recorded-pass", {f"gate:{repo}#20:{head}": "gate"}, "VERDICT: PASS", ["provides", "ff"]),
-        ("no-recorded-pass", {}, "", ["decisions"]),
+    for receipts, reply, expected in [
+        ({f"gate:{repo}#20:{head}": "gate"}, "VERDICT: PASS", ["provides", "ff"]),
+        ({}, "", ["decisions"]),
     ]:
         actions = []
 
