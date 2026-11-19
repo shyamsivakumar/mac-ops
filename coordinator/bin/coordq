@@ -1279,7 +1279,7 @@ def cmd_status(a):
     statuses = launch_statuses(before, live_ids) if live_ids is not None else {}
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
-             if value.get("count", 0) >= STUCK_COUNT]
+             if value.get("count", 0) >= STUCK_COUNT and pr not in before.get(ROUNDS_STUCK, {})]
     stuck += rounds_lines(before)
     threads = live()
     # A start can enqueue between a read and a write, and saving an older
@@ -1753,14 +1753,17 @@ def write_counts(counts, seen, stuck, dry_run):
                                   for key, value in (queue.get("gateReviewers") or {}).items()
                                   if key in (queue.get("gatedHeads") or {})}
         save(queue)
-        write_stuck_file([f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)] + rounds_lines(queue))
+        write_stuck_file([f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)
+                          if pr not in queue.get(ROUNDS_STUCK, {})] + rounds_lines(queue))
 
 
 def cmd_stuck(a):
     """Put one pull request on the stuck list for its review rounds, or take it off.
 
     The entry is keyed by the pull request, so a second call for the same
-    pull request rewrites the entry instead of adding one.
+    pull request rewrites the entry instead of adding one. A pull request
+    on the list for its rounds shadows its gatekeep skip row, so it is
+    listed once.
     """
     with Lock(True):
         queue = load()
@@ -1772,7 +1775,9 @@ def cmd_stuck(a):
         save(queue)
         try:
             with open(path(STUCK_FILE)) as f:
-                skipped = [line.rstrip("\n") for line in f if not line.rstrip("\n").endswith(f" {ROUNDS_REASON}")]
+                skipped = [line.rstrip("\n") for line in f
+                           if not line.rstrip("\n").endswith(f" {ROUNDS_REASON}")
+                           and line.split(" ", 1)[0] not in entries]
         except FileNotFoundError:
             skipped = []
         write_stuck_file(skipped + rounds_lines(queue))
