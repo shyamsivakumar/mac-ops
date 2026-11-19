@@ -11,4 +11,12 @@ Missing proof does not block. If the ticket asks for evidence the builder could 
 
 Exception, full proof bar kept: if the diff changes stop logic, exit logic, or trade execution (order placement, fills, sizing, booking of executed trades), every proof the ticket asks for is required, and missing proof is a major finding.
 
-Say in one line which bar you applied and why."""
+Say in one line which bar you applied and why.
+
+Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies to every gate:
+- Round 1 must list every critical and major found, not just the first.
+- Round 2 and later: a new major (not raised in an earlier round of this PR) blocks only with a failing case (a concrete input or sequence with the wrong result) or inside lines changed since the last review; otherwise it is a minor under 'Left for later'.
+- Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.
+- After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; no 4th review as is.
+
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator."""
