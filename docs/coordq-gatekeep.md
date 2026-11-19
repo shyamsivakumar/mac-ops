@@ -80,9 +80,13 @@ is chosen before the locks are taken, so it is checked again under them and
 chosen again on a free reviewer (`rechoosing <repo>#<pr>`).
 
 Gatekeep takes the block store lock, then the queue lock. This branch ships
-no writer of the store: the store (MO-1092) takes the same lock file. Refusing
-a queued gate whose reviewer was blocked after it was queued belongs to the
-dispatcher and is a separate piece of the ticket.
+no writer of the store: the store (MO-1092) takes the same lock file.
+
+A queued gate whose reviewer was blocked after it was queued is not launched
+on it: every launch resolves its model in `with_model`, which refuses a
+blocked one (`refused: <reviewer> is blocked`), and the item is retried until
+`MAX_ATTEMPTS`. Holding such an item without spending those attempts, so the
+head is not stranded, is a separate piece of the ticket.
 
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.
