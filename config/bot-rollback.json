@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "bots": [
+    {
+      "id": "bot1",
+      "label": "Bot 1, the paper-live trader",
+      "repository": "~/Code/strategy-replay-workbench",
+      "liveRef": "origin/paper-live",
+      "rollbackSha": null,
+      "rollbackCommands": [
+        ["node", "scripts/srw_promote_paper_live.cjs", "--break-glass-rollback", "{sha}"]
+      ],
+      "healthUrlEnv": "BOT1_HEALTH_URL",
+      "healthPath": "/health"
+    },
+    {
+      "id": "bot2",
+      "label": "Bot 2",
+      "repository": "~/Code/strategy-replay-workbench",
+      "liveRef": null,
+      "rollbackSha": null,
+      "rollbackCommands": null,
+      "healthUrlEnv": "BOT2_HEALTH_URL",
+      "healthPath": "/health",
+      "note": "Bot 2's live commit is not carried by a ref in this repository: the promotion path records it in the Railway deployment history, not in git. Name the ref and the rollback command here once that record is read, and the command will print Bot 2's steps the way it prints Bot 1's."
+    }
+  ]
+}
