@@ -225,6 +225,13 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(f"problem: the checkout does not hold {OTHER_SHA}", output)
 
+    def test_the_dry_run_reports_a_branch_whose_first_push_created_it(self):
+        bot_rollback.push_history = lambda repo, branch: [("0" * 40, self.repo.second)]
+        code, output = self._run()
+        self.assertEqual(code, 1)
+        self.assertIn("created the branch, so it recorded no commit to roll back to", output)
+        self.assertIn("recorded rollback SHA: not recorded", output)
+
     def test_an_unknown_bot_is_reported(self):
         code, output = self._run("--bot", "bot9")
         self.assertEqual(code, 1)
