@@ -21,7 +21,7 @@ ROOT = HERE.parent.parent
 def clusters(tasks):
     grouped = {}
     for t in tasks:
-        grouped.setdefault(t.get("group") or t["id"], []).append(t["id"])
+        grouped.setdefault(f"group:{t['group']}" if t.get("group") else f"task:{t['id']}", []).append(t["id"])
     return grouped
 
 
@@ -47,8 +47,8 @@ def decide(candidate, baseline, lo, hi, cfg):
     if not (candidate["quota_unit_confirmed"] and baseline["quota_unit_confirmed"]):
         return False, "no difference in pass rate, and quota is not used because a quota unit is unconfirmed"
     cand_q, base_q = candidate["quota_per_correct"], baseline["quota_per_correct"]
-    if cand_q is None or base_q is None:
-        return False, "no difference in pass rate, and quota per correct answer is UNVERIFIED or has no correct answers"
+    if cand_q is None or not base_q:
+        return False, "no difference in pass rate, and quota is not comparable: a quota per correct answer is UNVERIFIED, zero or has no correct answers"
     ratio = cand_q / base_q
     if ratio > cfg["max_quota_ratio"]:
         return False, f"no difference in pass rate, quota per correct answer is {ratio:.2f}x the baseline, need at most {cfg['max_quota_ratio']}x"
@@ -86,9 +86,13 @@ def compare(report, baseline_id, cfg):
 def self_check(run_dir, model, cfg):
     record = json.loads((run_dir / "run.json").read_text())
     trials = [t for t in score.load_trials(run_dir) if t["model"] == model]
+    rows_by_task = {t["id"]: [x["correct"] for x in trials if x["task"] == t["id"]] for t in record["tasks"]}
+    incomplete = sorted(task for task, rows in rows_by_task.items() if len(rows) != record["repeats"])
+    if incomplete or record["repeats"] // 2 < 2:
+        why = f"{', '.join(incomplete)} lack scheduled trials" if incomplete else f"{record['repeats']} repeats leave fewer than 2 per half"
+        return {"model": model, "not_enough_data": why, "no_difference": False}
     halves = {}
-    for task in sorted({t["task"] for t in trials}):
-        rows = [t["correct"] for t in trials if t["task"] == task]
+    for task, rows in rows_by_task.items():
         halves[task] = [{"runs": len(rows[k::2]), "correct": sum(rows[k::2])} for k in (0, 1)]
     diffs = [
         pass_rate({i: halves[i][0] for i in ids}, ids) - pass_rate({i: halves[i][1] for i in ids}, ids)
@@ -125,7 +129,7 @@ def main(argv=None):
         run_id, model = args.self_check
         result = self_check(args.runs_dir / run_id, model, cfg)
         print(json.dumps(result, indent=2))
-        return 0 if result["no_difference"] else 1
+        return 2 if "not_enough_data" in result else 0 if result["no_difference"] else 1
     if args.report is None:
         parser.error("give a score report or --self-check")
 

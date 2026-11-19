@@ -161,6 +161,36 @@ def i(root):
     raise AssertionError("a run with 2 of 3 trials was scored")
 
 
+@case("j self-check with incomplete or too few repeats reports not enough data")
+def j(root):
+    cfg = json.loads((ROOT / "evals/ladder/gate.json").read_text())
+    make_run(root, "r1", {"glm": BASE})
+    few = gate.self_check(root / "runs" / "r1", "glm", cfg)
+    make_run(root, "r2", {"glm": pattern(IDS, 4)}, repeats=4)
+    for victim in sorted((root / "runs" / "r2" / "glm" / "t00").glob("*/*/result.json"))[:2]:
+        victim.unlink()
+    short = gate.self_check(root / "runs" / "r2", "glm", cfg)
+    assert "not_enough_data" in few and not few["no_difference"] and "not_enough_data" in short, (few, short)
+    assert gate.main(["--self-check", "r1", "glm", "--runs-dir", str(root / "runs")]) == 2
+    return {"3 repeats": few["not_enough_data"], "2 of 4 retained": short["not_enough_data"]}
+
+
+@case("k an ungrouped task id and another task's group name stay separate clusters")
+def k(root):
+    tasks = [{"id": "parser", "type": "bugfix", "heldout": False, "group": None}, {"id": "t01", "type": "bugfix", "heldout": False, "group": "parser"}]
+    outcomes = {"minimax": {"parser": [0.0] * 3, "t01": [1.0] * 3}, "glm": {"parser": [1.0] * 3, "t01": [1.0] * 3}}
+    verdict, proposed = run_gate(root, make_run(root, "r1", outcomes, tasks=tasks))
+    assert verdict["verdicts"]["glm"]["clusters"] == 2 and not proposed
+    return show(verdict)
+
+
+@case("l a zero baseline quota per correct answer still writes a report")
+def l(root):
+    verdict, proposed = run_gate(root, make_run(root, "r1", {"minimax": BASE, "glm": BASE}, confirmed=True, requests={"minimax": 0, "glm": 5}))
+    assert not proposed and "not comparable" in verdict["verdicts"]["glm"]["reason"]
+    return show(verdict)
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in CASES.items():

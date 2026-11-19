@@ -527,3 +527,157 @@ PASS  h flaky task detected: [{'task': 't00', 'correct': 2, 'runs': 3}]
 | feature | 27 | 55.6% |
 
 PASS  i a run short of its scheduled trials is not scored: score: the run does not match its schedule; do not score it: glm/t05: 2 of 3 trials
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+# Ladder report r2
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 72 | 100.0% | 10.0 | 11000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 36 | 100.0% |
+| feature | 36 | 100.0% |
+
+{
+  "model": "glm",
+  "not_enough_data": "3 repeats leave fewer than 2 per half",
+  "no_difference": false
+}
+PASS  j self-check with incomplete or too few repeats reports not enough data: {'3 repeats': '3 repeats leave fewer than 2 per half', '2 of 4 retained': 't00 lack scheduled trials'}
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 6 | 100.0% | 10.0 | 11000 | requests | 0 |
+| minimax | 6 | 50.0% | 20.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 100.0% |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 6 | 50.0% |
+
+{
+  "run_id": "r1",
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
+  },
+  "verdicts": {
+    "glm": {
+      "pass_rate": 1.0,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.5,
+      "interval_90": [
+        0.0,
+        1.0
+      ],
+      "interval_half_width": 0.5,
+      "clusters": 2,
+      "promote": false,
+      "reason": "interval [+0.000, +1.000] is not inside the tie band of 0.1, so there is no clear gain",
+      "requests_per_correct": [
+        10.0,
+        20.0
+      ],
+      "tokens_per_correct": [
+        11000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
+    }
+  },
+  "promoted": []
+}
+PASS  k an ungrouped task id and another task's group name stay separate clusters: diff +0.500, 90% [+0.000, +1.000], half-width 0.500, promote=False: interval [+0.000, +1.000] is not inside the tie band of 0.1, so there is no clear gain
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 50.0% | 10.0 | 22000 | requests | 0 |
+| minimax | 54 | 50.0% | 0.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+{
+  "run_id": "r1",
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
+  },
+  "verdicts": {
+    "glm": {
+      "pass_rate": 0.5,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.0,
+      "interval_90": [
+        0.0,
+        0.0
+      ],
+      "interval_half_width": 0.0,
+      "clusters": 18,
+      "promote": false,
+      "reason": "no difference in pass rate, and quota is not comparable: a quota per correct answer is UNVERIFIED, zero or has no correct answers",
+      "requests_per_correct": [
+        10.0,
+        0.0
+      ],
+      "tokens_per_correct": [
+        22000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
+    }
+  },
+  "promoted": []
+}
+PASS  l a zero baseline quota per correct answer still writes a report: diff +0.000, 90% [+0.000, +0.000], half-width 0.000, promote=False: no difference in pass rate, and quota is not comparable: a quota per correct answer is UNVERIFIED, zero or has no correct answers
