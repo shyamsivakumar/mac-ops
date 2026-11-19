@@ -11,6 +11,7 @@ import os
 import plistlib
 import pwd
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -191,6 +192,23 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
             if f.is_file()
         ]
     return items
+
+
+def shim_item(checkout: Path, home: Path, path: str) -> tuple[Path, bytes, int] | None:
+    """Return the observation shim for ~/.local/bin/gh, or None when it would
+    not run first. The real gh is resolved once, here, from PATH without the
+    shim's own folder, and baked into the installed file."""
+    target = home / ".local/bin/gh"
+    folders = path.split(os.pathsep)
+    real = shutil.which("gh", path=os.pathsep.join(f for f in folders if f != str(target.parent)))
+    if real is None:
+        return None
+    if Path(real).resolve() == target.resolve():
+        raise RuntimeError(f"{real} is the shim itself; refusing to install it")
+    if str(target.parent) not in folders or folders.index(str(target.parent)) > folders.index(str(Path(real).parent)):
+        return None
+    source = (checkout / "coordinator/shim/gh").read_text().replace("@REAL_GH@", real)
+    return target, source.encode(), 0o755
 
 
 def task_router_text(text: str, routes: list[str], identities: dict[str, str]) -> str:
@@ -770,6 +788,9 @@ def changes(
         (target, src.read_bytes(), mode) for src, target, mode in plan(checkout, home)
     ]
     wanted += [(target, data, 0o644) for data, target in render_plists(checkout, home)]
+    shim = shim_item(checkout, home, os.environ.get("PATH", ""))
+    if shim is not None:
+        wanted.append(shim)
     router = home / TASK_ROUTER
     live_router = read_regular(router)
     if live_router is not None:
