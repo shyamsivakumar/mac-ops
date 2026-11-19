@@ -101,7 +101,7 @@ the field, which is what steps 4 and 5 need for the cost column.
 `evals/harbor/sets/ladder.json` lists the merged PRs the ladder gate scores
 models on (`{"tasks": [...]}`, each with `id`, `type`, `heldout`, repo, PR,
 ticket, merge and parent commits, test files and test command). About a
-quarter of the tasks are held out, chosen by `sha256(id) % 4 == 0` and recorded
+quarter of the tasks are held out, chosen by `sha256(group) % 4 == 0` (a task's `group` is its id unless it shares a test file, so a cluster lands on one side) and recorded
 in the file so the slice never moves; `build_tasks.py check` fails if a
 recorded value disagrees with the hash.
 
