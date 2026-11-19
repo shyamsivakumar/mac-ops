@@ -1,0 +1,167 @@
+{
+  "repos": {
+    "mac-ops": {
+      "github": "shyamsivakumar/mac-ops",
+      "local": "~/Code/mac-ops",
+      "profile": "python"
+    },
+    "srw": {
+      "github": "shyamsivakumar/strategy-replay-workbench",
+      "local": "~/Code/strategy-replay-workbench",
+      "profile": "node",
+      "install": "npm install --no-audit --no-fund --ignore-scripts"
+    }
+  },
+  "tasks": [
+    {
+      "id": "mac-ops-619",
+      "repo": "mac-ops",
+      "pr": 619,
+      "ticket": 616,
+      "merge": "88d6f0848858215014bb3e92e6e65bc77dd39560",
+      "parent": "629d4a948bd50a56d3095b4423780f5706719002",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_prompt_paths.py",
+      "test_files": [
+        "tests/test_prompt_paths.py"
+      ],
+      "heldout": false,
+      "group": "test_prompt_paths"
+    },
+    {
+      "id": "mac-ops-618",
+      "repo": "mac-ops",
+      "pr": 618,
+      "ticket": 617,
+      "merge": "97506bebf3cd595bb6b1a90584827b72e4e5dabd",
+      "parent": "88d6f0848858215014bb3e92e6e65bc77dd39560",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_prompt_paths.py",
+      "test_files": [
+        "tests/test_prompt_paths.py"
+      ],
+      "heldout": false,
+      "group": "test_prompt_paths"
+    },
+    {
+      "id": "mac-ops-608",
+      "repo": "mac-ops",
+      "pr": 608,
+      "ticket": 607,
+      "merge": "629d4a948bd50a56d3095b4423780f5706719002",
+      "parent": "eaa317c099cbd6b56f7f6fe0571b120f4707ea5f",
+      "type": "feature",
+      "test_command": "python3 -m pytest -q -x tests/test_heavy_review_slots.py",
+      "test_files": [
+        "tests/test_heavy_review_slots.py"
+      ],
+      "heldout": false,
+      "group": "mac-ops-608"
+    },
+    {
+      "id": "mac-ops-486",
+      "repo": "mac-ops",
+      "pr": 486,
+      "ticket": 482,
+      "merge": "cefc226d23ffcf0674a2a0a3d6eb530d0d1046b5",
+      "parent": "cc31061c97da7b9a3165c384783bb22cb2c915b2",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_tick_external_call_bounds.py",
+      "test_files": [
+        "tests/test_tick_external_call_bounds.py"
+      ],
+      "heldout": true,
+      "group": "mac-ops-486"
+    },
+    {
+      "id": "mac-ops-340",
+      "repo": "mac-ops",
+      "pr": 340,
+      "ticket": 338,
+      "merge": "c61f6608a78627f25e57babf9b5d5931c8c88870",
+      "parent": "8c93527bba09fcda8c3cf033c7ca9aa11ee9f5b0",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_gate_reviewer_quota.py",
+      "test_files": [
+        "tests/test_gate_reviewer_quota.py"
+      ],
+      "heldout": false,
+      "group": "mac-ops-340"
+    },
+    {
+      "id": "mac-ops-315",
+      "repo": "mac-ops",
+      "pr": 315,
+      "ticket": 314,
+      "merge": "c78db9b736d9086288c5372aa27f46329f116e07",
+      "parent": "12b64c1235a88749cbff8cefda83e293975b68e2",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_ticket_text_blockers.py",
+      "test_files": [
+        "tests/test_ticket_text_blockers.py"
+      ],
+      "heldout": false,
+      "group": "test_ticket_text_blockers"
+    },
+    {
+      "id": "mac-ops-312",
+      "repo": "mac-ops",
+      "pr": 312,
+      "ticket": 307,
+      "merge": "12b64c1235a88749cbff8cefda83e293975b68e2",
+      "parent": "63ffd88fd7338446806a0d4c6c5d6089c0508840",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_gatekeep_retry_limit.py",
+      "test_files": [
+        "tests/test_gatekeep_retry_limit.py"
+      ],
+      "heldout": false,
+      "group": "mac-ops-312"
+    },
+    {
+      "id": "mac-ops-273",
+      "repo": "mac-ops",
+      "pr": 273,
+      "ticket": 269,
+      "merge": "750ac82b40a92196f3e720a4d65c497dc7ab1eec",
+      "parent": "eeed59293f2ec9d99a237c95e540298745d12282",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_ticket_gate_live.py",
+      "test_files": [
+        "tests/test_ticket_gate_live.py"
+      ],
+      "heldout": false,
+      "group": "mac-ops-273"
+    },
+    {
+      "id": "mac-ops-223",
+      "repo": "mac-ops",
+      "pr": 223,
+      "ticket": 222,
+      "merge": "1fbd73819e91ea48be23d2ea9134cee44c7b65db",
+      "parent": "1769f97f21c2f4d444a4f89841050cd481d866ef",
+      "type": "feature",
+      "test_command": "python3 -m pytest -q -x tests/test_ticket_text_blockers.py",
+      "test_files": [
+        "tests/test_ticket_text_blockers.py"
+      ],
+      "heldout": false,
+      "group": "test_ticket_text_blockers"
+    },
+    {
+      "id": "srw-1324",
+      "repo": "srw",
+      "pr": 1324,
+      "ticket": 1322,
+      "merge": "9b512c10df2ab13d8f17e854475e7375786d7c8d",
+      "parent": "c6b38eb588d7d3e129f8a581e8aaeb7219be0faf",
+      "type": "feature",
+      "test_command": "node test_srw1322_exit_watchdog.js",
+      "test_files": [
+        "test_srw1322_exit_watchdog.js"
+      ],
+      "heldout": false,
+      "group": "srw-1324"
+    }
+  ]
+}
