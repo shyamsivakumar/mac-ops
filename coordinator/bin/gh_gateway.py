@@ -681,6 +681,9 @@ def parse_options(argv):
         # A list command's `-a`/`-d`/`-w` are flags, not values: `-a` is
         # `--all` for `workflow list` just as it is for `run list`.
         booleans = {"-a", "-d", "-w"}
+    elif verb == "view":
+        # A view command's `-c` shows comments and `-w` opens the browser.
+        booleans = {"-c", "-w"}
     else:
         booleans = set()
     values = SHORT_VALUE.get(key, set())
