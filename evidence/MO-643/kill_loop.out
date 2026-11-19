@@ -1,0 +1,3 @@
+ledger size about 2.8 MB
+50 kills during back-to-back saves, ledger parsed and equalled one full document every time: {'a': 25, 'b': 25}
+tmp files left by killed writers (pid-named, never read as the ledger): 50

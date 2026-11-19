@@ -401,6 +401,7 @@ def write_board(path, board):
         temporary.write_text(json.dumps(board, indent=1))
         os.replace(temporary, path)
     except OSError:
+        temporary.unlink(missing_ok=True)
         return False
     return True
 

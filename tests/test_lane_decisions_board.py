@@ -75,5 +75,45 @@ class DecisionsBoardTests(unittest.TestCase):
         self.assertNotIn("lane-gate-rounds-fixture-repo-20", ids)
 
 
+class LedgerTests(unittest.TestCase):
+    def test_a_missing_ledger_starts_empty(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            with patch.object(lane, "LEDGER", str(Path(scratch) / "lanes-ledger.json")):
+                self.assertEqual(lane.load_ledger(), {})
+
+    def test_a_corrupt_ledger_stops_the_pass_and_is_left_as_is(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            ledger = Path(scratch) / "lanes-ledger.json"
+            ledger.write_bytes(b'{"a": 1, "trunc')
+            with patch.object(lane, "LEDGER", str(ledger)), \
+                    patch.object(lane, "run_pass") as run_pass, \
+                    patch.object(lane, "api_remaining") as api_remaining:
+                with self.assertRaises(SystemExit) as stop:
+                    lane.main()
+            run_pass.assert_not_called()
+            api_remaining.assert_not_called()
+            self.assertEqual(ledger.read_bytes(), b'{"a": 1, "trunc')
+            self.assertEqual(list(Path(scratch).iterdir()), [ledger])
+        self.assertIn("lane: REFUSED: the ledger", str(stop.exception.code))
+
+    def test_a_failed_save_keeps_the_old_ledger_and_leaves_no_temporary(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            ledger = Path(scratch) / "lanes-ledger.json"
+            ledger.write_text('{"old": 1}')
+            with patch.object(lane, "LEDGER", str(ledger)), \
+                    patch.object(lane.os, "replace", side_effect=OSError("disk")):
+                with self.assertRaises(OSError):
+                    lane.save_ledger({"new": 2})
+            self.assertEqual(json.loads(ledger.read_text()), {"old": 1})
+            self.assertEqual(list(Path(scratch).iterdir()), [ledger])
+
+    def test_a_failed_board_write_leaves_no_temporary(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            board = Path(scratch) / "decisions.json"
+            with patch.object(lane.alarms.os, "replace", side_effect=OSError("disk")):
+                self.assertFalse(lane.alarms.write_board(board, {"items": []}))
+            self.assertEqual(list(Path(scratch).iterdir()), [])
+
+
 if __name__ == "__main__":
     unittest.main()
