@@ -45,7 +45,8 @@ class SendModelTests(unittest.TestCase):
         self.lists = self.lane.model_list.read_json(self.lane.model_list.SEED_PATH)
         self.commands = []
 
-    def send(self, thread, blocked=frozenset(), root=False, list_name=None, with_pr=True, on_origin=True):
+    def send(self, thread, blocked=frozenset(), root=False, list_name=None, with_pr=True,
+             on_origin=True, branch="builder/topic"):
         """Send to one thread and return the queue command the lane made."""
         lane = self.lane
 
@@ -53,6 +54,8 @@ class SendModelTests(unittest.TestCase):
             if cmd[0] == lane.COORDQ:
                 self.commands.append(cmd)
                 return "receipt"
+            if "--abbrev-ref" in cmd:
+                return branch + "\n"
             return "ref\trefs/heads/builder/fixture\n" if on_origin else ""
 
         def t3(tool, args):
@@ -124,6 +127,29 @@ class SendModelTests(unittest.TestCase):
         """A thread without a worktree of its own is replaced on the branch."""
         thread = {**SOL, "status": "completed", "sendable": True}
         command = self.send(thread, root=True)
+        self.assertNotIn("--tool", command)
+        self.assertEqual(self.payload(command)["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_build_list_model_in_the_shared_root_takes_no_send(self):
+        """A newly permitted direct send never lands in the shared checkout."""
+        thread = {**MINIMAX, "status": "completed", "sendable": True}
+        command = self.send(thread, root=True)
+        self.assertNotIn("--tool", command)
+        self.assertEqual(self.payload(command)["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_the_first_fix_model_in_the_shared_root_still_takes_the_send(self):
+        """The send the lane made before this change is unchanged."""
+        thread = {**SONNET, "status": "completed", "sendable": True}
+        command = self.send(thread, root=True)
+        self.assertIn("--tool", command)
+        self.assertEqual(self.payload(command), {"threadId": "thread-1", "message": "brief"})
+
+    def test_a_herdr_worktree_is_not_reused(self):
+        """A replacement never starts on a herdr branch."""
+        thread = {**SOL, "status": "completed", "sendable": True, "worktreePath": WORKTREE}
+        command = self.send(thread, branch="herdr/example")
         self.assertNotIn("--tool", command)
         self.assertEqual(self.payload(command)["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
