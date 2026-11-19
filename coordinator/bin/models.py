@@ -34,6 +34,11 @@ class ModelsError(ValueError):
     pass
 
 
+class BlockStoreBusy(Exception):
+    """The provider block store is being written, so a caller waits."""
+
+
+
 def path():
     override = os.environ.get("COORDINATOR_MODELS")
     if override:
