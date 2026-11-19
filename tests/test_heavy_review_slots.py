@@ -3,6 +3,7 @@ import contextlib
 import dataclasses
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -215,6 +216,87 @@ class ReviewSlotTests(unittest.TestCase):
                 terminate=terminate)
         terminate.assert_not_called()
         self.assertEqual(self.active[0]['termination'], claim)
+
+    def test_watchdog_never_kills_after_a_failed_ownership_read(self):
+        workload = {'pid': 5, 'task_key': 'k', 'uid': os.getuid(), 'boot_id': 'b'}
+        now = 10_000_000_000_000
+        claim = {'reason': heavy.WALL_CLOCK_REASON, 'claimant_pid': os.getppid(),
+                 'requested_ns': now - 1_000_000_000}
+        base = {
+            'job_id': 'job', 'state': 'terminating', 'task_key': 'k',
+            'uid': os.getuid(), 'created_ns': 1, 'supervisor': {'boot_id': 'b'},
+            'workload': workload}
+        self.registry.lock.side_effect = lambda **_: contextlib.nullcontext()
+        self.registry.read_heartbeat.return_value = None
+        terminate = Mock(return_value=True)
+
+        class Stop(Exception):
+            pass
+
+        def stop(_seconds):
+            raise Stop
+
+        with tempfile.TemporaryDirectory() as directory:
+            os.mkdir(os.path.join(directory, 'job'))
+            self.registry.directory = Path(directory)
+            reads = iter([
+                dict(base, termination=None),
+                heavy.HeavyError('registry lock timed out'),
+            ])
+
+            def read(_job_id):
+                value = next(reads)
+                if isinstance(value, Exception):
+                    raise value
+                return value
+
+            self.registry._read_record.side_effect = read
+            with patch.object(heavy, '_claim_termination', return_value=None), \
+                    patch.object(heavy, '_takeover_termination', return_value=None):
+                with self.assertRaises(Stop):
+                    heavy.watchdog_loop(
+                        'job', self.registry, clock_ns=lambda: now, sleep=stop,
+                        table_reader=lambda: {}, boot_reader=lambda: 'b',
+                        terminate=terminate)
+        terminate.assert_not_called()
+
+    def test_watchdog_registry_read_failure_waits_while_the_record_exists(self):
+        workload = {'pid': 5, 'task_key': 'k', 'uid': os.getuid(), 'boot_id': 'b'}
+        row = {
+            'job_id': 'job', 'state': 'running', 'task_key': 'k',
+            'uid': os.getuid(), 'created_ns': 1, 'supervisor': {'boot_id': 'b'},
+            'workload': workload, 'termination': None}
+        self.registry.lock.side_effect = lambda **_: contextlib.nullcontext()
+        self.registry.read_heartbeat.return_value = 10**13
+        terminate = Mock(return_value=True)
+        reads = iter([row, heavy.HeavyError('registry lock timed out')])
+
+        def read(_job_id):
+            value = next(reads)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        class Stop(Exception):
+            pass
+
+        def stop(_seconds):
+            if stop.calls:
+                raise Stop
+            stop.calls += 1
+
+        stop.calls = 0
+        self.registry._read_record.side_effect = read
+        with tempfile.TemporaryDirectory() as directory:
+            os.mkdir(os.path.join(directory, 'job'))
+            self.registry.directory = Path(directory)
+            with patch.object(heavy, '_limit_action', return_value=None):
+                with self.assertRaises(Stop):
+                    heavy.watchdog_loop(
+                        'job', self.registry, clock_ns=lambda: 10**13, sleep=stop,
+                        table_reader=lambda: {}, boot_reader=lambda: 'b',
+                        terminate=terminate)
+        terminate.assert_not_called()
 
     def test_watchdog_takeover_requires_the_observed_claim(self):
         workload = {'pid': 5}
