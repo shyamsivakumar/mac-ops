@@ -124,7 +124,7 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    for kind, label, expected in [("standard", None, "minimax/MiniMax-M3.1-Flash"), ("risky", None, "minimax/MiniMax-M3.1-Flash"),
+    for kind, label, expected in [("standard", None, "gpt-6.1-terra"), ("risky", None, "gpt-6.1-terra"),
                                   ("chore", "glm", "zai/glm-5.3")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
