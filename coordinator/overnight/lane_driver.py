@@ -467,13 +467,15 @@ def root_workspace(thread):
 def worktree_branch(path):
     """The branch a worktree is on, or an empty string.
 
-    A worktree that cannot be read names no branch, so it is not read as
-    a branch of its own."""
+    The full ref is read, so a tag that shares the branch's name cannot
+    change the answer. A detached head and a worktree that cannot be read
+    name no branch, so neither is read as a branch of its own."""
     try:
-        listing = run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=60)
+        ref = run(["git", "-C", path, "symbolic-ref", "--quiet", "HEAD"], timeout=60).strip()
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return ""
-    return listing.strip()
+    prefix = "refs/heads/"
+    return ref[len(prefix):] if ref.startswith(prefix) else ""
 
 
 def barred_worktree(path):
@@ -495,7 +497,7 @@ def barred_worktree(path):
         if any(part == ".herdr" for part in Path(spelling).parts):
             return True
     branch = worktree_branch(path)
-    return not branch or branch == "HEAD" or branch.startswith("herdr/")
+    return not branch or branch.startswith("herdr/")
 
 
 def branch_on_origin(repo, branch):

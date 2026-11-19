@@ -28,6 +28,13 @@ ROOT = Path(__file__).resolve().parents[1]
 OVERNIGHT = ROOT / "coordinator" / "overnight"
 MODELS = ROOT / "coordinator" / "models.json"
 REPO = "shyamsivakumar/mac-ops"
+
+
+def head_ref(branch):
+    """What `git symbolic-ref --quiet HEAD` prints for a worktree on `branch`.
+
+    A detached head and an unreadable worktree print nothing."""
+    return f"refs/heads/{branch}" if branch not in ("", "HEAD") else ""
 HEAD = "a" * 40
 MINIMAX = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
@@ -76,8 +83,8 @@ class BuilderChoice(unittest.TestCase):
         calls = []
 
         def run(cmd, timeout=150):
-            if cmd[:1] == ["git"] and "--abbrev-ref" in cmd:
-                return branch
+            if cmd[:1] == ["git"] and "symbolic-ref" in cmd:
+                return head_ref(branch)
             calls.append(cmd)
             return "#1 p0 started"
 
@@ -232,6 +239,18 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_tag_named_like_a_herdr_branch_does_not_hide_it(self):
+        # With a tag called herdr/gh-trim, `rev-parse --abbrev-ref HEAD`
+        # prints heads/herdr/gh-trim, which does not start with herdr/.
+        def run(cmd, timeout=150):
+            if "--abbrev-ref" in cmd:
+                return "heads/herdr/gh-trim"
+            if "symbolic-ref" in cmd:
+                return "refs/heads/herdr/gh-trim"
+            raise AssertionError(cmd)
+        with patch.object(self.lane, "run", run):
+            self.assertTrue(self.lane.barred_worktree("/fixture/worktree"))
+
     def test_a_failed_branch_read_bars_the_worktree(self):
         # The git call itself times out, so the destination is not confirmed.
         def run(cmd, timeout=150):
@@ -247,7 +266,7 @@ class BuilderChoice(unittest.TestCase):
 
         def run(cmd, timeout=150):
             if cmd[:1] == ["git"]:
-                return "herdr/gh-trim"
+                return head_ref("herdr/gh-trim")
             calls.append(cmd)
             return "fixture-receipt"
 
@@ -348,8 +367,8 @@ class DeadRunChoice(unittest.TestCase):
             raise AssertionError(f"unexpected T3 call {tool}")
 
         def run(cmd, timeout=150):
-            if cmd[0] == "git" and "--abbrev-ref" in cmd:
-                return branch
+            if cmd[0] == "git" and "symbolic-ref" in cmd:
+                return head_ref(branch)
             if cmd[0] == "git":
                 return f"worktree {worktree}\n"
             launches.append(json.loads(cmd[2]))
@@ -551,7 +570,7 @@ class UnstickBuilders(unittest.TestCase):
 
         def run(cmd, timeout=150):
             if cmd[:1] == ["git"]:
-                return root_branch
+                return head_ref(root_branch)
             launches.append(json.loads(cmd[2]))
             return "fixture-receipt"
 
