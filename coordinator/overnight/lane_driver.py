@@ -651,6 +651,26 @@ def record_failed_review(repo, number, head, ledger):
     return count
 
 
+OPEN_FINDINGS_NONE = "Open critical or major findings: none"
+OPEN_FINDINGS_INSTRUCTION = (
+    "This is the last review round. The second-to-last line of your report must be exactly "
+    f"`{OPEN_FINDINGS_NONE}` or `Open critical or major findings: <n>` (the count of critical "
+    "and major findings still open), after your CHECK line and followed by the final VERDICT line.")
+
+
+def no_open_findings(reply, head):
+    """True when a FAIL report fails only for the round cap.
+
+    The report needs `CHECK: PASS <head>` and no `CHECK: FAIL` line, the none
+    line as the last non-blank line before `VERDICT: FAIL`, and nothing but
+    trailing whitespace stripped from any line.
+    """
+    lines = [line.rstrip() for line in reply.splitlines() if line.strip()]
+    return (len(lines) >= 2 and lines[-1] == "VERDICT: FAIL" and lines[-2] == OPEN_FINDINGS_NONE
+            and f"CHECK: PASS {head}" in lines
+            and not any(line.startswith("CHECK: FAIL") for line in lines))
+
+
 def gate_round_item(repo, number, head):
     """The one decisions item a pull request with no review rounds left raises."""
     return {
@@ -1012,6 +1032,42 @@ def superseded_by(repo, number, issue):
     return False
 
 
+def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
+    # A prompt, skill or playbook change never auto-merges (Refs #543):
+    # the hold comes first, so a prompt PR is written to the board before
+    # anything else looks at the merge.
+    held = prompt_pass(repo, number, head,
+                       prompt_pull(repo, number, pr.get("changedFiles"),
+                                   pr.get("baseRefName") or "main", head))
+    if held:
+        return held
+    # Main's gate-round bookkeeping: the round's decisions item must leave
+    # the board before the merge, or the merge waits.
+    if not clear_gate_round_decision(repo, number, ledger):
+        return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
+    if repo == "digitized/Concerning":
+        return f"skip #{number}: gate PASS, manual merge"
+    base = pr.get("baseRefName") or "main"
+    if DRY:
+        return f"DRY merge #{number} {head}"
+    # A retarget moves the pull request onto another base without moving
+    # its head, and the same head can then introduce prompt text it did
+    # not introduce against the base this pass classified. The base and
+    # head are read again inside the merge step, as close to the merge as
+    # the merge can be guarded: a pull request that moved merges nothing.
+    merged, note = merge_on_reviewed_base(repo, number, head, base)
+    if not merged:
+        return note
+    if issue:
+        ref = f"{repo}#{issue}"
+        output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
+                      "--gate-thread", gate["threadId"]])
+        if "is already closed" in output:
+            print(f"already-closed:{ref}: {output}")
+    fast_forward_main(repo)
+    return note
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -1056,39 +1112,7 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        # A prompt, skill or playbook change never auto-merges (Refs #543):
-        # the hold comes first, so a prompt PR is written to the board before
-        # anything else looks at the merge.
-        held = prompt_pass(repo, number, head,
-                           prompt_pull(repo, number, pr.get("changedFiles"),
-                                       pr.get("baseRefName") or "main", head))
-        if held:
-            return held
-        # Main's gate-round bookkeeping: the round's decisions item must leave
-        # the board before the merge, or the merge waits.
-        if not clear_gate_round_decision(repo, number, ledger):
-            return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
-        if repo == "digitized/Concerning":
-            return f"skip #{number}: gate PASS, manual merge"
-        base = pr.get("baseRefName") or "main"
-        if DRY:
-            return f"DRY merge #{number} {head}"
-        # A retarget moves the pull request onto another base without moving
-        # its head, and the same head can then introduce prompt text it did
-        # not introduce against the base this pass classified. The base and
-        # head are read again inside the merge step, as close to the merge as
-        # the merge can be guarded: a pull request that moved merges nothing.
-        merged, note = merge_on_reviewed_base(repo, number, head, base)
-        if not merged:
-            return note
-        if issue:
-            ref = f"{repo}#{issue}"
-            output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
-                          "--gate-thread", gate["threadId"]])
-            if "is already closed" in output:
-                print(f"already-closed:{ref}: {output}")
-        fast_forward_main(repo)
-        return note
+        return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
     if verdict == "FAIL":
         # The failed review in hand is one after the reviews the pull
         # request already had. The convergence rule gives it three
@@ -1097,6 +1121,8 @@ def act_on_pr(repo, number, ledger):
         # at the cap is never sent "Continue fixing".
         reviews = record_failed_review(repo, number, head, ledger)
         if reviews >= GATE_ROUND_CAP:
+            if no_open_findings(reply, head):
+                return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
             return gate_round_decision(repo, number, head, ledger)
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
@@ -1134,6 +1160,8 @@ def act_on_pr(repo, number, ledger):
     brief = run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
     if head not in brief:
         return f"#{number}: no gate brief ({brief[-120:]})"
+    if failed_reviews(repo, number, ledger)[0] >= GATE_ROUND_CAP - 1:
+        brief += f"\n{OPEN_FINDINGS_INSTRUCTION}\n"
     brief += ("\nLane override: review only. Do not merge or close issues; the lane owns completion. "
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
