@@ -393,15 +393,19 @@ def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False
     return (state, action) if builder else ("needs-you", "needs-you")
 
 
+def gate_in_flight(thread_id):
+    status = (t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}).get("status")
+    return status in ("running", "queued", "starting", "preparing")
+
+
 def gate_verdict(repo, number, head, base):
-    receipts = json.load(open(RECEIPTS))
+    receipts = json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}
     key = f"gate:{repo}#{number}:{head}"
     current = receipts.get(key)
     if not current:
         return "absent", None, ""
     gate = {"threadId": current}
-    status = (t3("t3_thread_read", {"threadId": current, "limit": 1}).get("thread") or {}).get("status")
-    if status in ("running", "queued", "starting", "preparing"):
+    if gate_in_flight(current):
         return "running", gate, ""
     reply = last_reply(current)
     if reply.endswith("VERDICT: FAIL"):
@@ -410,8 +414,12 @@ def gate_verdict(repo, number, head, base):
         return "none", gate, reply
     if receipts.get(f"base:{current}") != base:
         return "absent", None, ""
-    earlier = {v for k, v in receipts.items() if k.startswith(key + ":") and v != current}
-    if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in sorted(earlier)):
+    earlier = sorted({v for k, v in receipts.items() if k.startswith(key + ":") and v != current
+                      and receipts.get(f"base:{v}") == base})
+    for thread in earlier:
+        if gate_in_flight(thread):
+            return "running", {"threadId": thread}, ""
+    if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in earlier):
         return "SPLIT", gate, reply
     return "PASS", gate, reply
 
