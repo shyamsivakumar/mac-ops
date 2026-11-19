@@ -82,19 +82,27 @@ def plan(deployments):
     if not isinstance(deployments, list):
         raise RollbackRecordError("the Bot 1 deployment history is not a list")
     records = sorted(map(read_record, deployments), key=lambda r: r[0], reverse=True)
+    ran = [r[0] for r in records if r[1] in RAN_A_COMMIT]
+    tied = RollbackRecordError(
+        "deployments that decide the rollback share a createdAt, so their order is unknown"
+    )
     production = next((i for i, r in enumerate(records) if r[1] == "SUCCESS"), None)
     if production is None:
         raise RollbackRecordError(
             "no successful Bot 1 production deployment is in the history"
         )
-    _, _, deployment_id, current_sha = records[production]
+    created, _, deployment_id, current_sha = records[production]
+    if ran.count(created) > 1:
+        raise tied
     if not isinstance(deployment_id, str) or not deployment_id or current_sha is None:
         raise RollbackRecordError(
             "the production deployment has no ID or no valid commit SHA"
         )
-    for _, status, _, sha in records[production + 1 :]:
+    for created, status, _, sha in records[production + 1 :]:
         if status not in RAN_A_COMMIT:
             continue
+        if ran.count(created) > 1:
+            raise tied
         if sha is None:
             raise RollbackRecordError(
                 "an earlier Bot 1 deployment has no valid commit SHA"
