@@ -69,6 +69,7 @@ LEGACY_SLOTS = Path("/tmp/heavy-slots")
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
+HEARTBEAT_TEMP_PATTERN = re.compile(r"\.heartbeat-[0-9a-f]{32}\.tmp")
 
 
 def monotonic_ns() -> int:
@@ -1010,7 +1011,12 @@ class Registry:
     def remove(self, job_id: str) -> None:
         """Delete a job's record and heartbeat files and its directory."""
         directory = self._job_dir(job_id)
-        for name in ("record.json", "heartbeat"):
+        names = ["record.json", "heartbeat"] + sorted(
+            name
+            for name in os.listdir(str(directory))
+            if HEARTBEAT_TEMP_PATTERN.fullmatch(name)
+        )
+        for name in names:
             path = directory / name
             try:
                 info = os.lstat(str(path))
@@ -1752,7 +1758,8 @@ def _prune_finished_locked(
     table: Dict[int, ProcessInfo],
     snapshot_started_ns: int,
     boot_id: str,
-) -> None:
+) -> int:
+    removed = 0
     for record in records:
         supervisor = record.get("supervisor")
         if not isinstance(supervisor, dict):
@@ -1764,12 +1771,40 @@ def _prune_finished_locked(
             raise HeavyError("registry boot identity is invalid")
         if recorded_boot != boot_id:
             registry.remove(record["job_id"])
+            removed += 1
             continue
         if int(record.get("created_ns", 0)) >= snapshot_started_ns:
             continue
         alive, supervisor_alive = _record_live(record, table)
         if not alive and not supervisor_alive:
             registry.remove(record["job_id"])
+            if record.get("state") not in ("complete", "removed"):
+                _log_event(
+                    registry.directory,
+                    "job-dead",
+                    record,
+                    detail="supervisor process is gone",
+                )
+            removed += 1
+    return removed
+
+
+def reap_dead_jobs(registry: Optional[Registry] = None) -> int:
+    if registry is None:
+        registry = Registry(state_directory())
+    snapshot_started_ns = monotonic_ns()
+    boot_id = kernel_boot_identity()
+    table = process_table()
+    with registry.lock():
+        records = [
+            record
+            for record in registry.records()
+            if isinstance(record.get("supervisor"), dict)
+            and record["supervisor"].get("boot_id") == boot_id
+        ]
+        return _prune_finished_locked(
+            registry, records, table, snapshot_started_ns, boot_id
+        )
 
 
 @dataclass
