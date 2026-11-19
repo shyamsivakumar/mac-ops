@@ -624,6 +624,8 @@ SHORT_BOOLEAN = {
     # `gh issue create`: `-e` opens the editor and `-w` the browser; neither
     # takes a value there either.
     ("issue", "create"): {"-e", "-w"},
+    # `gh pr comment`: `-e` opens the editor and `-w` the browser.
+    ("pr", "comment"): {"-e", "-w"},
     # `gh pr checkout`: `-f` is `--force`.
     ("pr", "checkout"): {"-f"},
 }
