@@ -7,6 +7,7 @@ import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 import gh_gateway
+import prompt_paths
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
 COORDQ = os.environ.get("TICKET_COORDQ", "coordq")
@@ -784,19 +785,18 @@ def pull_files(repo, number, changed_files=None):
     truncated read is not a known list.
     """
     try:
-        files = gh_json(["api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
+        pages = gh_json(["api", "--paginate", "--slurp",
+                         f"repos/{repo}/pulls/{number}/files?per_page=100"])
     except (GhError, ValueError):
         return None
-    if not isinstance(files, list):
+    entries = prompt_paths.page_entries(pages)
+    if entries is None:
         return None
-    entries = [entry for entry in files if isinstance(entry, dict)]
-    if isinstance(changed_files, int) and len(entries) < changed_files:
+    if not prompt_paths.list_is_complete(entries, changed_files):
         return None
     paths = []
     for entry in entries:
-        paths.append(entry.get("filename") or "")
-        if entry.get("previous_filename"):
-            paths.append(entry["previous_filename"])
+        paths.extend(prompt_paths.entry_paths(entry))
     return paths
 
 
@@ -1385,7 +1385,7 @@ def parse_pr_ref(ref):
 
 def fetch_pull(repo, number):
     return gh_json(["pr", "view", str(number), "-R", repo, "--json",
-                    "number,state,isDraft,title,body,headRefOid,baseRefName,url"])
+                    "number,state,isDraft,title,body,headRefOid,baseRefName,url,changedFiles"])
 
 
 def refs_issue(repo, body):
@@ -1542,12 +1542,64 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
                             fast_forward_main=False, ascend_override=ascend,
-                            proof=proof, proof_path=proof_path, proof_state=proof_state)
+                            proof=proof, proof_path=proof_path, proof_state=proof_state,
+                            prompt=prompt)
+
+
+def pull_changed_count(repo, number):
+    """The pull request's own changed-file count, or None when unreadable.
+
+    The count is what tells a complete file list from a capped one, so a list
+    read without it is refused rather than trusted.
+    """
+    try:
+        pull = gh_json(["api", f"repos/{repo}/pulls/{number}"])
+    except (GhError, ValueError):
+        return None
+    count = pull.get("changed_files") if isinstance(pull, dict) else None
+    return count if isinstance(count, int) else None
+
+
+def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts=2):
+    """HOLD, CLEAR or UNKNOWN for the paths the pull request changed.
+
+    The merge base and the head are pinned by the caller, so their trees are
+    read first: a file list is read by pull-request number and describes
+    whatever head GitHub holds at that moment, which lets a code-only
+    revision clear a prompt-changing head that is restored before the merge.
+    An unreadable tree diff is retried, then UNKNOWN: `ticket gate` refuses
+    rather than building a brief that could order a prompt merge.
+
+    A caller with no pinned pair has only the file list, which is read and
+    must be complete before it decides anything.
+    """
+    if base and head:
+        return prompt_paths.scan_diff(
+            lambda endpoint: gh_json(["api", endpoint]), repo, base, head, attempts)
+    count = changed_files if isinstance(changed_files, int) else pull_changed_count(repo, number)
+    for _ in range(max(1, attempts)):
+        state = prompt_paths.prompt_scan(pull_files(repo, number, count))
+        if state != prompt_paths.UNKNOWN:
+            return state
+    return prompt_paths.UNKNOWN
+
+
+def prompt_hold(repo, number, changed_files=None, base=None, head=None):
+    """True when the gate brief must say the pull request never merges itself.
+
+    A list GitHub could not give refuses the gate instead of reading as code:
+    a brief built without it could order a merge of prompt text.
+    """
+    state = prompt_pull(repo, number, changed_files, base, head)
+    if state == prompt_paths.UNKNOWN:
+        raise Refuse(f"the changed files of {repo}#{number} could not be read, so a brief "
+                     "here could order a merge of prompt text; retry the gate")
+    return state == prompt_paths.HOLD
 
 
 def with_gate_lock(repo, pr):
@@ -1591,7 +1643,9 @@ def cmd_gate(a):
         proof_path = proof_file.path_for(rcfg.get("key"), issue_number)
         proof_state, proof = proof_file.fetch(repo, proof_path, head)
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
-                           proof=proof, proof_path=proof_path, proof_state=proof_state)
+                           proof=proof, proof_path=proof_path, proof_state=proof_state,
+                           prompt=prompt_hold(repo, number, pull.get("changedFiles"),
+                                              base, head))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},

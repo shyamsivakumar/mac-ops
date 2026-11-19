@@ -361,32 +361,85 @@ def dead_run_no_receipt():
     exact(ledger["dead-run:fixture-full"].startswith("flagged "), True)
 
 
+_REAL_OPEN = open
+LIVE_STATE = ("queue", "decisions.json", "dispatch-receipts", "lanes-ledger",
+              "loop/", ".coordinator/tickets.json")
+
+
+def live_state_only(path, *args, **kwargs):
+    """Open a file unless it is coordinator state this eval must not touch.
+
+    The lane legitimately reads model lists and the gateway's own files now, so
+    the ban is narrowed to the live state: the queue, the decisions board, the
+    receipts, the ledger and the tickets config.
+    """
+    name = str(path)
+    mode = args[0] if args else kwargs.get("mode", "r")
+    writing = any(flag in mode for flag in "wax+")
+    if writing and any(marker in name for marker in LIVE_STATE):
+        raise AssertionError(f"live filesystem forbidden (write): {name}")
+    return _REAL_OPEN(path, *args, **kwargs)
+
+
 def gate_pipeline():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     failures = []
+    # The reviewer chain is one list now (#552): the first entry is the gate's
+    # reviewer, the last is the fallback when its quota is exhausted.
+    chain = [entry["selection"]["instanceId"] for entry in lane.model_list.entries("review")]
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["openai-api"]),
-        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
-        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["openai-api"]),
+        ("checked-head", repo, "absent", "", {}, [chain[0]], None),
+        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
+        ("prompt-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"],
+         "coordinator/config/AGENT-RULES.md"),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
+        ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
         ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], None),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["codex"]),
-        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
-        ("ascend", "ascend/fixture", "absent", "", {}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"},
+         [chain[chain.index(chain[0]) + 1]], None),
+        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
+        ("ascend", "ascend/fixture", "absent", "", {}, [], None),
     ]
-    for name, target, verdict, reply, ledger, expected in cases:
+    for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
-        pr = dict(number=20, state="OPEN", headRefOid=head,
+        pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
-        def command(cmd, timeout=150):
+        def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
+                    head=head, reply=reply, verdict=verdict):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
+                # The pre-merge guard: the base and head the review was taken
+                # against, read in one call immediately before the merge.
+                return json.dumps({"baseRefName": "main", "headRefOid": head})
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName"]:
+                # The post-merge guard: a merged pull request cannot be
+                # retargeted, so this base is the one the merge landed on.
+                return json.dumps({"baseRefName": "main"})
+            if cmd[:2] == ["gh", "api"]:
+                # The changed paths of the pull request: the case decides
+                # whether they carry one prompt path or only code. The lane
+                # reads the pinned merge base and head trees first, so that a
+                # file list read by pull-request number never decides a merge;
+                # the slurped list is still served for a caller without a pin.
+                endpoint = cmd[-1]
+                path = changed or "a.py"
+                if "/files?per_page=100" in endpoint:
+                    exact(cmd[3], "--slurp")
+                    return json.dumps([[{"filename": changed}]] if changed else [[]])
+                if "/compare/" in endpoint:
+                    return json.dumps({"merge_base_commit": {"sha": "base"}})
+                if endpoint.endswith("/git/trees/base?recursive=1"):
+                    return json.dumps({"tree": [{"type": "blob", "path": path, "sha": "1"}]})
+                if endpoint.endswith("/git/trees/%s?recursive=1" % head):
+                    return json.dumps({"tree": [{"type": "blob", "path": path, "sha": "2"}]})
+                raise AssertionError(f"unexpected gh api read: {cmd}")
             if cmd == [lane.COORDQ, "list"]:
                 return ""
             if cmd[:2] == ["ticket", "gate"]:
@@ -421,7 +474,7 @@ def gate_pipeline():
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args):
+        def threads(tool, args, head=head, verdict=verdict, reply=reply):
             if tool == "t3_thread_list":
                 exact(head[:8] in args["titleContains"], True)
                 return {"threads": [] if verdict == "absent" else [
@@ -432,15 +485,25 @@ def gate_pipeline():
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
+        def decision(item, actions=actions):
+            # The board write is the one live file this eval must not touch.
+            exact(item["id"], "prompt-merge-FIX-20")
+            exact(item["group"], "Coordinator")
+            exact(item["kind"], "action")
+            exact(item.get("options"), None)
+            actions.append("decisions")
+            return "wrote"
+
         try:
             with tempfile.TemporaryDirectory() as scratch, \
                  scratch_board(scratch), \
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "publish_decision", decision), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
-                 patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
+                 patch("builtins.open", side_effect=live_state_only):
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
             try:
@@ -1155,6 +1218,9 @@ def zero_merge_fixture(scratch):
     import lane_driver as lane
     other = {"id": "unrelated"}
     state = {"items": [other]}
+    owner = {"items": []}
+    def held():
+        return state["items"] + owner["items"]
     now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
     class Clock(dt.datetime):
         @classmethod
@@ -1186,12 +1252,17 @@ def zero_merge_fixture(scratch):
     mute = str(scratch / "mute-state.json")
 
     def read_board(path):
-        return b"", json.loads(json.dumps(state))
+        return b"", json.loads(json.dumps(owner if Path(path).name == "mac-ops-owner.json" else state))
 
     def write_board(path, board):
-        state.clear()
-        state.update(json.loads(json.dumps(board)))
+        target = owner if Path(path).name == "mac-ops-owner.json" else state
+        target.clear()
+        target.update(json.loads(json.dumps(board)))
         return True
+
+    def swap_alarm(path, alarm_id, action, item):
+        state["items"] = [i for i in state["items"] if i.get("id") != alarm_id]
+        return "wrote"
 
     import alarms
     with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
@@ -1200,6 +1271,7 @@ def zero_merge_fixture(scratch):
          patch.object(lane, "DECISIONS_PATH", str(Path(mute).parent / "decisions.json")), \
          patch.object(alarms, "read_board", side_effect=read_board), \
          patch.object(alarms, "write_board", side_effect=write_board), \
+         patch.object(alarms, "swap_alarm", side_effect=swap_alarm), \
          patch.object(lane.os, "replace") as replace:
         for stamps, expected in [([], [other, alert]),
                 (["2026-11-15T10:59:59Z"], [other, alert]),
@@ -1208,7 +1280,7 @@ def zero_merge_fixture(scratch):
                 ([], [other, alert])]:
             rows = [{"mergedAt": stamp} for stamp in stamps]
             lane.zero_merge(snapshot)
-            exact(state["items"], expected)
+            exact(held(), expected)
         exact(calls, ["fixture/one", "fixture/two"] * 5)
         with patch.object(lane, "read_json", side_effect=RuntimeError("fixture read failure")):
             try:
@@ -1217,7 +1289,7 @@ def zero_merge_fixture(scratch):
                 exact(str(exc), "fixture read failure")
             else:
                 raise AssertionError("read failure was swallowed")
-        exact(state["items"], [other, alert])
+        exact(held(), [other, alert])
 
         snapshot["repos"]["fixture/one"]["prs"] = []
         # A healthy tick raises nothing, so it says nothing about an alarm:
@@ -1225,7 +1297,7 @@ def zero_merge_fixture(scratch):
         healthy = io.StringIO()
         with contextlib.redirect_stdout(healthy):
             lane.zero_merge(snapshot)
-        exact(state["items"], [other])
+        exact(held(), [other])
         exact(len(calls), 10)
         # A board that cannot be written is reported, not swallowed: the
         # alarm is nowhere, and the tick has to say so.
@@ -1254,7 +1326,7 @@ def zero_merge_fixture(scratch):
         snapshot["repos"]["fixture/two"]["prs"] = []
         rows = []
         lane.zero_merge(snapshot)
-        first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        first = [i for i in held() if i["id"] == "factory-zero-merge"]
         exact(len(first), 1)
         exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
         # The answer goes to the mute state the shift keeps. The replace
@@ -1267,14 +1339,19 @@ def zero_merge_fixture(scratch):
         exact(mute_rules.muted(mute_rules.load_state(), answered, now), True)
         # The answered cause is quiet: the same wait raises no board item.
         lane.zero_merge(snapshot)
-        exact([i for i in state["items"] if i["id"] == "factory-zero-merge"], [])
+        exact([i for i in held() if i["id"] == "factory-zero-merge"], [])
         # A repository that starts waiting is a different cause, so it
         # alarms at once under its own key.
         snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
         lane.zero_merge(snapshot)
-        raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        raised = [i for i in held() if i["id"] == "factory-zero-merge"]
         exact(len(raised), 1)
         exact(raised[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one, fixture/two")
+        exact(state["items"], [other])
+        state["items"].append(dict(alert))
+        lane.zero_merge(snapshot)
+        exact([i["id"] for i in state["items"]], ["unrelated"])
+        exact([i["id"] for i in owner["items"]], ["factory-zero-merge"])
 
 
 def board_integrity():
@@ -1535,6 +1612,16 @@ def gate_round_cap():
                 else:
                     stuck_list[cmd[2]] = {"head": cmd[4], "count": lane.GATE_ROUND_CAP, "reason": "rounds"}
                 return ""
+            if cmd[:2] == ["gh", "api"]:
+                # The prompt classification this branch adds reads the pinned
+                # trees; every head here is code-only against its base.
+                endpoint = cmd[-1]
+                if "/compare/" in endpoint:
+                    return json.dumps({"merge_base_commit": {"sha": "base"}})
+                if endpoint.endswith("/git/trees/base?recursive=1"):
+                    return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]})
+                if "/git/trees/" in endpoint:
+                    return json.dumps({"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]})
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
@@ -2125,6 +2212,47 @@ def stall():
     exact(lane.STALL_STATE.get("board_alerted"), None)
     exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], True)
 
+    # A pass with live work in the dispatch queue is progress for the board,
+    # not for its items: a thread can run for longer than three ticks
+    # between commits.
+    def idle_board(live):
+        found = []
+        with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+             patch.object(lane, "board_snapshot", return_value=snapshot), \
+             patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "busy", return_value=live), patch.object(lane, "t3", return_value={}), \
+             patch.object(lane, "stall_receipts", return_value={}), \
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+            lane.STALL_STATE = {}
+            lane.STALL_EVENTS.clear()
+            for _ in range(4):
+                lane.run_pass({})
+                found.extend(e["kind"] for e in lane.STALL_EVENTS)
+                lane.STALL_EVENTS.clear()
+        return found
+
+    exact("board" in idle_board("live: builder thread"), False)
+    exact(idle_board("").count("board"), 2)
+
+    acted.clear()
+    timeout = subprocess.TimeoutExpired(["t3mcp"], 30)
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=snapshot), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", side_effect=timeout), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "start_next") as start, \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        lane.STALL_STATE = {}
+        failed = {}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.suppress(RuntimeError):
+            lane.run_pass(failed)
+    exact(acted, [])
+    exact(start.call_count, 0)
+    exact(failed.get("_item_failures"), 1)
+
     # New work on the board is progress, whether the shift has measured the
     # new item or not.
     state = rule.new_state()
@@ -2206,6 +2334,34 @@ def stall():
         lane.run_pass({})
     exact(lane.STALL_STATE.get("items", {}), {})
 
+    held = {"number": 9, "title": "held", "labels": [{"name": "stage:hold"}]}
+    idle = {"number": 10, "title": "idle", "labels": [{"name": "stage:todo"}]}
+    idle_pull = dict(stale, number=10, body="Refs #10")
+
+    def three_ticks(prs, issues):
+        board = {"tickets": [], "repos": {repo: {"prs": prs, "issues": issues}}}
+        lane.STALL_STATE = {}
+        lane.STALL_EVENTS.clear()
+        with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+             patch.object(lane, "board_snapshot", return_value=board), \
+             patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+             patch.object(lane, "stall_receipts", return_value={}), \
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+            for _ in range(3):
+                lane.run_pass({})
+        found = list(lane.STALL_EVENTS)
+        lane.STALL_EVENTS.clear()
+        return found
+
+    exact(three_ticks([stale], [held]), [])
+    exact(lane.STALL_STATE.get("items", {}), {})
+    exact(lane.board_keys({"tickets": [dict(repo=repo, number=9, stage="todo")],
+                           "repos": {repo: {"prs": [], "issues": [held]}}}), set())
+    found = three_ticks([stale, idle_pull], [held, idle])
+    exact([event["item"] for event in found if event["kind"] == "item"], [f"{repo}#10"])
+
     # A stalled item is reported, not parked: the shift keeps working it.
     lane.STALL_STATE = {"items": {f"{repo}#9": {"marker": "a" * 40, "idle": 3,
                                                 "stalled": True}}}
@@ -2218,7 +2374,7 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-def alarm_mute():
+def alarm_mute_on_one_board():
     import datetime as dt
     import alarms
     import lane_driver as lane
@@ -2857,6 +3013,39 @@ def alarm_mute():
             exact(ids, [])
 
 
+
+
+def alarm_mute():
+    """The mute rule on one board, then the routing of the owner alarms."""
+    import alarms
+    import stall as rule
+    with patch.object(alarms, "board_for", lambda decisions, alarm_id: Path(decisions)):
+        alarm_mute_on_one_board()
+    with tempfile.TemporaryDirectory() as scratch, \
+            patch.object(alarms, "MUTE_PATH", str(Path(scratch) / "mute-state.json")):
+        decisions = Path(scratch) / "decisions.json"
+        owner = Path(scratch) / "mac-ops-owner.json"
+        stale = {"id": "factory-overnight-stall", "cause": "stale"}
+        decisions.write_text(json.dumps({"items": [{"id": "SRW-1"}, stale]}))
+        target, action = rule.alert("no board progress for 3 ticks", None, decisions)
+        exact(action, "wrote")
+        exact([i["id"] for i in json.loads(owner.read_text())["items"]], ["factory-overnight-stall"])
+        exact([i["id"] for i in json.loads(decisions.read_text())["items"]], ["SRW-1"])
+        exact(alarms.route_update(decisions, "SRW-1", "remove"), "wrote")
+        exact(alarms.route_update(decisions, "factory-overnight-stall", "remove"), "wrote")
+        exact(json.loads(owner.read_text())["items"], [])
+        decisions.write_text(json.dumps({"items": [{"id": "factory-zero-merge"}, {"id": "factory-watchdog"}]}))
+        owner.unlink()
+        exact(alarms.route_update(decisions, "factory-zero-merge", "remove"), "wrote")
+        exact([i["id"] for i in json.loads(decisions.read_text())["items"]], ["factory-watchdog"])
+        exact(owner.exists(), False)
+        decisions.write_text(json.dumps({"items": [dict(stale, id="factory-zero-merge")]}))
+        before = decisions.read_bytes()
+        with patch.object(alarms, "take_lock", return_value=None):
+            exact(alarms.clear_stale(decisions, "factory-zero-merge"), "failed")
+        exact(decisions.read_bytes(), before)
+        exact(alarms.board_for(decisions, "prompt-merge-SRW-4"), decisions)
+        exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}

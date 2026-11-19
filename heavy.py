@@ -51,6 +51,11 @@ _SWAP_BASELINE = None
 _SWAP_SAMPLE_LOCK = threading.Lock()
 CRITICAL_PRESSURE_LEVEL = 4
 TERM_GRACE_SECONDS = 5.0
+MAX_RUNTIME_SECONDS = 45 * 60
+LIMIT_RETRY_NS = 30_000_000_000
+LIMIT_EXIT_CODE = 76
+WALL_CLOCK_REASON = "wall-clock limit"
+RUNTIME_LIMIT_ENV = "HEAVY_MAX_RUNTIME_SECONDS"
 WATCHDOG_INTERVAL = 2.0
 WATCHDOG_STALE_SECONDS = 6.0
 REGISTRY_NAME = "heavy-jobs"
@@ -1459,6 +1464,7 @@ def _claim_termination(
     claimant_pid: int,
     expected_workload: Optional[Dict[str, Any]] = None,
     takeover: bool = False,
+    observed_termination: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     with registry.lock():
 
@@ -1478,6 +1484,15 @@ def _claim_termination(
                 return None
             existing = record.get("termination")
             if existing and not takeover:
+                return None
+            if (
+                existing
+                and observed_termination is not None
+                and any(
+                    existing.get(key) != observed_termination.get(key)
+                    for key in ("claimant_pid", "requested_ns", "takeover_ns")
+                )
+            ):
                 return None
             if existing:
                 existing["claimant_pid"] = claimant_pid
@@ -1920,6 +1935,7 @@ def _reserve_job(
     *,
     queue_id: Optional[str] = None,
     role: str = "ordinary",
+    max_runtime_seconds: Optional[float] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     ephemeral_queue = queue_id is None
     snapshot_started_ns = deps.monotonic_ns()
@@ -2030,6 +2046,7 @@ def _reserve_job(
             "workload": None,
             "curtail_request": None,
             "termination": None,
+            "max_runtime_seconds": max_runtime_seconds,
         }
         registry.create(record)
         registry.write_heartbeat(job_id, deps.monotonic_ns())
@@ -2052,12 +2069,13 @@ def _reserve_job(
 
 
 def _update_workload(
-    registry: Registry, job_id: str, workload: Dict[str, Any]
+    registry: Registry, job_id: str, workload: Dict[str, Any], started_ns: int
 ) -> Dict[str, Any]:
     with registry.lock():
 
         def change(record: Dict[str, Any]) -> Dict[str, Any]:
             record["workload"] = workload
+            record["workload_started_ns"] = started_ns
             record["state"] = "running"
             return record
 
@@ -2657,6 +2675,163 @@ def _resume_current(
     return True
 
 
+def _runtime_ceiling_from_environment() -> float:
+    raw = os.environ.get(RUNTIME_LIMIT_ENV, "").strip()
+    if not raw:
+        return float(MAX_RUNTIME_SECONDS)
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or value <= 0:
+        raise HeavyError(RUNTIME_LIMIT_ENV + " must be a positive number of seconds")
+    return min(value, float(MAX_RUNTIME_SECONDS))
+
+
+def _record_ceiling(record: Dict[str, Any]) -> float:
+    return float(record.get("max_runtime_seconds") or MAX_RUNTIME_SECONDS)
+
+
+def _format_duration(seconds: float) -> str:
+    whole = int(seconds)
+    if whole == seconds and whole % 60 == 0:
+        return str(whole // 60) + "m"
+    return "{:g}s".format(seconds)
+
+
+def _limit_notice(record: Dict[str, Any]) -> Optional[str]:
+    if (record.get("termination") or {}).get("reason") != WALL_CLOCK_REASON:
+        return None
+    return "terminated: {} {}".format(
+        WALL_CLOCK_REASON, _format_duration(_record_ceiling(record))
+    )
+
+
+def _pid_alive(pid: Any) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, TypeError, ValueError):
+        return True
+    return True
+
+
+def _limit_action(
+    record: Dict[str, Any],
+    now_ns: int,
+    boot_reader: Callable[[], str],
+) -> Optional[bool]:
+    """Return None when the job is within its ceiling, else whether to take over an earlier claim."""
+    workload = _workload_identity(record)
+    if workload is None or record.get("state") in ("starting", "complete", "removed"):
+        return None
+    started_ns = int(record.get("workload_started_ns") or record.get("created_ns") or now_ns)
+    if now_ns - started_ns < int(_record_ceiling(record) * 1_000_000_000):
+        return None
+    if workload.get("boot_id") != boot_reader():
+        return None
+    termination = record.get("termination")
+    if not termination:
+        return False
+    claimed_ns = int(termination.get("takeover_ns") or termination.get("requested_ns") or 0)
+    if termination.get("reason") == WALL_CLOCK_REASON and (
+        now_ns - claimed_ns >= LIMIT_RETRY_NS
+        or not _pid_alive(termination.get("claimant_pid"))
+    ):
+        return True
+    return None
+
+
+def _limit_claim_active(record: Dict[str, Any], now_ns: int) -> bool:
+    termination = record.get("termination") or {}
+    claimed_ns = int(termination.get("takeover_ns") or termination.get("requested_ns") or 0)
+    return (
+        termination.get("reason") == WALL_CLOCK_REASON
+        and now_ns - claimed_ns < LIMIT_RETRY_NS
+        and _pid_alive(termination.get("claimant_pid"))
+    )
+
+
+def _terminate_for_limit(
+    registry: Registry,
+    record: Dict[str, Any],
+    *,
+    takeover: bool,
+    terminate: Callable[..., bool],
+    table_reader: Callable[[], Dict[int, ProcessInfo]],
+    boot_reader: Callable[[], str],
+) -> bool:
+    workload = _workload_identity(record)
+    claimed = _claim_termination(
+        registry,
+        record["job_id"],
+        WALL_CLOCK_REASON,
+        claimant_pid=os.getpid(),
+        expected_workload=workload,
+        takeover=takeover,
+        observed_termination=record.get("termination") if takeover else None,
+    )
+    if claimed is None:
+        return False
+    success = terminate(
+        workload,
+        reason=WALL_CLOCK_REASON,
+        table_reader=table_reader,
+        boot_reader=boot_reader,
+    )
+    _log_event(
+        registry.directory,
+        "limit-terminated" if success else "limit-terminate-failed",
+        claimed,
+        detail=WALL_CLOCK_REASON,
+    )
+    if success:
+        try:
+            _mark_complete(registry, record["job_id"])
+        except (OSError, HeavyError):
+            pass
+    return success
+
+
+def enforce_runtime_limits(
+    registry: Registry, deps: Optional[SupervisorDeps] = None
+) -> List[str]:
+    """Terminate every job past the wall-clock ceiling and return their job ids."""
+    dependencies = deps or SupervisorDeps()
+    with registry.lock(exclusive=False):
+        job_ids = registry._job_ids()
+    now_ns = dependencies.monotonic_ns()
+    terminated = []
+    for job_id in job_ids:
+        try:
+            if job_id == PROTOCOL_RECORD_ID:
+                continue
+            record = _record(registry, job_id)
+            takeover = _limit_action(record, now_ns, dependencies.boot_reader)
+            if takeover is None:
+                continue
+            if _terminate_for_limit(
+                registry,
+                record,
+                takeover=takeover,
+                terminate=dependencies.terminate,
+                table_reader=dependencies.process_table_reader,
+                boot_reader=dependencies.boot_reader,
+            ):
+                terminated.append(job_id)
+        except Exception:
+            continue
+    return terminated
+
+
+def _reap_over_limit(registry: Registry, deps: Optional[SupervisorDeps] = None) -> None:
+    try:
+        enforce_runtime_limits(registry, deps)
+    except Exception:
+        pass
+
+
 def _supervise_running(
     registry: Registry,
     job_id: str,
@@ -2677,6 +2852,11 @@ def _supervise_running(
     root_exit_code: Optional[int] = None
     while True:
         if watchdog is not None and watchdog.poll() is not None:
+            if _normal_completion(workload, deps):
+                notice = _limit_notice(_record(registry, job_id))
+                if notice:
+                    print("heavy: " + notice, file=sys.stderr)
+                    return LIMIT_EXIT_CODE
             _curtail_current(
                 registry, job_id, workload, "watchdog-failure", deps, workload_process
             )
@@ -2691,6 +2871,10 @@ def _supervise_running(
         if root_exit_code is None:
             root_exit_code = workload_process.poll()
         if root_exit_code is not None and _normal_completion(workload, deps):
+            notice = _limit_notice(_record(registry, job_id))
+            if notice:
+                print("heavy: " + notice, file=sys.stderr)
+                return LIMIT_EXIT_CODE
             return int(root_exit_code)
         current = _record(registry, job_id)
         request = current.get("curtail_request") or {}
@@ -2826,6 +3010,7 @@ def _launch_job(
     started = deps.clock()
     last_message = 0.0
     job_id = None
+    max_runtime_seconds = _runtime_ceiling_from_environment()
     queue_id = _enqueue_job(
         registry,
         task_key=task_key,
@@ -2839,6 +3024,7 @@ def _launch_job(
         while job_id is None:
             if stop_event():
                 return 130
+            _reap_over_limit(registry, deps)
             next_sample = deps.clock() + SAMPLE_INTERVAL
             try:
                 sample = deps.sample()
@@ -2862,6 +3048,7 @@ def _launch_job(
                     deps,
                     queue_id=queue_id,
                     role=role,
+                    max_runtime_seconds=max_runtime_seconds,
                 )
             except Exception as exc:
                 raise HeavyError("cannot safely reserve a heavy job") from exc
@@ -2908,7 +3095,9 @@ def _launch_job(
             getpgid=deps.getpgid,
             getsid=deps.getsid,
         )
-        record = _update_workload(registry, job_id, workload)
+        record = _update_workload(
+            registry, job_id, workload, deps.monotonic_ns()
+        )
         registry.write_heartbeat(job_id, deps.monotonic_ns())
         watchdog_launch = deps.launch_watchdog or _default_launch_watchdog
         watchdog = watchdog_launch(job_id)
@@ -3000,6 +3189,16 @@ def _launch_job(
                     os.close(project_fd)
 
 
+def _job_directory_absent(registry: Registry, job_id: str) -> bool:
+    try:
+        os.lstat(str(registry.directory / job_id))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def watchdog_loop(
     job_id: str,
     registry: Registry,
@@ -3019,6 +3218,9 @@ def watchdog_loop(
         except Exception:
             if cached is None:
                 return 1
+            if not _job_directory_absent(registry, job_id):
+                sleep(WATCHDOG_INTERVAL)
+                continue
             try:
                 if terminate(
                     cached["workload"],
@@ -3078,6 +3280,24 @@ def watchdog_loop(
                 members = None
             if members == []:
                 return 0
+        try:
+            takeover = _limit_action(record, clock_ns(), boot_reader)
+            if takeover is not None:
+                _terminate_for_limit(
+                    registry,
+                    record,
+                    takeover=takeover,
+                    terminate=terminate,
+                    table_reader=table_reader,
+                    boot_reader=boot_reader,
+                )
+                sleep(WATCHDOG_INTERVAL)
+                continue
+        except Exception:
+            pass
+        if _limit_claim_active(record, clock_ns()):
+            sleep(WATCHDOG_INTERVAL)
+            continue
         heartbeat_age = clock_ns() - (heartbeat or 0)
         stale = heartbeat is None or heartbeat_age > int(
             WATCHDOG_STALE_SECONDS * 1_000_000_000
@@ -3095,17 +3315,32 @@ def watchdog_loop(
                     claimant_pid=os.getpid(),
                     expected_workload=cached["workload"],
                     takeover=bool(termination),
+                    observed_termination=termination or None,
                 )
             except Exception:
                 claimed = None
             if claimed is None:
                 try:
                     claimed = _takeover_termination(
-                        registry, job_id, cached["workload"], os.getpid()
+                        registry,
+                        job_id,
+                        cached["workload"],
+                        os.getpid(),
+                        termination,
                     )
                 except Exception:
                     claimed = None
             if claimed is None:
+                try:
+                    latest = _record(registry, job_id)
+                except Exception:
+                    sleep(WATCHDOG_INTERVAL)
+                    continue
+                if latest.get("termination") != (termination or None) or (
+                    _limit_claim_active(latest, clock_ns())
+                ):
+                    sleep(WATCHDOG_INTERVAL)
+                    continue
                 try:
                     success = terminate(
                         cached["workload"],
@@ -3138,11 +3373,19 @@ def watchdog_loop(
 
 
 def _watchdog_takeover_record(
-    record: Dict[str, Any], workload: Dict[str, Any], claimant_pid: int
+    record: Dict[str, Any],
+    workload: Dict[str, Any],
+    claimant_pid: int,
+    observed: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     if _workload_identity(record) != workload or not record.get("termination"):
         return None
     termination = record["termination"]
+    if any(
+        termination.get(key) != observed.get(key)
+        for key in ("claimant_pid", "requested_ns", "takeover_ns")
+    ):
+        return None
     termination["claimant_pid"] = claimant_pid
     termination["takeover_ns"] = monotonic_ns()
     record["termination"] = termination
@@ -3151,12 +3394,18 @@ def _watchdog_takeover_record(
 
 
 def _takeover_termination(
-    registry: Registry, job_id: str, workload: Dict[str, Any], claimant_pid: int
+    registry: Registry,
+    job_id: str,
+    workload: Dict[str, Any],
+    claimant_pid: int,
+    observed: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     with registry.lock():
         return registry.update(
             job_id,
-            lambda current: _watchdog_takeover_record(current, workload, claimant_pid),
+            lambda current: _watchdog_takeover_record(
+                current, workload, claimant_pid, observed
+            ),
         )
 
 
@@ -3316,7 +3565,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
             "Admission requires stable swap, CPU and memory below 95%, and at least max(per-host headroom, 15% RAM) headroom to start or resume (a running job pauses only below max(per-host headroom, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
-            "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
+            "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job.\n"
+            "Every job has a 45 minute wall-clock ceiling (HEAVY_MAX_RUNTIME_SECONDS may only lower it), enforced by the job's own watchdog and by every heavy call. A job terminated this way makes its heavy command exit 76."
         )
         return 0
     try:
@@ -3327,6 +3577,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if role_flag and arguments[:1] in (["status"], ["request-curtail"]):
             raise HeavyError("priority role requires a workload command")
         registry = _safe_registry_for_cli()
+        _reap_over_limit(registry)
         if arguments[:1] == ["status"]:
             if len(arguments) != 1:
                 raise HeavyError("usage: heavy status")

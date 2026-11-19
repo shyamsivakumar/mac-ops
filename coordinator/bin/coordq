@@ -10,6 +10,7 @@ if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
 from gate_bar import GATE_BAR
+import prompt_paths
 from tick_health import tick_alarm
 import gh_gateway
 
@@ -1297,6 +1298,9 @@ def cmd_status(a):
 
 
 
+OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
+
+
 def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
@@ -1304,7 +1308,7 @@ def gh_json(endpoint, optional=True, fresh=False):
     a timer, and not an explicit `gate` an operator asked for."""
     run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
                          timeout=40, limit=FLOOR if optional else None,
-                         fresh=fresh)
+                         fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
@@ -1476,7 +1480,88 @@ def failed_gate_reviewer(queue, key, current, failure, models=()):
     return None
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None):
+def gate_changed_count(repo, number):
+    """The pull request's own changed-file count, or None when unreadable.
+
+    The count is what tells a complete file list from a capped one, so a list
+    read without it is deferred rather than trusted. Every read here is
+    paginated and slurped, so one pull request arrives as the single row of
+    a list: the count is read from that row, never from the list itself.
+    """
+    try:
+        rows = gh_json(f"repos/{repo}/pulls/{number}")
+    except (RuntimeError, ValueError, subprocess.SubprocessError):
+        return None
+    pull = rows[0] if isinstance(rows, list) and rows else rows
+    count = pull.get("changed_files") if isinstance(pull, dict) else None
+    return count if isinstance(count, int) else None
+
+
+BASE_PIN_TTL = 60
+_base_pins = {}
+
+
+def pinned_base(repo, base):
+    """The commit a base branch points at, read once a minute per branch.
+
+    A compare that names the branch moves with the branch and can never be
+    cached. A compare of two commits cannot move, so the branch is pinned to
+    its commit first and the compare is kept on disk.
+    """
+    pin = _base_pins.get((repo, base))
+    if pin and time.time() - pin[1] < BASE_PIN_TTL:
+        return pin[0]
+    rows = gh_json(f"repos/{repo}/git/ref/heads/{base}")
+    sha = ((rows[0] if rows else {}).get("object") or {}).get("sha")
+    if not isinstance(sha, str) or not sha:
+        raise RuntimeError(f"cannot read the commit of {repo} {base}")
+    _base_pins[(repo, base)] = (sha, time.time())
+    return sha
+
+
+def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, attempts=2):
+    """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
+
+    The paths are classified from the merge base and the head the gate
+    pinned, never from the pull request's current file list. A file list is
+    read by pull-request number, so it describes whatever head GitHub holds
+    at that moment: a code-only revision with the same file count could
+    clear a prompt-changing head, and `--match-head-commit` still merges
+    when the prompt head is restored before the merge. The trees of the two
+    pinned commits cannot move, so their diff is the answer. A read GitHub
+    cannot give is retried, then reported UNKNOWN, because CLEAR is what
+    authorizes the merge a gate brief orders.
+
+    A caller with no pinned pair has only the file list; that list is read
+    and a truncated or short one is UNKNOWN, never CLEAR.
+    """
+    if base and head:
+        try:
+            pinned = pinned_base(repo, base)
+        except RuntimeError:
+            return prompt_paths.UNKNOWN
+        return prompt_paths.scan_diff(gh_json, repo, pinned, head, attempts)
+    count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
+    for _ in range(max(1, attempts)):
+        try:
+            pages = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
+            continue
+        files = pages
+        if not isinstance(files, list):
+            continue
+        if not prompt_paths.list_is_complete(files, count):
+            continue
+        return prompt_paths.prompt_scan(prompt_paths.entries_paths(files))
+    return prompt_paths.UNKNOWN
+
+
+# A gate request the queue must not build: the changed files could not be read,
+# so the brief could order a merge of prompt text. The caller defers it.
+DEFER = object()
+
+
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main"):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -1484,8 +1569,9 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     whichever way it was queued."""
     key = f"gate:{repo}#{number}:{head}"
     from gate_policy import build_gate_brief
-    message = build_gate_brief(settings, repo, issue, number, head, publisher,
-                               proof=proof, proof_path=proof_path, proof_state=proof_state)
+    message = build_gate_brief(settings, repo, issue, number, head, publisher, base=base,
+                               proof=proof, proof_path=proof_path, proof_state=proof_state,
+                               prompt=prompt)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
@@ -1582,13 +1668,29 @@ def gate_candidates(config):
                     continue
                 key = f"gate:{repo}#{number}:{head}"
                 proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
+                prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                                           (pr.get("base") or {}).get("ref"), head)
+                if prompt == prompt_paths.UNKNOWN:
+                    print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
+                          file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                           "reason": "changed-file list unreadable, gate deferred"}
+                    break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
                        "builderModels": models,
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
-                                         proof=proof, proof_path=proof_path, proof_state=proof_state)}
+                                         proof=proof, proof_path=proof_path, proof_state=proof_state,
+                                         prompt=prompt == prompt_paths.HOLD,
+                                         base=(pr.get("base") or {}).get("ref") or "main")}
                 break
             else:
                 found = gate_request(repo, pr, settings, config, receipts, login)
+                if found is DEFER:
+                    print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
+                          file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                           "reason": "changed-file list unreadable, gate deferred"}
+                    continue
                 if found:
                     key, args, models = found
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
@@ -1920,8 +2022,14 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
             return None
         key = f"gate:{repo}#{number}:{head}"
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
+        prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                                   (pr.get("base") or {}).get("ref"), head)
+        if prompt == prompt_paths.UNKNOWN:
+            return DEFER
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
-                               proof=proof, proof_path=proof_path, proof_state=proof_state), builder_models(thread, runs)
+                               proof=proof, proof_path=proof_path, proof_state=proof_state,
+                               prompt=prompt == prompt_paths.HOLD,
+                               base=(pr.get("base") or {}).get("ref") or "main"), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
                        optional=optional, fresh=fresh)
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
@@ -1933,8 +2041,14 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
         return None
     key = f"gate:{repo}#{number}:{head}"
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
+    prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                               (pr.get("base") or {}).get("ref"), head)
+    if prompt == prompt_paths.UNKNOWN:
+        return DEFER
     return key, gate_args(settings, repo, None, number, head, publisher, model,
-                           proof=proof, proof_path=proof_path, proof_state=proof_state), []
+                           proof=proof, proof_path=proof_path, proof_state=proof_state,
+                           prompt=prompt == prompt_paths.HOLD,
+                           base=(pr.get("base") or {}).get("ref") or "main"), []
 
 
 def parse_ref(ref):
@@ -1986,6 +2100,9 @@ def cmd_gate(a):
     # An explicit gate is a required read: the floor applies to polling.
     found = gate_request(repo, pr, settings, config, load_receipts(), login,
                          optional=False, fresh=True)
+    if found is DEFER:
+        die(f"refused: the changed files of {repo}#{number} could not be read, and a gate "
+            "that cannot read them might order a merge of prompt text. Retry the gate.")
     if not found:
         die(
             f"refused: no passing builder check of {repo}#{number} names the "

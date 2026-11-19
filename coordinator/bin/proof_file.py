@@ -10,6 +10,8 @@ import base64
 import json
 import subprocess
 
+import gh_gateway
+
 PROOF_NAME = "check-proof.md"
 DEFAULT_PROOF = f"evidence/{PROOF_NAME}"
 
@@ -43,8 +45,8 @@ def fetch(repo, path, head):
     if not path:
         return MISSING, None
     try:
-        run = subprocess.run(["gh", "api", f"repos/{repo}/contents/{path}?ref={head}"],
-                              capture_output=True, text=True, timeout=60)
+        run = gh_gateway.run(["gh", "api", f"repos/{repo}/contents/{path}?ref={head}"],
+                             timeout=60)
     except subprocess.TimeoutExpired:
         return UNREADABLE, "the read timed out"
     except OSError as exc:
