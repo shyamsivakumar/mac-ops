@@ -1843,6 +1843,106 @@ def _tree_matches(
     return current == snapshot
 
 
+def _link_copy(source: Path, destination: Path) -> dict[str, tuple[int, int, int, int]] | None:
+    """Hard link every file of a checkout into a copy that shares its inodes.
+
+    A save or a mode change that lands through the inode after the last
+    check is visible through the copy, so it can be found and kept after
+    the checkout is gone. None means the copy could not be made.
+    """
+    stamps: dict[str, tuple[int, int, int, int]] = {}
+    try:
+        destination.mkdir(mode=0o700, parents=True)
+        for directory, names, files in os.walk(source, followlinks=False):
+            relative = Path(directory).relative_to(source)
+            if relative == Path("."):
+                names[:] = [name for name in names if name != ".git"]
+                files = [name for name in files if name != ".git"]
+            for name in names:
+                (destination / relative / name).mkdir(mode=0o700, exist_ok=True)
+            for name in files:
+                origin = Path(directory) / name
+                info = os.lstat(origin)
+                if stat.S_ISLNK(info.st_mode):
+                    os.symlink(os.readlink(origin), destination / relative / name)
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    return None
+                os.link(origin, destination / relative / name, follow_symlinks=False)
+                stamps[str(relative / name)] = (info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode)
+    except OSError:
+        return None
+    return stamps
+
+
+def _late_changes(copy: Path, stamps: dict[str, tuple[int, int, int, int]]) -> list[str]:
+    """The files of the copy that no longer match the stamp taken with it."""
+    changed: list[str] = []
+    for name, stamp in stamps.items():
+        try:
+            info = os.lstat(copy / name)
+        except OSError:
+            changed.append(name)
+            continue
+        if (info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode) != stamp:
+            changed.append(name)
+    return changed
+
+
+def _remove_verified_worktree(
+    repo_root: Path, path: Path, registration: Path, identity: str, state_root: Path
+) -> tuple[bool, str, list[str]]:
+    """Remove the worktree that was verified, through git.
+
+    The checkout is renamed to a private name first and its registration is
+    pointed at that name, so `git worktree remove` can only reach this
+    registration and never a different worktree that takes the path later.
+    The hard linked copy made before the removal keeps any save that lands
+    after git has checked the checkout. A prune of the repository is never
+    run: it would drop the registration of an unrelated worktree.
+    """
+    aside = path.parent / f".cleaner-removing-{os.getpid()}-{os.urandom(6).hex()}"
+
+    def put_back(reason: str) -> tuple[bool, str, list[str]]:
+        if _rename_exclusive(aside, path):
+            run(["git", "-C", str(repo_root), "worktree", "repair", str(path)])
+        return False, reason, []
+
+    if not _rename_exclusive(path, aside):
+        return False, "worktree_move_failed", []
+    try:
+        info = os.lstat(aside)
+    except OSError:
+        info = None
+    if info is None or f"{info.st_dev}:{info.st_ino}" != identity:
+        return put_back("worktree_replaced_before_remove")
+    repaired = run(["git", "-C", str(repo_root), "worktree", "repair", str(aside)])
+    if repaired.returncode != 0 or not _registration_belongs_to(registration, repo_root, aside):
+        return put_back("worktree_registration_mismatch")
+    storage = _trash_for(state_root / "cleanup-trash", path)
+    copy = storage / f"late-saves-{os.getpid()}-{os.urandom(6).hex()}"
+    stamps = _link_copy(aside, copy)
+    if stamps is None:
+        shutil.rmtree(copy, ignore_errors=True)
+        return put_back("worktree_copy_failed")
+    removal = run(["git", "-C", str(repo_root), "worktree", "remove", str(aside)])
+    if removal.returncode != 0:
+        if (aside / ".git").exists():
+            shutil.rmtree(copy, ignore_errors=True)
+            return put_back("worktree_removal_refused")
+        _record_recovery(state_root, copy)
+        return False, "worktree_not_fully_removed", []
+    if registration.exists():
+        _record_recovery(state_root, copy)
+        return False, "worktree_not_fully_removed", []
+    changed = _late_changes(copy, stamps)
+    if changed:
+        _record_recovery(state_root, copy)
+        return True, "", changed
+    shutil.rmtree(copy, ignore_errors=True)
+    return True, "", []
+
+
 def _claim_index_lock(worktree: Path) -> Path | None:
     """Claim the lock of the index of a worktree.
 
@@ -2505,33 +2605,20 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["eligible"] = False
                         candidate["reasons"] = ["worktree_locked"]
                         continue
-                    # Git removes the worktree and its registration. It refuses a
-                    # worktree that is dirty, locked or changed under the check, so a lock
-                    # taken after the check keeps the checkout. The index lock stays held
-                    # until the removal is done.
-                    tree_gone = False
-                    registration_gone = False
-                    try:
-                        git(repo_root, "worktree", "remove", str(candidate["path"]))
-                    except (SafetyError, OSError):
-                        tree_gone = False
-                    else:
-                        tree_gone = True
-                        registration_gone = True
-                        # Git prints the preview of the prune on stderr. The prune is run
-                        # only when it would drop nothing, so the registration that is the
-                        # last reference to a commit that was never published stays.
-                        preview = run(["git", "-C", str(repo_root), "worktree", "prune", "--dry-run", "--verbose"])
-                        pending = (preview.stdout + preview.stderr).strip()
-                        if preview.returncode != 0 and not pending:
-                            pending = "the preview of the prune failed"
-                        if not pending:
-                            try:
-                                git(repo_root, "worktree", "prune")
-                            except (SafetyError, OSError):
-                                pass
-                        else:
-                            candidate["prune_skipped"] = pending
+                    # The index lock stays held until the removal is done.
+                    removed_ok, refusal, late_saves = _remove_verified_worktree(
+                        repo_root, Path(candidate["path"]), registration, identity, state_root
+                    )
+                    tree_gone = registration_gone = removed_ok
+                    if late_saves:
+                        candidate["late_saves_kept"] = late_saves
+                    if refusal and refusal != "worktree_not_fully_removed":
+                        _release_index_lock(index_lock)
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = [refusal]
+                        continue
                     candidate["kept_entries"] = kept
                     prune_results.append({
                         "repo": str(repo_root), "worktree": candidate["path"],
