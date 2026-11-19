@@ -51,6 +51,7 @@ export function awayCounts(events, from, to, isMerged) {
 }
 
 const WEEK = 7 * 86400000;
+const MIN_NEEDS_STAY = 60000;
 
 export function actRates(events, now) {
   const rows = new Map();
@@ -65,6 +66,7 @@ export function actRates(events, now) {
       const next = starts.find((e) => e.t > entry.t);
       const act = acts.find((e) => e.t >= entry.t && (!next || e.t < next.t));
       const row = rows.get(entry.src) ?? { src: entry.src, entered: 0, acted: 0, ignored: 0 };
+      if (!act && (end ? end.t : now) - entry.t < MIN_NEEDS_STAY) continue;
       row.entered += 1;
       if (act) row.acted += 1;
       else if (end) row.ignored += 1;
