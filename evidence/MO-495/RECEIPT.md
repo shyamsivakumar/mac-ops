@@ -82,9 +82,19 @@ an unknown owner and is never signalled. A SIGTERM that raises an error is not
 counted as a stopped process, and a SIGKILL that raises an error is taken back
 out of the count.
 
-A person who boots the same named device during the job still satisfies the
-ownership check for that device. Heavy cannot tell that boot from the job's own,
-so that case stays open and is listed in the pull request under `Left for later`.
+A `simctl` job names a device only through `boot` or `bootstatus -b`, so a job
+that only lists, launches, installs, or shuts down a device is never credited
+with booting it. A device that has a live process outside the simulator
+infrastructure naming its identifier (Simulator.app with `-CurrentDeviceUDID`,
+or a person's `simctl` command) is treated as in use by someone else and is not
+shut down. Heavy reads the process table again right before each shutdown for
+this check.
+
+One case stays open and is listed in the pull request under `Left for later`. A
+person who boots the same named device headlessly during an `xcodebuild` job,
+and leaves no process that names its identifier, cannot be told from the job's
+own boot, because the parent of the simulator launchd is pid 1 and the process
+table does not show who asked for the boot.
 
 ## M1 device and live testing
 
