@@ -3,7 +3,10 @@
 Status: design proposal for [#505](https://github.com/shyamsivakumar/mac-ops/issues/505)
 (MO-1069), written 2026-11-18. Nothing here is built. Every threshold is a
 proposal until a first trial confirms it. Building is a later ticket after
-Shyam reviews this note.
+Shyam reviews this note. Until that build exists and the #507 task set has its
+20 tasks, loop, prompt and skill changes ship under the ship-and-score rule in
+[evals.md](evals.md), and each gets a trial after the fact once the harness can
+run one.
 
 ## Problem
 
@@ -11,8 +14,9 @@ Today a change to the loop, a prompt or a skill is judged by how many PRs
 merged afterward. That count can rise while the code gets worse. A shorter
 rule file can make builders finish faster and skip work. A new skill can add
 cost and change nothing. Merge counts cannot tell those cases apart, and they
-are noisy: mac-ops alone merged 100 PRs in the 2.5 days from 2026-11-16 to
-2026-11-19, with no record of which change each PR ran under.
+are noisy. The last 100 merged mac-ops PRs (from `gh pr list --state merged`)
+span 2026-11-16 08:22 UTC to 2026-11-19 02:53 UTC, and nothing records which
+change each PR ran under.
 
 The fix is a with-and-without trial. Run the same tickets under the current
 setup and under the changed setup, compare outcomes, and keep the change only
@@ -20,19 +24,18 @@ when the comparison says it helps.
 
 ## What counts as a change
 
-A change is any diff to text that steers an agent.
+A change is any diff to text or config that steers an agent.
 
 | Kind | Where it lives |
 | --- | --- |
-| Builder rules and prompts | `coordinator/config/AGENT-RULES.md`, `coordinator/config/agents/`, the brief template in `coordinator/config/tickets.json` |
+| Builder rules and prompts | `coordinator/config/AGENT-RULES.md` and the `template` key of `coordinator/config/tickets.json` |
 | Skills | `runtime/codex/skills/<name>/SKILL.md` in llmwiki |
-| Loop policy | `coordinator/bin/gate_policy.py`, `coordinator/bin/gate_reviewers.py`, `coordinator/models.json`, the turn caps |
+| Loop policy | `coordinator/bin/gate_policy.py`, `coordinator/bin/gate_reviewers.py`, `coordinator/config/agents/code-reviewer.md`, `coordinator/config/hooks.json`, `coordinator/models.json`, the turn caps in `coordinator/overnight/turn_cap.py` |
 
-The first two kinds are builder inputs. A single builder agent can run them
-inside a container against one ticket, so the trial below can measure them.
-The third kind changes how the Coordinator routes and gates work across many
-tickets. A single-ticket trial cannot see that, so it gets the live metrics in
-the last section instead.
+The first two kinds are builder inputs. A single builder agent can read them
+inside a container against one ticket. The third kind changes how the
+Coordinator routes and gates work across many tickets, and a single-ticket
+trial cannot see that, so it gets the live metrics in the last section.
 
 ## Design fit
 
@@ -41,9 +44,9 @@ The trial reuses the harness from [#507](https://github.com/shyamsivakumar/mac-o
 in a Linux container with hidden tests. Nothing in it is replaced. The trial
 adds three things on top.
 
-1. An **arm**: a named overlay that swaps the prompt, rules and skills the
-   agent sees. The baseline arm is the current `main`. The change arm is the
-   same tree with the proposed diff applied.
+1. An **arm**: a named overlay that swaps the rules and skills the agent sees.
+   The baseline arm is the current `main`. The change arm is the same tree
+   with the proposed diff applied.
 2. A **comparison step** that reads the Harbor result files of two arms and
    writes one table.
 3. A **proof file** under `evidence/` that the PR carries.
@@ -52,10 +55,14 @@ The trial ships as a script beside the harness, not as a new service. No
 permission, guard, sandbox or live-service change is needed, because trials
 run in disposable containers on the model endpoint the harness already uses.
 
-How the overlay reaches the agent depends on how the pi adapter in Harbor
-loads its rules and skills. That has not been read for this note, so the build
-ticket starts by confirming it. If pi can only read rules from a fixed path,
-the arm mounts the overlay at that path.
+Two facts are not yet established, and the build ticket settles both before
+anything else. First, how the pi adapter in Harbor loads rules and skills. Its
+source was not read for this note. If pi reads rules only from a fixed path,
+the arm mounts the overlay at that path. Second, what the agent is told. The
+#507 tasks give the agent the ticket text only, so a trial measures the rules
+and skills against bare tickets. It does not exercise the Coordinator brief,
+hooks or reviewer. The build ticket decides whether to build each task
+instruction from the brief template so the trial is closer to production.
 
 ## Sample
 
@@ -67,40 +74,63 @@ whose check needs macOS cannot run in the container and are left out.
 **Repeats.** 3 runs per task per arm. One run says little because the same
 agent can pass and fail the same task.
 
-**Trials per arm.** 20 tasks × 3 repeats = 60.
+**Trials per arm.** 20 tasks x 3 repeats = 60.
 
-**Controls.** Each baseline version also gets an A/A run, which is the
-baseline run twice. The gap between the two baseline runs is the noise floor.
-A change has to beat that gap.
+**Decision unit.** The task. For each task, count the runs that passed under
+each arm. The task is "up" if the change arm passed more runs, "down" if fewer,
+and dropped if equal. A one-sided sign test on up against down gives the
+p-value, which is the exact binomial chance of at least that many ups out of
+up plus down if the change did nothing.
 
-**Why 20 tasks is a screen and 40 is a decision.** The decision unit is the
-task. For each task, count the runs that passed under each arm and call the
-task "up" if the change arm passed more, "down" if fewer, and drop ties. A
-sign test on up against down gives the p-value. The table lists what the test
-can and cannot see, from an exact calculation and a simulation of 20 and 40
-tasks with 3 repeats and task difficulty spread from easy to hard.
+**A/A control.** Each baseline version also gets an A/A run, which is the
+baseline arm run a second time over the same tasks. Counting up and down
+between the two baseline runs gives the A/A net, the absolute value of up minus
+down. It measures how far the arm moves with no change at all.
 
-| Up / down | One-sided p |
-| --- | --- |
-| 4 / 0 | 0.062 |
-| 5 / 0 | 0.031 |
-| 6 / 1 | 0.062 |
-| 7 / 2 | 0.090 |
-| 6 / 2 | 0.145 |
+**Two stages.**
 
-| Tasks | True effect on the odds of passing | Chance the test accepts |
+- Stage 1, screen: 20 tasks. Accept the pass-rate claim when p is at most 0.10.
+- Stage 2, confirm: 40 tasks, which are the original 20 plus 20 new ones. The
+  stage 2 decision uses all 40 and requires p of at most 0.05, because the
+  second look at the same data raises the chance of a false accept.
+
+Smallest accepting number of ups for each number of downs, from the exact
+calculation.
+
+| Downs | Ups needed at 20 tasks (p <= 0.10) | Ups needed at 40 tasks (p <= 0.05) |
 | --- | --- | --- |
-| 20 | none | 5% |
-| 20 | modest (+0.5 log-odds, about 50% to 62%) | 27% |
-| 20 | large (+1.0 log-odds, about 50% to 73%) | 63% |
-| 40 | none | 7% |
-| 40 | modest | 46% |
-| 40 | large | 89% |
+| 0 | 4 | 5 |
+| 1 | 6 | 7 |
+| 2 | 7 | 9 |
+| 3 | 9 | 10 |
+| 4 | 10 | 12 |
+| 5 | 12 | 13 |
 
-Twenty tasks catch only large effects, and miss one in three even then. Forty
-tasks catch large effects nine times in ten. A change that shows a modest
-gain at 20 tasks is not accepted; it is queued for the 40-task confirm run.
-The build ticket grows the task set from 20 to 40 once the first 20 work.
+A stage 1 result is **borderline** when up exceeds down and p is above 0.10
+and at most 0.25 (for example 5 / 1 or 6 / 2). Borderline results go to stage
+2. Anything with p above 0.25 is rejected.
+
+How often each stage accepts, by simulation. Each task gets a baseline pass
+probability drawn from a Beta(0.8, 0.8) spread (some tasks easy, some hard,
+which fits a mix of merged fixes). The change adds a fixed shift on the
+log-odds scale to every task. Each row is 3,000 simulated trials, so figures
+carry about two points of noise. These figures model the sign test only. The
+real rule below also needs the other conditions, so the real chance of
+accepting is lower.
+
+| Stage | True effect | Chance the sign test accepts |
+| --- | --- | --- |
+| 1 (20 tasks, p <= 0.10) | none | 6% |
+| 1 | modest (+0.5, about 50% to 62% pass) | 27% |
+| 1 | large (+1.0, about 50% to 73% pass) | 63% |
+| 2 (40 tasks, p <= 0.05) | none | 3% |
+| 2 | modest | 31% |
+| 2 | large | 82% |
+
+Twenty tasks catch only large effects and miss more than a third of those.
+Forty tasks at the stricter bar still miss about one large effect in five, and
+most modest effects. This design finds big changes and cannot reliably find
+small ones. A change worth less than the modest row is not worth trialing.
 
 ## Metrics
 
@@ -111,21 +141,23 @@ errored, as counts out of 60. Timed out and errored are kept apart from
 failed, because a change that breaks the agent's start-up looks like a mass
 of errors, not a mass of wrong answers.
 
-**Cost and time.** `cost_usd` per run (needs a priced provider, since the
-custom MiniMax endpoint reports `null` today), tokens, and wall-clock seconds.
-Report the median and the 90th percentile.
+**Cost and time.** `cost_usd` per run, total tokens, and wall-clock seconds,
+each as a median and a 90th percentile. The custom MiniMax endpoint reports
+`cost_usd` as `null` today (see `evals/harbor/README.md`). While it is `null`,
+every cost condition below uses total tokens instead. The cost conditions
+switch back to dollars once a priced provider is in use.
 
 **Quality guards.** The reward is 1 or 0, so it cannot see code that passes
 and is worse. Three guards, recorded for every trial.
 
 - Diff size ratio: lines changed by the agent divided by lines in the merged
-  PR diff. A change that passes with 3× the diff is not equal.
+  PR diff. A change that passes with 3x the diff is not equal.
 - Out-of-scope files: files the agent touched that the merged diff did not.
 - Repo check: the repo's own lint or check, where it runs on Linux.
 
-Guards are scorecards in the sense of the [eval scorecard](evals.md). They
-are reported and they steer the next fix. Only the accept rule below acts on
-them, and only through the limits it names.
+The [eval scorecard](evals.md) reports its metrics and does not block on them.
+The guards are reported the same way for every trial. Only the diff size
+ratio also acts as a limit in the accept rule below.
 
 ## How a change is accepted
 
@@ -133,34 +165,35 @@ A change PR declares one claim before the trial runs.
 
 **Claim A, it helps pass rate.** Accept when all of these hold.
 
-1. Up exceeds down, and the one-sided sign test gives p ≤ 0.10. At 20 tasks
-   that means 5 / 0, 6 / 1 or better.
-2. Up minus down is larger than the A/A gap on the same tasks.
+1. The sign test passes the stage bar: p of at most 0.10 at stage 1, or at most
+   0.05 at stage 2, using the tables above.
+2. Up minus down is larger than the A/A net on the same tasks.
 3. Timed out plus errored rises by at most 2 runs.
 4. Median cost and median wall-clock time are each no more than 25% above
    baseline.
-5. Median diff size ratio is no more than 1.5× baseline.
+5. Median diff size ratio is no more than 1.5x baseline.
 
 **Claim B, it does no harm and cuts cost or time.** This is the claim for
 trimming a rule file or a skill. Accept when all of these hold.
 
-1. Down minus up is at most 2 tasks.
-2. Median cost or median wall-clock time falls by at least 15%.
-3. Conditions 3 to 5 of claim A hold.
+1. Down minus up is at most 2, and down is at most 4.
+2. Down is no more than the A/A run's down count plus 2.
+3. Median cost or median wall-clock time falls by at least 15%, and neither
+   one rises by more than 5%.
+4. Conditions 3 and 5 of claim A hold.
 
-At 20 tasks "at most 2 down" cannot rule out a small real loss. That is the
-reason claim B also asks for a measured saving, so a change is only kept when
-it buys something in return for the risk.
+At 20 tasks a small real loss can still pass rule 1. Rule 3 is the reason claim
+B asks for a measured saving, so a change is only kept when it buys something
+in return for the risk.
 
-A change that fails its claim is reverted or not merged. A change that cannot
-be trialed because it has no builder-visible effect (a loop-policy change, see
-above) is marked `untrialed` in the PR and watched on the live metrics for 14
-days, then kept or reverted on those.
+A change that fails its claim is reverted or not merged. A change that has no
+builder-visible effect (a loop-policy change) is marked `untrialed` in the PR
+and watched on the live metrics for 14 days, then kept or reverted on those.
 
-The [eval scorecard](evals.md) says scorecards never block a
-merge, and that holds for the governor and controller. Loop, prompt and skill
-changes are a different decision, and the ticket asks for a keep-only-if-it-
-helps rule, so the accept rule above does block these changes. Shyam should
+The [eval scorecard](evals.md) says scorecards never block a merge, and that
+holds for the governor and controller. Loop, prompt and skill changes are a
+different decision, and the ticket asks for a keep-only-if-it-helps rule, so
+the accept rule above blocks these changes once the harness exists. Shyam should
 confirm that split when he reviews this note.
 
 ## Process
@@ -171,28 +204,33 @@ flowchart TD
     B -- no --> U[Mark untrialed, watch live metrics 14 days]
     B -- yes --> C[Build baseline and change arms]
     C --> D[Run A/A baseline if none exists for this main]
-    D --> E[Run both arms, 20 tasks x 3 repeats, through heavy]
+    D --> E[Run both arms, stage 1: 20 tasks x 3 repeats, through heavy]
     E --> F[compare writes table and proof file]
     F --> G{Accept rule met?}
     G -- yes --> H[Merge with proof file in PR]
-    G -- "borderline at 20" --> I[Queue for 40-task confirm run]
+    G -- "borderline" --> I[Stage 2: grow to 40 tasks, rerun both arms]
     G -- no --> R[Revert or close PR]
-    I --> E
+    I --> F
 ```
 
 ## Cost and time
 
-These numbers are estimates and the first trial replaces them. A full trial is
-120 runs (60 per arm) plus 60 for a fresh A/A baseline. The #507 example run
-took 32 seconds, but a real fix will take far longer; at 8 minutes a run, one
-arm is about 8 hours one run at a time, and Docker runs go through `heavy`,
-one at a time, on this Mac. A trial is therefore an overnight job, and a
-change that has no claim worth that time should not be trialed. Per-run
-dollar cost needs a priced provider, as noted above.
+These numbers are estimates and the first trial replaces them. Take 8 minutes
+per run as the working figure; the #507 example run took 32 seconds, but a real
+fix will take far longer. Docker work goes through `heavy`, one command at a
+time on this Mac. If Harbor runs several containers inside one `heavy` job, the
+times divide by that concurrency, and the build ticket measures it.
 
-Mitigation, in order of effort. Reuse the A/A baseline across changes made on
-the same `main`. Run the change arm first on 10 tasks and stop on 4 or more
-down. Raise Docker concurrency only if `heavy` allows it.
+| Trial | Runs | Serial time at 8 minutes a run |
+| --- | --- | --- |
+| Stage 1, both arms | 120 | 16 hours |
+| A/A baseline | 60 | 8 hours |
+| Stage 2, both arms | 240 | 32 hours |
+
+A stage 1 trial with a fresh A/A is about 24 hours serial, so it is a
+multi-night job, not an overnight one. A change with no claim worth that time
+should not be trialed. Reuse one A/A baseline across all changes made on the
+same `main`.
 
 ## What the trial cannot measure
 
@@ -200,8 +238,9 @@ down. Raise Docker concurrency only if `heavy` allows it.
 - Coordinator behavior across tickets: ordering, gate rounds, model routing.
   These changes are watched live instead, on rework rate (a PR followed by a
   revert or a fix that references it within 7 days), gate rounds per PR, and
-  the share of builder turns over 10 minutes from `loop/caps.log`. Merge count
-  stays on the dashboard but is not a decision input.
+  the share of builder turns over 10 minutes, which comes from the turn cap
+  log written by `coordinator/overnight/turn_cap.py` (`caps.log` in that
+  folder). Merge count stays on the dashboard but is not a decision input.
 - Whether 20 or 40 old tickets represent the next ticket. Refresh the task
   set from newly merged PRs each quarter, and keep the A/A control so drift in
   the task set shows up as noise, not as a false win.
@@ -209,6 +248,6 @@ down. Raise Docker concurrency only if `heavy` allows it.
 ## Not in this ticket
 
 Everything above is a proposal. This ticket writes the note only. The build
-ticket should cover the arm overlay, the compare script, the proof file
-format, and the first A/A run, in that order, after Shyam's review and after
-ticket 507 has its 20 tasks.
+ticket should cover, in order, the two open facts under Design fit, the arm
+overlay, the compare script, the proof file format, and the first A/A run,
+after Shyam's review and after ticket 507 has its 20 tasks.
