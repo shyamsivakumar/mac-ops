@@ -41,6 +41,13 @@ is blocked, the caller waits and says so.
   builder of the list, a blocked provider, the shared root of a repository -
   takes no send: the work starts a fresh thread on the chosen builder
   instead, in the same worktree when the thread has one.
+- The lane driver sends no work to a protected destination. A herdr
+  branch is Shyam's to merge, and a folder herdr made is his whatever
+  branch it sits on, so a herdr branch, a herdr folder, the folder a path
+  resolves to, a detached head and a branch that cannot be read are all
+  refused: the work starts again on the verified pull request branch, or
+  waits. The branch is read as a full ref, so a tag that shares a branch
+  name cannot hide it.
 - The lane driver's dead-run recovery names a builder as out only when the
   provider's own failure message says so, and only when that failure
   belongs to the run that stopped: an earlier run's quota error is not the
