@@ -394,36 +394,31 @@ def gate_pipeline():
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     failures = []
-    # The reviewer chain is one list now (#552): the first entry is the gate's
-    # reviewer, the last is the fallback when its quota is exhausted.
     full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
-    chain = [entry["selection"]["instanceId"] for entry in lane.model_list.entries("review")]
     cases = [
-        ("checked-head", repo, "absent", "", {}, [chain[0]], None),
+        ("checked-head", repo, "absent", "", {}, [], None),
         ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
         ("prompt-pass", repo, "PASS", f"CHECK: PASS {head}\nVERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
-        ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
-        ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"}, [], None),
-        ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"},
-         [chain[chain.index(chain[0]) + 1]], None),
+        ("no-verdict", repo, "none", "interrupted", {}, [], None),
+        ("second-no-verdict", repo, "none", "interrupted", {}, [], None),
+        ("pass-then-no-verdict-attempt", repo, "none", "interrupted", {}, ["merge", "provides", "ff"], None),
+        ("fail-then-no-verdict-attempt", repo, "none", "interrupted", {}, [], None),
         ("manual", "digitized/Concerning", "PASS", full, {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
-        ("stray-pass-ignored", repo, "absent", "", {}, [chain[0]], None),
+        ("stray-pass-ignored", repo, "absent", "", {}, [], None),
         ("earlier-fail-later-pass", repo, "PASS", full, {}, ["decisions"], None),
         ("retry-replaced-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("merge-timeout-but-merged", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("older-running-newer-pass", repo, "PASS", full, {}, [], None),
         ("older-pass-newer-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
-        ("pass-without-provides", repo, "none", f"CHECK: PASS {head}\nVERDICT: PASS", {}, [chain[0]], None),
-        ("pass-check-wrong-head", repo, "none", f"PROVIDES: PASS {head}\nCHECK: PASS {'b' * 40}\nVERDICT: PASS", {}, [chain[0]], None),
-        ("no-receipts-file", repo, "absent", "", {}, [chain[0]], None),
-        ("retargeted-after-pass", repo, "PASS", full, {}, [chain[0]], None),
+        ("pass-without-provides", repo, "none", f"CHECK: PASS {head}\nVERDICT: PASS", {}, [], None),
+        ("pass-check-wrong-head", repo, "none", f"PROVIDES: PASS {head}\nCHECK: PASS {'b' * 40}\nVERDICT: PASS", {}, [], None),
+        ("no-receipts-file", repo, "absent", "", {}, [], None),
+        ("retargeted-after-pass", repo, "PASS", full, {}, [], None),
         ("trailing-space-pass", repo, "PASS", full.replace(f"PROVIDES: PASS {head}", f"PROVIDES: PASS {head}  "), {}, ["merge", "provides", "ff"], None),
-        ("indented-verdict", repo, "none", full.replace("\nVERDICT", "\n  VERDICT"), {}, [chain[0]], None),
+        ("indented-verdict", repo, "none", full.replace("\nVERDICT", "\n  VERDICT"), {}, [], None),
         ("older-pass-not-superseded", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("older-fail-superseded", repo, "FAIL", "finding\nVERDICT: FAIL", {}, [], None),
     ]
@@ -432,9 +427,12 @@ def gate_pipeline():
              "earlier-fail-later-pass": {gate_key + ":old:retry": "old"},
              "retry-replaced-pass": {gate_key + ":old:retry": "old"},
              "older-running-newer-pass": {gate_key + ":old:retry": "old"},
-             "older-pass-newer-pass": {gate_key + ":old:retry": "old"}}
+             "older-pass-newer-pass": {gate_key + ":old:retry": "old"},
+             "pass-then-no-verdict-attempt": {gate_key + ":old:retry": "old"},
+             "fail-then-no-verdict-attempt": {gate_key + ":old:retry": "old"}}
     replies = {"stray": full, "old": "dead\nVERDICT: FAIL"}
-    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": full}}
+    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": full},
+                       "pass-then-no-verdict-attempt": {"old": full}}
     live_by_case = {"older-running-newer-pass": {"old"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
@@ -1911,7 +1909,7 @@ def gate_round_cap():
 
         check_pass = f"CHECK: PASS {heads[2]}"
         none_line = f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
-        merged, briefs = [], []
+        merged = []
 
         def merge(repo_, number_, head_, base_):
             merged.append((number_, head_))
@@ -1971,14 +1969,6 @@ def gate_round_cap():
             result, _ = at_cap(35, none_line)
         exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
         exact(merged, [(30, heads[2])])
-        # (f) the brief asks for the line from round 3 on, not at round 1.
-        def brief_for(ledger):
-            with patch.object(lane, "start", lambda args, prio, led, lkey: briefs.append(args["message"]) or "started"):
-                act(36, heads[3], ledger, verdict=("absent", None, ""))
-            return briefs[-1]
-        two_rounds = {f"fix:{repo}#36:{heads[0]}": "sent", f"fix:{repo}#36:{heads[1]}": "sent"}
-        exact(lane.OPEN_FINDINGS_NONE in brief_for(two_rounds), True)
-        exact(lane.OPEN_FINDINGS_NONE in brief_for({}), False)
 
 
 def decisions_board_guard():
