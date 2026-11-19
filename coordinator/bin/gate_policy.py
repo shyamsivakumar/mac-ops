@@ -23,8 +23,8 @@ PROMPT_NO_MERGE = (
 
 def complete_pass(reply, head, provides=True):
     """True when a gate reply carries every line `ticket close` requires on this head."""
-    lines = reply.splitlines()
-    return (reply.endswith("VERDICT: PASS") and f"CHECK: PASS {head}" in lines
+    lines = [line.rstrip() for line in reply.splitlines()]
+    return (bool(lines) and lines[-1] == "VERDICT: PASS" and f"CHECK: PASS {head}" in lines
             and (not provides or f"PROVIDES: PASS {head}" in lines))
 
 
