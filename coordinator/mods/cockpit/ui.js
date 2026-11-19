@@ -144,8 +144,9 @@ const NOTICE_MIN = 140;
 const HINT_ROOM = 64;
 const NOTICE_TONE = { success: "done", error: "blocked", info: "muted" };
 const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
+export const HIDDEN_PROJECTS = ["mac-ops"];
 function projectItem(v) {
-  if (!v.project) return { id: "project", prio: 3, label: "Project · all", tip: "Showing every project. Click to show one project only (P)." };
+  if (!v.project) return { id: "project", prio: 3, label: `Project · all · ${HIDDEN_PROJECTS.join(", ")} hidden`, tip: `Showing every project except ${HIDDEN_PROJECTS.join(", ")}. Pick ${HIDDEN_PROJECTS.length === 1 ? "it" : "one"} in the project list to see its cards (P).` };
   return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
 }
 
