@@ -7,7 +7,6 @@ import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, m
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
 import { actRates, awayCounts, flushFlowLog, logAct, logLaneChange, markPass, readFlow } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
@@ -261,10 +260,7 @@ export default class Board extends View {
     this.search.on("submit", () => this.handle.focus());
     this.search.on("focus", () => (this.searching = true));
     this.search.on("blur", () => (this.searching = false));
-    this.copyId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    hydrateAlerts();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
-    cx.timer.every(CHECK_EVERY, (cx) => this.alertTick(cx));
     cx.timer.every(TICK, (cx) => {
       this.logAnswers();
       cx.spawn(() => flushFlowLog(Date.now()));
@@ -286,36 +282,6 @@ export default class Board extends View {
 
   watching() {
     return Date.now() - this.drawn < IDLE_AFTER;
-  }
-
-  alertTick(cx) {
-    if (!this.watching() && alertState().on && leaseOpen(this.copyId, Date.now())) this.refresh(cx);
-  }
-
-  alertCheck() {
-    if (this.pop || this.dec || this.unsure() || !this.board) return;
-    const now = Date.now();
-    const rows = this.place(this.groups(), now).map(([g, lane]) => ({
-      key: g.key,
-      held: holds(lane, g.needs),
-      asleep: g.asleep,
-      unsettled: g.info.status === "open" && (g.info.gh?.ci ?? "loading") === "loading" || this.holdsAlerts(g),
-      label: this.cleanTitle(g).slice(0, 40),
-      pr: g.info.pr?.number,
-    }));
-    checkAlerts(rows, this.copyId, now);
-  }
-
-  holdsAlerts(g) {
-    const verdict = this.verdictFor(g);
-    return verdict === LOADING_VERDICT || verdict?.state === "unverified";
-  }
-
-  toggleAlerts(cx) {
-    const on = !alertState().on;
-    setAlertsOn(on);
-    say("info", on ? "Phone alerts on" : "Phone alerts off");
-    cx.notify();
   }
 
   refresh(cx, force) {
@@ -555,7 +521,6 @@ export default class Board extends View {
       this.cap = await queueCap().catch(() => 6);
       const late = !this.unchanged("prs", this.prStamp());
       if (late) this.persist();
-      this.alertCheck();
       this.publishNeeds();
       const planned = await this.planNext();
       return planned || late;
@@ -667,7 +632,6 @@ export default class Board extends View {
         cx.notify();
       },
       panel: (id, cx) => this.openPanel(id, cx),
-      alerts: (cx) => this.toggleAlerts(cx),
       command: (name) => run(name),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
