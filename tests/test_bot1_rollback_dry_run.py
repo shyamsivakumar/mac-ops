@@ -18,7 +18,7 @@ def deployment(day, status, sha, meta=None):
         "createdAt": f"2026-11-0{day}T00:00:00Z",
         "meta": {"commitHash": sha} if meta is None else meta,
     }
-    if status:
+    if status is not ...:
         record["status"] = status
     return record
 
@@ -52,8 +52,12 @@ class Bot1RollbackDryRunTests(unittest.TestCase):
             [success, deployment(1, "REMOVED", CURRENT)],
             [success, deployment(3, "REMOVED", None, meta={}), older],
             [success, deployment(3, "SLEEPING", None, meta={}), older],
+            [success, deployment(3, ..., CURRENT), older],
             [success, deployment(3, None, CURRENT), older],
             [success, deployment(3, "BOGUS", CURRENT), older],
+            [success, deployment(3, [], CURRENT), older],
+            [success, deployment(3, {}, CURRENT), older],
+            [success, deployment(3, 1, CURRENT), older],
             [success, deployment(1, "REMOVED", PREVIOUS, meta="unavailable")],
             [success, None],
         ):

@@ -66,7 +66,11 @@ def read_record(deployment):
     except (KeyError, AttributeError, ValueError):
         raise invalid from None
     status = deployment.get("status")
-    if created.tzinfo is None or status not in KNOWN_STATUSES:
+    if (
+        created.tzinfo is None
+        or not isinstance(status, str)
+        or status not in KNOWN_STATUSES
+    ):
         raise invalid
     sha = deployment["meta"].get("commitHash")
     if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
