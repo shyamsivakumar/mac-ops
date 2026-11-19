@@ -47,9 +47,21 @@ lock, so a device that someone else boots while the job waits for that lock is
 part of the baseline and never counts as booted by the job. A job with no
 baseline shuts no device down.
 
-A job names a device by its identifier, by a `-destination`, or by a device name
-given after `simctl`, so `xcrun simctl boot CI-iPhone` is credited with booting
-CI-iPhone and its cleanup shuts it down.
+A job names a device by a `-destination` that gives its `id` or its name, or by
+an identifier or a device name given after `simctl`, so `xcrun simctl boot
+CI-iPhone` is credited with booting CI-iPhone and its cleanup shuts it down. A
+device identifier anywhere else, such as in an `xcodebuild` output path, names
+nothing, so a build whose path holds a device identifier never claims that
+device. Checked on real arguments: an `xcodebuild` with the identifier in
+`-derivedDataPath` names `[]`, while `-destination ...,id=<id>` and `simctl boot
+<id>` name that device.
+
+A job that may use simulators, including `xcrun simctl` whose basename alone
+shows nothing, is marked `simulator_job` on its record right after it is
+reserved, before it waits for its project lock or launches. If the simulator lock
+times out and the job launches with no snapshot, a competing job's cleanup still
+keeps every device on. Checked against a real registry: `xcrun simctl boot`
+records `simulator_job: true`, `ls` records nothing.
 
 ## Orphan sweep
 
