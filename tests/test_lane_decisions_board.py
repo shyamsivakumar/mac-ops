@@ -76,18 +76,47 @@ class DecisionsBoardTests(unittest.TestCase):
                 lane.gate_round_stuck("fixture/repo", 20, "a" * 40, {})
             entries = coordq.load()["roundsStuck"]
             items = json.loads(board.read_text())["items"]
+            stuck_file = (Path(scratch) / "gatekeep-stuck.txt").read_text()
         self.assertEqual(entries, {"fixture/repo#20": {"head": "a" * 40}})
+        self.assertEqual(stuck_file, f"fixture/repo#20 {'a' * 40} rounds\n")
         self.assertEqual(items, [{"id": "other"}])
         self.assertEqual(len(calls), 2)
 
-    def test_gatekeep_counts_leave_the_rounds_entry_alone(self):
+    def test_the_stuck_file_keeps_both_kinds_of_entry_and_drops_a_cleared_one(self):
         coordq = load_coordq()
-        with tempfile.TemporaryDirectory() as scratch:
+        with tempfile.TemporaryDirectory() as scratch, redirect_stdout(io.StringIO()):
             coordq.DIR = scratch
-            coordq.save({"next": 1, "items": [], "roundsStuck": {"fixture/repo#20": {"head": "a"}}})
-            coordq.write_counts({}, set(), [], False)
-            kept = coordq.load()["roundsStuck"]
-        self.assertEqual(list(kept), ["fixture/repo#20"])
+            stuck_file = Path(scratch) / "gatekeep-stuck.txt"
+            coordq.save({"next": 1, "items": []})
+            coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#20", head="a", clear=False))
+            coordq.write_counts({}, set(), [("fixture/repo#21", "b", "no check")], False)
+            both = stuck_file.read_text()
+            self.assertEqual(list(coordq.load()["roundsStuck"]), ["fixture/repo#20"])
+            coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#22", head="c", clear=False))
+            kept = stuck_file.read_text()
+            coordq.cmd_stuck(argparse.Namespace(ref="fixture/repo#20", head="", clear=True))
+            cleared = stuck_file.read_text()
+        self.assertEqual(both, "fixture/repo#21 b no check\nfixture/repo#20 a rounds\n")
+        self.assertEqual(kept, "fixture/repo#21 b no check\nfixture/repo#20 a rounds\nfixture/repo#22 c rounds\n")
+        self.assertEqual(cleared, "fixture/repo#21 b no check\nfixture/repo#22 c rounds\n")
+
+    def test_a_pass_retires_the_item_of_a_pr_capped_before_the_stuck_list(self):
+        item_id = "lane-gate-rounds-fixture-repo-20"
+        with tempfile.TemporaryDirectory() as scratch:
+            board = Path(scratch) / "decisions.json"
+            board.write_text(json.dumps({"items": [{"id": item_id}, {"id": "other"}]}))
+            ledger = {"rounds-decision:fixture/repo#20": item_id}
+            with patch.object(lane, "DECISIONS_PATH", str(board)), patch.object(lane, "DRY", False), \
+                    patch.object(lane, "run", side_effect=AssertionError("no stuck entry to clear")), \
+                    patch.object(lane.alarms, "board_update", return_value="failed"):
+                self.assertFalse(lane.clear_gate_round_stuck("fixture/repo", 20, ledger))
+                self.assertIn("rounds-decision:fixture/repo#20", ledger)
+            with patch.object(lane, "DECISIONS_PATH", str(board)), patch.object(lane, "DRY", False), \
+                    patch.object(lane, "run", side_effect=AssertionError("no stuck entry to clear")):
+                self.assertTrue(lane.clear_gate_round_stuck("fixture/repo", 20, ledger))
+            items = json.loads(board.read_text())["items"]
+        self.assertEqual(items, [{"id": "other"}])
+        self.assertEqual(ledger, {})
 
     def test_the_real_board_holds_no_item_of_this_test(self):
         board = json.loads(REAL_BOARD.read_text()) if REAL_BOARD.exists() else {"items": []}
