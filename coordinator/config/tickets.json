@@ -45,6 +45,7 @@
       "projectId": "mcp:de991f1e-33dc-4570-86d9-5a0a8a47a8f5"
     },
     "digitized/Concerning": {
+      "merge": "manual",
       "key": "NING",
       "projectId": "mcp:fd6cecd8-8494-41bb-9d42-63dac0ae1a8d"
     }

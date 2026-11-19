@@ -719,8 +719,9 @@ def drain():
                 receipts[request_id] = thread_id
                 if request_id.startswith("gate:"):
                     receipts[":".join(request_id.split(":")[:3])] = thread_id
-                    from gate_policy import brief_base
+                    from gate_policy import brief_base, brief_merger
                     receipts["base:" + thread_id] = brief_base(item["args"].get("message", ""), request_id.split(":")[2])
+                    receipts["brief:" + thread_id] = brief_merger(item["args"].get("message", ""))
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
