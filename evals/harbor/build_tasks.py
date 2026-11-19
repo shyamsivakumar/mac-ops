@@ -87,8 +87,10 @@ TEST_SH = """#!/bin/bash
 set -u
 
 mkdir -p /logs/verifier
+echo 0 > /logs/verifier/reward.txt
+
 cd /app || exit 1
-cp -R "$(dirname "$0")/files/." /app/
+cp -R "$(dirname "$0")/files/." /app/ || exit 1
 
 if {test_command}; then
   echo 1 > /logs/verifier/reward.txt
