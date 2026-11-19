@@ -138,6 +138,11 @@ class ProviderBlockTests(unittest.TestCase):
         record = provider_block.record_block(
             SELECTION, "usage limit; resets at 14:00 Etc/GMT+5", failed, now=failed)
         self.assertEqual(record["until"], "2026-11-18T19:00:00+00:00")
+        # A bare GMT is still GMT: the zone name says GMT, the bare word does
+        # not.
+        bare = provider_block.record_block(
+            SELECTION, "usage limit; resets at 14:00 GMT", failed, now=failed)
+        self.assertEqual(bare["until"], "2026-11-18T14:00:00+00:00")
 
     def test_an_iso_reset_is_taken_as_it_is_written(self):
         failed = moment("2026-11-18T10:00:00")
