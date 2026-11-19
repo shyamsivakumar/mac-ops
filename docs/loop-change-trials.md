@@ -211,16 +211,25 @@ target metric before merge. The metrics split into quality and effort.
 The decision uses two windows of merged PRs, the 14 days after the change
 merges and the 14 days before it. Each window needs at least 30 merged PRs.
 
-1. **Quality outranks effort.** If rework rate rises by 5 percentage points or
-   more, revert. An effort gain never offsets a quality loss, so rework up and
-   gate rounds down is a revert.
-2. **Keep** when rework rate has not risen by 5 points or more and the target
-   metric improved by at least 15% relative to the window before.
-3. **Revert** when the target metric did not improve by 15%. The change has not
-   shown that it helps.
-4. **Too little data.** If either window has fewer than 30 merged PRs, extend
+Apply the rules in this order and stop at the first that decides.
+
+1. **Too little data.** If either window has fewer than 30 merged PRs, extend
    both to 28 days. If it is still short, revert, because the default is the
    state before the change.
+2. **Quality limit.** If rework rate rises by 5 percentage points or more
+   (after minus before), revert. That 5-point rise is the only quality limit,
+   and no effort gain offsets it. A smaller rise, such as 10% to 12%, is inside
+   the noise of a window this size and does not trigger a revert, but the
+   decision records it.
+3. **Keep or revert on the target.** With the quality limit not tripped, keep
+   when the target metric improved by at least 15% relative to the window
+   before. Otherwise revert, because the change has not shown that it helps.
+
+Worked example. Each window has 100 merged PRs, rework rate rises from 10% to
+12%, and gate rounds per PR fall from 5 to 4. The data rule passes, the rise is
+2 points so the quality limit is not tripped, and the target improved by 20%,
+so the change is kept. If rework had risen from 10% to 15%, the change would be
+reverted at rule 2 whatever the gate rounds did.
 
 These windows are not controlled, since other changes land in the same weeks.
 Where another loop-policy change merged inside either window, say so in the
