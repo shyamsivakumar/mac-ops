@@ -32,15 +32,24 @@ function abs(p, cwd) {
 }
 
 function real(p) {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
+  const rest = [];
+  let head = p;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(head), ...rest);
+    } catch {
+      const parent = path.dirname(head);
+      if (parent === head) return p;
+      rest.unshift(path.basename(head));
+      head = parent;
+    }
   }
 }
 
+const ASCEND_ROOTS = SPEC.ascend_roots.flatMap((root) => [root, real(root)]);
+
 function underAscend(a) {
-  return SPEC.ascend_roots.some((root) => a === root || a.startsWith(root + path.sep));
+  return ASCEND_ROOTS.some((root) => a === root || a.startsWith(root + path.sep));
 }
 
 function hookReason(command, env, cwd) {
