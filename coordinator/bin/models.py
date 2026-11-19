@@ -15,6 +15,9 @@ import os
 from pathlib import Path
 
 LISTS = ("build", "fix", "review", "panel")
+# The lists a builder may run on. A send may go to a thread that runs one
+# of these models, as long as the model is not blocked.
+BUILDER_LISTS = ("build", "fix")
 INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
 BLOCKED_FILE = "providers-blocked.json"
@@ -116,6 +119,21 @@ def blocked_identities():
 def is_blocked(selection, blocked=None):
     blocked = blocked_identities() if blocked is None else blocked
     return identity(selection) in blocked
+
+
+def may_take_send(selection, blocked=None):
+    """Whether a send may go to a thread that runs this model.
+
+    A thread takes a send when the model it runs is an entry of the build
+    list or of the fix list and that model is not blocked. A thread on a
+    model no list names - a legacy Sol thread, a review model - and a
+    thread on a blocked provider take no send.
+    """
+    blocked = blocked_identities() if blocked is None else blocked
+    named = identity(selection)
+    if not named or named in blocked:
+        return False
+    return find(selection, BUILDER_LISTS) is not None
 
 
 def in_order(list_name, preferred=None):
