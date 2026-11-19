@@ -139,6 +139,14 @@ class SendModelTests(unittest.TestCase):
         self.assertEqual(self.payload(command)["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_build_list_model_in_a_herdr_worktree_takes_no_send(self):
+        """A newly permitted direct send never lands on a herdr branch."""
+        thread = {**MINIMAX, "status": "completed", "sendable": True, "worktreePath": WORKTREE}
+        command = self.send(thread, branch="herdr/example")
+        self.assertNotIn("--tool", command)
+        self.assertEqual(self.payload(command)["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
     def test_the_first_fix_model_in_the_shared_root_still_takes_the_send(self):
         """The send the lane made before this change is unchanged."""
         thread = {**SONNET, "status": "completed", "sendable": True}

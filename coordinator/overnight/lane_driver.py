@@ -535,12 +535,15 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         # dropped without a thread to carry it.
         sendable = False
         reroute = "model may not take a send"
-    if sendable and root_workspace(thread) and (worktree_only or not model_list.same_selection(thread_model, first_fix_model)):
+    if sendable and ((worktree_only and root_workspace(thread))
+                     or (not model_list.same_selection(thread_model, first_fix_model)
+                         and not reusable_worktree(thread))):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
         # worktree instead of the thread that works there. A thread that
         # is not on the first available fix model takes a direct send
-        # only from a worktree of its own, on every path.
+        # only from a safe worktree of its own: not the shared checkout
+        # of the repository, and not a herdr branch.
         sendable = False
         reroute = "root workspace"
     if sendable:
