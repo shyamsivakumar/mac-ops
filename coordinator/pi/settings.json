@@ -38,9 +38,6 @@
       "deepseek/deepseek-flash": {
         "reserveTokens": 32000
       },
-      "deepseek/deepseek-v4-pro": {
-        "reserveTokens": 32000
-      },
       "zai/glm-5.3": {
         "reserveTokens": 32000
       }
