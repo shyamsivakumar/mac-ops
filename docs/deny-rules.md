@@ -18,7 +18,11 @@ each tool checks tools, and written into the scope files as prose.
    name continues a protected one (`main.fix`, `main/fix`), and including a
    push whose *source* is a protected ref while its destination is a task
    branch (`main:task-530`). The rule compares the destination of each
-   refspec, never its source.
+   refspec, never its source, and it reads only a real `git push` command
+   (including one behind `heavy`, `timeout`, `bash -c` or `eval`). A protected
+   branch name anywhere else in the command text, such as a PR body, an `hc`
+   message, a commit message or a heredoc, is not a push to it. The same
+   command-position rule applies to the merge command.
 4. No `gh pr merge` for a builder. Only a gate thread merges, and only with
    the pinned `--match-head-commit` head given as a merge argument.
 
@@ -62,10 +66,13 @@ thread send or batch thread creation whose input names `claudeAgentGate` from a
 caller without the role, so a builder cannot hand itself the role by launching
 a child on that instance, and no file or transcript token is read anywhere.
 
-When the orchestrator reports the instance cannot run child tasks, the gate is
-launched on the reviewer chain's own instance and the lane performs the pinned
-merge itself, with the role set on that call. A gate launch therefore never
-breaks, and no merge depends on wording.
+When the orchestrator reports the instance cannot run child tasks, no Claude
+gate is launched: a thread on the plain Claude instance would hold no gate
+role, so its own pinned merge would be denied, and a launcher-owned merge in
+its place would not meet the ticket's gate-thread requirement. The lane
+reports the instance and waits instead (`gate_launch_model` returns None and
+the lane records a `needs-you` entry), so no gate thread is ever launched
+without the role its own merge needs.
 
 ## One source, installed into each enforcement point
 

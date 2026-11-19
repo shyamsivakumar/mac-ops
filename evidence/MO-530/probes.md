@@ -36,7 +36,7 @@ not write about the list itself.
 
 ## Probe results
 
-`python3 evidence/MO-530/probes.py` → `23 passed, 0 failed, 6 not run`, see
+`python3 evidence/MO-530/probes.py` → `40 passed, 0 failed, 6 not run`, see
 `probes.txt`. The six `not run` rows are the Claude `permissions.deny`
 entries: Claude Code evaluates them inside a session, so the probe names the
 live check instead of counting the file's text as a refusal. The rows that
@@ -68,6 +68,19 @@ all six pi instances and for Claude Code:
   `~/.t3/userdata/settings.json` without a restart, but a second `claudeAgent`
   instance reports `Provider executable is not installed` and cannot launch, so
   an agent-typed merge stays refused until T3 can launch it.
+- the protected-branch rule decides only from the destination ref of a real
+  push, in the Claude hook and in all six pi guards:
+  - allowed: a task-branch push in the same command as a PR body that names
+    `main` (quoted, heredoc, and command-substitution heredoc forms); an `hc
+    send` whose text mentions the rule, the branch name or a spelled-out push
+  - refused: `HEAD:main`, `HEAD:refs/heads/master`, `+HEAD:main`, `:main`, and a
+    real push of `main` after a task-branch push or a PR text mention in one
+    command
+  - refused as before: `--force`, `-f`, `--force-with-lease`, and a
+    plus-prefixed task-branch refspec
+  The probes ran against a scratch home (`install --root`), so the live
+  `~/.claude` and `~/.pi` copies were not touched; reinstall with
+  `python3 scripts/install_deny_rules.py install` to take the new guard live.
 - task-branch push to a scratch remote allowed, and the scratch remote has no
   `main` branch
 

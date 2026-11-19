@@ -14,16 +14,13 @@
   "ascend_roots": ["~/Code/slash-eureka"],
   "ascend_note": "slash-eureka holds the Ascend repos (AUH action-underwriting-hub, MCP ascend-mcp, OPS data-ops, DBT dbt, OMN omni). Reads and edits are denied under the whole tree.",
   "secret_file_re": "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)",
-  "bash_denies": [
-    [
-      "\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*(?:--force|--force-with-lease|--force-if-includes|\\s-f\\b|\\s\\+[^\\s])",
-      "force-push in any form is denied"
-    ],
-    [
-      "\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|\\'[^\\']*\\'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b(?:\\s+-{1,2}[\\w-]+(?:=\\S+)?)*\\s+(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])[\\s\"\\']*(?:[;&|]|$)|\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|\\'[^\\']*\\'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*\\s+[^\\s:;&|\"\\'-][^\\s:;&|\"\\']*\\s+(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])(?=[\\s\"\\';&|]|$)|\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|\\'[^\\']*\\'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*\\s+(?:[^\\s:;&|\"\\']*):(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])",
-      "pushing to main or master is denied; push a task branch instead"
-    ]
-  ],
+  "push_deny": {
+    "protected": ["main", "master"],
+    "force_flags": ["--force", "-f", "--force-with-lease", "--force-if-includes"],
+    "force_reason": "force-push in any form is denied",
+    "protected_reason": "pushing to main or master is denied; push a task branch instead",
+    "note": "A push is judged from the destination ref of its refspecs (the right side of src:dst, with a leading + or refs/heads/ ignored), read from the real git push command the shell would run. A protected branch name anywhere else in the command text (a PR body, an hc message, a commit message, a heredoc) is not a push to it."
+  },
   "t3_gate_instance": {
     "settings": "~/.t3/userdata/settings.json",
     "instanceId": "claudeAgentGate",
@@ -52,8 +49,8 @@
     "hook": {
       "source": "runtime/agents/deny-merge-guard.py",
       "target": "~/.claude/hooks/deny-merge-guard.py",
-      "matcher": "Bash",
-      "note": "permissions.deny cannot express 'gh pr merge unless the caller is a gate and --match-head-commit carries a commit id', nor can it name every remote a push targets, so those rules live in this PreToolUse hook in the same settings file. The hook denies a main/master push on any remote and any force-push, which is why the enumerate-as-remote entries below are only the common spellings."
+      "matcher": "Bash|.*(?:thread_launch|thread_send|create_threads).*",
+      "note": "permissions.deny cannot express 'gh pr merge unless the caller is a gate and --match-head-commit carries a commit id', nor can it name every remote a push targets, so those rules live in this PreToolUse hook in the same settings file. The hook denies a main/master push on any remote and any force-push, which is why the enumerate-as-remote entries below are only the common spellings. The matcher covers the Bash tool and every T3 thread tool by name substring, so the hook's thread-tool check runs when a builder asks to launch or steer a thread on the gate instance; a Bash-only matcher would leave that check unreachable."
     },
     "deny": [
       "Read(~/Code/slash-eureka/**)",

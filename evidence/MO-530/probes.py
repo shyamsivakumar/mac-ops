@@ -48,6 +48,48 @@ PINNED = (
     "--match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"
 )
 
+PR_TEXT = "Merges into main. Rule: no git push origin main, no git push --force."
+# (label, command, refused). The protected-branch rule decides only from the
+# destination ref of a real git push: text that names a protected branch or
+# describes the rule is never a push to it.
+DESTINATION_ROWS = [
+    (
+        "task-branch push in the same command as PR text naming main",
+        f"git push -u origin t3/deny-probe && gh pr create --title 'Deny rules' --body '{PR_TEXT}'",
+        False,
+    ),
+    (
+        "task-branch push, then a PR body heredoc that names a main push",
+        "git push origin t3/deny-probe\ngh pr create --body-file - <<'EOF'\ngit push origin main\nEOF",
+        False,
+    ),
+    (
+        "task-branch push, then a PR body in a command substitution heredoc",
+        "git push origin t3/deny-probe && gh pr edit 531 --body \"$(cat <<'EOF'\nNever git push origin main\nEOF\n)\"",
+        False,
+    ),
+    (
+        "hc send whose text mentions the push rule and the branch name",
+        "hc send coordinator 'Deny rules: no push to main or master, no git push --force, no gh pr merge for a builder'",
+        False,
+    ),
+    (
+        "hc send with an unquoted push command spelled out",
+        "hc send coordinator git push origin main is denied",
+        False,
+    ),
+    ("push HEAD to a protected branch", "git push origin HEAD:main", True),
+    ("push HEAD to a full protected ref", "git push origin HEAD:refs/heads/master", True),
+    ("push with a plus-prefixed protected destination", "git push origin +HEAD:main", True),
+    ("push that deletes a protected branch", "git push origin :main", True),
+    ("push main after a task-branch push in one command", "git push origin t3/deny-probe && git push origin main", True),
+    ("push main after a PR text mention in one command", f"gh pr edit 531 --body '{PR_TEXT}' && git push -u origin main", True),
+    ("force-push of a task branch", "git push --force origin t3/deny-probe", True),
+    ("short force flag", "git push -f origin t3/deny-probe", True),
+    ("force with lease", "git push --force-with-lease origin t3/deny-probe", True),
+    ("plus-prefixed task-branch refspec", "git push origin +t3/deny-probe", True),
+]
+
 results: list[tuple[str, str, str]] = []
 
 
@@ -227,11 +269,20 @@ def probe_pi_guards() -> None:
             "event": {"toolName": "bash", "input": {"command": "git push origin feature:main"}},
         },
     ]
+    events += [
+        {
+            "label": label,
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": command}},
+        }
+        for label, command, _ in DESTINATION_ROWS
+    ]
     expect_block = [
         True, True, True, True, True, True, True, True, True, True,
         False, True, True, True, False, True, False, False, False, True,
         False, True,
     ]
+    expect_block += [refused for _, _, refused in DESTINATION_ROWS]
     for instance in PI_INSTANCES:
         guard = HOME / ".pi" / instance / "extensions/deny-guard.ts"
         if not guard.is_file():
@@ -317,6 +368,10 @@ def probe_claude_settings() -> None:
         ("push to main on a second remote", "git push upstream main", None, "deny"),
         ("push a task branch from a protected source ref (main:task-530)", "git push origin main:task-530", None, "allow"),
         ("push to main as a refspec destination (feature:main)", "git push origin feature:main", None, "deny"),
+    )
+    cases += tuple(
+        (label, command, None, "deny" if refused else "allow")
+        for label, command, refused in DESTINATION_ROWS
     )
     for label, command, role, want in cases:
         decision = hook_decision(command, role)
