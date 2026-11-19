@@ -1675,11 +1675,17 @@ def run_pass(ledger):
         receipts = stall_receipts()
         markers = stall_markers(SNAPSHOT, receipts)
         swept = True
+    busy_by_repo = {}
+    for repo in LANE_REPOS:
+        with item_boundary(repo, "busy", ledger):
+            busy_by_repo[repo] = busy(repo)
     fresh = stall.arrived(state, board_keys(SNAPSHOT))
     progressed = any(
         stall.moved(state, key, item["marker"]) for key, item in markers.items()
     ) or bool(fresh)
-    board_event = stall.board(state, progressed, board_items(SNAPSHOT))
+    board_event = stall.board(
+        state, progressed or any(busy_by_repo.values()), board_items(SNAPSHOT)
+    )
     for key, item in sorted(markers.items()):
         event = stall.observe(state, key, item["marker"])
         if not event:
@@ -1706,7 +1712,7 @@ def run_pass(ledger):
             prs = list(ORDER.get(repo, []))
             others = SNAPSHOT["repos"][repo]["prs"]
             prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
-            b = busy(repo)
+            b = busy_by_repo.get(repo, "")
             if b:
                 print(f"{CFG[repo]['key']:5} busy ({b}); PR actions still run")
             done = False

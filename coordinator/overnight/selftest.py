@@ -2134,6 +2134,29 @@ def stall():
     exact(lane.STALL_STATE.get("board_alerted"), None)
     exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], True)
 
+    # A pass with live work in the dispatch queue is progress for the board,
+    # not for its items: a thread can run for longer than three ticks
+    # between commits.
+    def idle_board(live):
+        found = []
+        with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+             patch.object(lane, "board_snapshot", return_value=snapshot), \
+             patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "busy", return_value=live), patch.object(lane, "t3", return_value={}), \
+             patch.object(lane, "stall_receipts", return_value={}), \
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+            lane.STALL_STATE = {}
+            lane.STALL_EVENTS.clear()
+            for _ in range(4):
+                lane.run_pass({})
+                found.extend(e["kind"] for e in lane.STALL_EVENTS)
+                lane.STALL_EVENTS.clear()
+        return found
+
+    exact("board" in idle_board("live: builder thread"), False)
+    exact(idle_board("").count("board"), 2)
+
     # New work on the board is progress, whether the shift has measured the
     # new item or not.
     state = rule.new_state()
