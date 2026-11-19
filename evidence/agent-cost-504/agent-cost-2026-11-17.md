@@ -1,6 +1,6 @@
 # Agent cost per PR — 2026-11-17
 
-Generated: 2026-11-19T02:19:05.640759Z
+Generated: 2026-11-19T02:30:01.077665Z
 
 Cost comes from the usage records pi writes for every API turn
 (`usage.cost.total` per assistant message in the session log).
@@ -11,8 +11,8 @@ Cost comes from the usage records pi writes for every API turn
 - Total cost: **$314.66**
 - Pull requests priced: **82**
 - Mean cost per pull request: **$2.06**
-- Cost on a pull request: **$168.93**
-- Cost no pull request explains: **$145.73**
+- Cost on a pull request: **$168.81**
+- Cost no pull request explains: **$145.85**
 - Totals reconciled: **yes**
 - Days measured for the before and after windows: **11**
 - Session logs on this Mac cover **2026-11-12** onwards, so a window before the first day has no data to measure
@@ -27,8 +27,8 @@ Cost comes from the usage records pi writes for every API turn
 | shyamsivakumar/mac-ops#486 | Bound the tick's external calls so a slow GitHub cannot eat the tick | 8 | $6.83 | 7085952 | pr=2, review=6 |
 | digitized/Concerning#102 | Transactional invite redemption with an owner-visible audit trail (Ref | 2 | $6.28 | 2244608 | review=2 |
 | shyamsivakumar/openscan#11 | OPN-12: import page images into a document | 5 | $4.97 | 5887676 | pr=2, review=3 |
-| shyamsivakumar/tunerise#27 | docs: reconcile release documentation with the merged M1 app [orb] (Re | 8 | $4.87 | 20917382 | branch=4, pr=1, review=1, ticket=2 |
 | shyamsivakumar/strategy-replay-workbench#1191 | docs: correct SRW-1104 receipts after the in-session reviewer round (R | 5 | $4.85 | 29157339 | ticket=5 |
+| shyamsivakumar/tunerise#27 | docs: reconcile release documentation with the merged M1 app [orb] (Re | 7 | $4.78 | 16858585 | branch=4, review=1, ticket=2 |
 | shyamsivakumar/mac-ops#480 | Read the job's real state in the watchdog instead of the log's age | 5 | $4.62 | 4137618 | pr=1, review=4 |
 | shyamsivakumar/mac-ops#490 | Settle or flag no-receipt dead threads once (Refs #489) | 4 | $4.00 | 1009461 | review=4 |
 | digitized/Concerning#104 | Build: report the build commit on each service's health (Refs #103) | 6 | $3.79 | 7488429 | branch=1, pr=1, review=4 |
@@ -94,8 +94,8 @@ Cost comes from the usage records pi writes for every API turn
 | shyamsivakumar/CineJar#36 | JAR-24: PickSession row-id model run | 1 | $0.12 | 5637459 | ticket=1 |
 | shyamsivakumar/strategy-replay-workbench#1294 | SRW-1204: remove the staging learner leftover and restore the learner  | 3 | $0.09 | 4077884 | pr=1, review=2 |
 | shyamsivakumar/strategy-replay-workbench#1290 | SRW-1283: reuse the passing runtime-tree receipt in the release-gate l | 4 | $0.06 | 2338121 | branch=1, review=3 |
-| shyamsivakumar/sams-llm-wiki#220 | wiki: session review 2026-11-17-1230 | 2 | $0.05 | 1626976 | pr=2 |
 | shyamsivakumar/recoup#23 | Recover agent instructions and ignore local tool state | 1 | $0.04 | 1082388 | branch=1 |
+| shyamsivakumar/sams-llm-wiki#216 | Document Pencil and Paper MCP design workflow | 1 | $0.03 | 1027852 | branch=1 |
 | shyamsivakumar/mac-ops#510 | Carry a proof file of every check in each pull request (Refs #501) | 5 | $0.03 | 1184808 | pr=1, review=4 |
 | shyamsivakumar/mac-ops#516 | Ignore stale questions from merged PRs and interrupted turns | 1 | $0.01 | 437966 | pr=1 |
 | shyamsivakumar/mac-ops#511 | Tell builders the rule of three and that a tidy commit keeps behavior  | 2 | $0.00 | 0 | review=2 |
@@ -111,24 +111,24 @@ Cost comes from the usage records pi writes for every API turn
 | shyamsivakumar/mac-ops | 23 | $74.15 | $3.22 |
 | shyamsivakumar/strategy-replay-workbench | 27 | $41.67 | $1.54 |
 | digitized/Concerning | 4 | $15.51 | $3.88 |
-| shyamsivakumar/tunerise | 7 | $11.12 | $1.59 |
+| shyamsivakumar/tunerise | 7 | $11.03 | $1.58 |
 | shyamsivakumar/CineJar | 8 | $9.92 | $1.24 |
 | shyamsivakumar/openscan | 4 | $9.53 | $2.38 |
 | shyamsivakumar/recoup | 4 | $3.68 | $0.92 |
 | shyamsivakumar/scripture-scroll | 3 | $2.82 | $0.94 |
-| shyamsivakumar/sams-llm-wiki | 2 | $0.52 | $0.26 |
+| shyamsivakumar/sams-llm-wiki | 2 | $0.49 | $0.25 |
 
 ## Cost before and after a refactor
 
 - shyamsivakumar/mac-ops#259 MO-244 · The coordq fix proof rig and the review cleanup (merged 2026-11-14T02:14:35Z): before no session data in the window; after $0.20 over 30 PRs ($6.07 total, 3 days)
 - shyamsivakumar/mac-ops#291 Keep the refill's log entries, timeouts and board read tidy  (merged 2026-11-14T18:49:37Z): before $0.24 over 11 PRs ($2.60 total, 1 days); after $1.95 over 40 PRs ($77.92 total, 3 days)
-- shyamsivakumar/mac-ops#511 Tell builders the rule of three and that a tidy commit keeps (merged 2026-11-18T01:31:41Z): before $0.23 over 38 PRs ($8.68 total, 4 days); after $1.11 over 13 PRs ($14.43 total, 1 days)
-- shyamsivakumar/mac-ops#513 Add the five refactoring smell cards to the review prompt (R (merged 2026-11-18T01:48:33Z): before $0.23 over 38 PRs ($8.68 total, 4 days); after $1.11 over 13 PRs ($14.43 total, 1 days)
-- shyamsivakumar/strategy-replay-workbench#1146 Record retained six-helper extraction evidence (Refs #1137) (merged 2026-11-15T21:44:32Z): before $0.09 over 6 PRs ($0.56 total, 2 days); after $1.18 over 46 PRs ($54.06 total, 3 days)
+- shyamsivakumar/mac-ops#511 Tell builders the rule of three and that a tidy commit keeps (merged 2026-11-18T01:31:41Z): before $0.23 over 38 PRs ($8.68 total, 4 days); after $1.12 over 13 PRs ($14.50 total, 1 days)
+- shyamsivakumar/mac-ops#513 Add the five refactoring smell cards to the review prompt (R (merged 2026-11-18T01:48:33Z): before $0.23 over 38 PRs ($8.68 total, 4 days); after $1.12 over 13 PRs ($14.50 total, 1 days)
+- shyamsivakumar/strategy-replay-workbench#1146 Record retained six-helper extraction evidence (Refs #1137) (merged 2026-11-15T21:44:32Z): before $0.09 over 6 PRs ($0.56 total, 2 days); after $1.18 over 46 PRs ($54.28 total, 3 days)
 
 ## Verification
 
-- The cost on a pull request ($168.93) and the cost no pull request explains ($145.73) add up to the day's total ($314.66).
+- The cost on a pull request ($168.81) and the cost no pull request explains ($145.85) add up to the day's total ($314.66).
 - The total is the sum of `usage.cost.total` over every assistant turn of every session in the day's local window (America/Los_Angeles), read from the pi session logs.
 - Repeat the measurement: `python3 mo124 cost --day 2026-11-17`.
 
