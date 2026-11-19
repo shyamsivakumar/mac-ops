@@ -35,6 +35,46 @@ const parse = (text) => (text ?? "").split("\n").flatMap((line) => {
   }
 });
 
+export const readFlow = async () => parse(await readTextFile(FILE));
+
+export function awayCounts(events, from, to, isMerged) {
+  const last = new Map();
+  for (const e of events) if (isLane(e) && e.t > from && e.t <= to) last.set(e.key, e);
+  const final = (lane) => [...last.values()].filter((e) => e.to === lane);
+  const done = final("done");
+  return {
+    stuck: final("stuck").length,
+    done: done.length,
+    merged: done.filter((e) => isMerged(e.key)).length,
+    inReview: final("review").filter((e) => e.pr !== null).length,
+  };
+}
+
+const WEEK = 7 * 86400000;
+
+export function actRates(events, now) {
+  const rows = new Map();
+  const byKey = new Map();
+  for (const e of events) if (!e.gap) byKey.set(e.key, [...(byKey.get(e.key) ?? []), e]);
+  for (const list of byKey.values()) {
+    const lanes = list.filter(isLane);
+    const acts = list.filter((e) => e.act);
+    const starts = lanes.filter((e) => e.to === "needs" && e.src && e.t >= now - WEEK);
+    for (const entry of starts) {
+      const end = lanes.find((e) => e.t > entry.t && e.to !== "needs");
+      const next = starts.find((e) => e.t > entry.t);
+      const act = acts.find((e) => e.t >= entry.t && (!next || e.t < next.t));
+      const row = rows.get(entry.src) ?? { src: entry.src, entered: 0, acted: 0, ignored: 0 };
+      row.entered += 1;
+      if (act) row.acted += 1;
+      else if (end) row.ignored += 1;
+      rows.set(entry.src, row);
+    }
+  }
+  const since = Math.min(...events.filter((e) => isLane(e) && e.to === "needs" && e.src).map((e) => e.t));
+  return { rows: [...rows.values()].sort((a, b) => b.entered - a.entered), since: Number.isFinite(since) ? since : null };
+}
+
 const utf8Length = (text) => [...text].reduce((n, c) => n + (c.codePointAt(0) < 128 ? 1 : c.codePointAt(0) < 2048 ? 2 : c.codePointAt(0) < 65536 ? 3 : 4), 0);
 
 function trim(events, now) {
