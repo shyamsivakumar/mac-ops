@@ -26,6 +26,8 @@ cacheable command here, so a short TTL on a list can never carry a stale
 head into a merge decision. The floor is checked by the caller, because a
 caller that may skip a read is the one that knows the read is optional.
 """
+import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -182,6 +184,7 @@ USAGE_LOG = Path(os.environ.get("COORDINATOR_GH_USAGE_LOG",
                                 os.path.expanduser("~/Library/Logs/coordinator/gh-usage.jsonl")))
 USAGE_LOG_MAX = int(os.environ.get("COORDINATOR_GH_USAGE_MAX", 4 * 1024 * 1024))
 _CALLER = None
+GATEWAY_MARK = "COORDINATOR_GH_VIA"
 # A caller whose tests replace its own `subprocess` name hands the helper a
 # getter for the launcher, so every gh call still goes through the one it
 # can see. Resolved at call time, never captured at import time.
@@ -216,8 +219,32 @@ def set_runner(getter):
     _RUNNER = getter
 
 
+def gateway_env():
+    """The environment for a gh child the gateway starts, so the observation
+    shim on PATH leaves the call to the gateway's own log line."""
+    return {**os.environ, GATEWAY_MARK: "gateway"}
+
+
+@contextlib.contextmanager
+def _marked():
+    previous = os.environ.get(GATEWAY_MARK)
+    os.environ[GATEWAY_MARK] = "gateway"
+    try:
+        yield
+    finally:
+        if previous is None:
+            del os.environ[GATEWAY_MARK]
+        else:
+            os.environ[GATEWAY_MARK] = previous
+
+
 def _launch():
-    return _RUNNER() if _RUNNER else subprocess.run
+    runner = _RUNNER() if _RUNNER else subprocess.run
+
+    def launch(*args, **kwargs):
+        with _marked():
+            return runner(*args, **kwargs)
+    return launch
 
 
 def set_caller(name):
@@ -876,7 +903,7 @@ def pages_unknown(argv):
     return False
 
 
-def record(argv, count=1, caller_name=None):
+def record(argv, count=1, caller_name=None, via=None):
     """Write one usage-log line per GitHub core request the command made.
 
     A 304 is not a core call and is never passed here, so the log holds
@@ -890,6 +917,8 @@ def record(argv, count=1, caller_name=None):
     # the report and safe to keep.
     row = {"ts": round(time.time(), 3), "caller": caller_name or caller(),
            "resource": resource(argv), "verb": verb(argv)}
+    if via:
+        row["via"] = via
     if pages_unknown(argv):
         row["pages"] = "unknown"
     line = json.dumps(row)
@@ -1036,3 +1065,39 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
         store(argv, body)
     return subprocess.CompletedProcess(argv, result.returncode, body,
                                        getattr(result, "stderr", "") or "")
+
+
+def usage_rows(hours, now=None):
+    """Count logged calls per hour and caller over the last `hours` hours."""
+    since = (now or time.time()) - hours * 3600
+    table = {}
+    for path in (USAGE_LOG.with_suffix(USAGE_LOG.suffix + ".1"), USAGE_LOG):
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            row = json.loads(line)
+            if row["ts"] < since:
+                continue
+            hour = time.strftime("%Y-%m-%d %H:00", time.localtime(row["ts"]))
+            cell = table.setdefault((hour, row["caller"]), {"core": 0, "graphql": 0, "other": 0, "shim": 0})
+            cell[row["resource"] if row["resource"] in ("core", "graphql") else "other"] += 1
+            cell["shim"] += row.get("via") == "shim"
+    return sorted(table.items())
+
+
+def usage_report(hours):
+    header = f"{'hour':<17} {'caller':<24} {'core':>6} {'graphql':>8} {'other':>6} {'via shim (bypassed the gateway)':>32}"
+    lines = [header]
+    for (hour, name), cell in usage_rows(hours):
+        lines.append(f"{hour:<17} {name:<24} {cell['core']:>6} {cell['graphql']:>8} {cell['other']:>6} {cell['shim']:>32}")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["log-shim"]:
+        record(["gh", *sys.argv[3:]], caller_name=sys.argv[2] or "unknown", via="shim")
+        sys.exit(0)
+    parser = argparse.ArgumentParser(description="GitHub call usage")
+    parser.add_argument("command", choices=["usage"])
+    parser.add_argument("--hours", type=float, default=24)
+    print(usage_report(parser.parse_args().hours))
