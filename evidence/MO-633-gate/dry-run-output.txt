@@ -1,0 +1,11 @@
+run demo: 3 reachable models, 1 tasks, 3 repeats
+3 harbor jobs, 9 trials
+reachable: minimax -> MiniMax-M3.1-Flash (key env MINIMAX_API_KEY)
+reachable: glm -> glm-5.3 (key env ZAI_API_KEY)
+reachable: deepseek -> deepseek-flash (key env DEEPSEEK_API_KEY)
+unreachable: cursor: default is not a pi provider/model string
+unreachable: terra: gpt-6.1-terra is not a pi provider/model string
+unreachable: sonnet: claude-sonnet-5-5 is not a pi provider/model string
+heavy harbor run -p /Users/shyamsivakumar/Code/.worktrees/mac-ops/ladder-gate/evals/harbor/tasks/example -a pi -m MiniMax-M3.1-Flash --base-url https://api.minimax.io/anthropic --api-format anthropic_messages --api-key-name MINIMAX_API_KEY -k 3 -n 1 -o /Users/shyamsivakumar/Code/.worktrees/mac-ops/ladder-gate/evals/ladder/runs/demo/minimax/example -y
+heavy harbor run -p /Users/shyamsivakumar/Code/.worktrees/mac-ops/ladder-gate/evals/harbor/tasks/example -a pi -m glm-5.3 --base-url https://api.z.ai/api/anthropic --api-format anthropic_messages --api-key-name ZAI_API_KEY -k 3 -n 1 -o /Users/shyamsivakumar/Code/.worktrees/mac-ops/ladder-gate/evals/ladder/runs/demo/glm/example -y
+heavy harbor run -p /Users/shyamsivakumar/Code/.worktrees/mac-ops/ladder-gate/evals/harbor/tasks/example -a pi -m deepseek-flash --base-url https://api.deepseek.com/anthropic --api-format anthropic_messages --api-key-name DEEPSEEK_API_KEY -k 3 -n 1 -o /Users/shyamsivakumar/Code/.worktrees/mac-ops/ladder-gate/evals/ladder/runs/demo/deepseek/example -y

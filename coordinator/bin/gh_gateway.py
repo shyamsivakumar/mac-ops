@@ -26,6 +26,8 @@ cacheable command here, so a short TTL on a list can never carry a stale
 head into a merge decision. The floor is checked by the caller, because a
 caller that may skip a read is the one that knows the read is optional.
 """
+import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -34,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 # The core calls the callers should leave in reserve. Below this floor an
@@ -182,6 +185,7 @@ USAGE_LOG = Path(os.environ.get("COORDINATOR_GH_USAGE_LOG",
                                 os.path.expanduser("~/Library/Logs/coordinator/gh-usage.jsonl")))
 USAGE_LOG_MAX = int(os.environ.get("COORDINATOR_GH_USAGE_MAX", 4 * 1024 * 1024))
 _CALLER = None
+GATEWAY_MARK = "COORDINATOR_GH_VIA"
 # A caller whose tests replace its own `subprocess` name hands the helper a
 # getter for the launcher, so every gh call still goes through the one it
 # can see. Resolved at call time, never captured at import time.
@@ -216,8 +220,32 @@ def set_runner(getter):
     _RUNNER = getter
 
 
+def gateway_env():
+    """The environment for a gh child the gateway starts, so the observation
+    shim on PATH leaves the call to the gateway's own log line."""
+    return {**os.environ, GATEWAY_MARK: "gateway"}
+
+
+@contextlib.contextmanager
+def _marked():
+    previous = os.environ.get(GATEWAY_MARK)
+    os.environ[GATEWAY_MARK] = "gateway"
+    try:
+        yield
+    finally:
+        if previous is None:
+            del os.environ[GATEWAY_MARK]
+        else:
+            os.environ[GATEWAY_MARK] = previous
+
+
 def _launch():
-    return _RUNNER() if _RUNNER else subprocess.run
+    runner = _RUNNER() if _RUNNER else subprocess.run
+
+    def launch(*args, **kwargs):
+        with _marked():
+            return runner(*args, **kwargs)
+    return launch
 
 
 def set_caller(name):
@@ -264,6 +292,37 @@ def endpoint(argv):
             continue
         return word
     return ""
+
+
+def graphql_operation(argv):
+    """Return the operation name in a `gh api graphql` query, or ""."""
+    words = [str(word) for word in argv[1:]]
+    for index, word in enumerate(words[:-1]):
+        if word in BODY_FLAGS and words[index + 1].startswith("query="):
+            match = re.search(r"\b(?:query|mutation)\s+(\w+)", words[index + 1])
+            return match.group(1) if match else ""
+    return ""
+
+
+def route(argv):
+    """Return the command's endpoint with owner, repo, numbers and SHAs as `*`."""
+    words = [str(word) for word in argv[1:]]
+    if not words:
+        return ""
+    if words[0] != "api":
+        return " ".join(words[:2]) if words[0] in GROUPS and len(words) > 1 else words[0]
+    path = endpoint(argv).lstrip("/").split("?", 1)[0]
+    segments = path.split("/")
+    for index in range(len(segments)):
+        redact = (segments[index].isdigit()
+                  or re.fullmatch(r"[0-9a-f]{7,40}", segments[index]) is not None
+                  or (index in (1, 2) and segments[0] == "repos")
+                  or (index == 1 and segments[0] in ("orgs", "users")))
+        if redact:
+            segments[index] = "*"
+    template = "/".join(segments)
+    operation = graphql_operation(argv) if template == GRAPHQL else ""
+    return f"{template} {operation}" if operation else template
 
 
 def unknown_short_flag(argv):
@@ -533,6 +592,7 @@ def _conditional_run(argv, timeout, caller_name=None):
         # too; without this every identical read of an unchanged list pays a
         # core call once the entry expires.
         store(argv, state["stdout"])
+        record(argv, 1, caller_name, free="304")
         return subprocess.CompletedProcess(argv, 0, state["stdout"], "")
     record(argv, 1, caller_name)
     # A 2xx is not a success by itself: `gh` can fail locally after a good
@@ -876,20 +936,26 @@ def pages_unknown(argv):
     return False
 
 
-def record(argv, count=1, caller_name=None):
+def record(argv, count=1, caller_name=None, via=None, free=None):
     """Write one usage-log line per GitHub core request the command made.
 
-    A 304 is not a core call and is never passed here, so the log holds
-    what was spent and not what was wanted. The quota the request spends is
-    on the row, so the report never counts a search or a GraphQL read as a
-    core call."""
+    A 304 or a cache hit is passed with `free` and is logged as one row of
+    `cost` 0, so the report can tell paid calls from free ones. The quota
+    the request spends is on the row, so the report never counts a search
+    or a GraphQL read as a core call."""
     if not _gh(argv) or count <= 0:
         return
     # No argument is written: `gh api -H "Authorization: ..."` carries a
     # credential in one. The caller, the quota and the verb are enough for
     # the report and safe to keep.
     row = {"ts": round(time.time(), 3), "caller": caller_name or caller(),
-           "resource": resource(argv), "verb": verb(argv)}
+           "resource": resource(argv), "verb": verb(argv),
+           "route": route(argv), "call": uuid.uuid4().hex[:12]}
+    if free:
+        row["cost"] = 0
+        row["cache"] = free
+    if via:
+        row["via"] = via
     if pages_unknown(argv):
         row["pages"] = "unknown"
     line = json.dumps(row)
@@ -1013,6 +1079,7 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
     if not fresh:
         hit = cached(argv)
         if hit is not None:
+            record(argv, 1, caller_name, free="hit")
             return subprocess.CompletedProcess(argv, 0, hit, "")
     started = time.monotonic()
     if limit is not None:
@@ -1036,3 +1103,60 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
         store(argv, body)
     return subprocess.CompletedProcess(argv, result.returncode, body,
                                        getattr(result, "stderr", "") or "")
+
+
+def usage_rows(hours, now=None, by="caller"):
+    """Count paid calls per hour and caller (or per route) over the last `hours` hours.
+
+    A call is one invocation: `record` writes one row per page, so rows
+    sharing a `call` id are one call. A row from before the id existed is
+    its own call. A row of cost 0 is a 304 or a cache hit: it is counted
+    apart as free and never as a call."""
+    since = (now or time.time()) - hours * 3600
+    table = {}
+    for number, path in enumerate((USAGE_LOG.with_suffix(USAGE_LOG.suffix + ".1"), USAGE_LOG)):
+        if not path.exists():
+            continue
+        for index, line in enumerate(path.read_text().splitlines()):
+            row = json.loads(line)
+            if row["ts"] < since:
+                continue
+            hour = time.strftime("%Y-%m-%d %H:00", time.localtime(row["ts"]))
+            key = (hour, row["caller"]) if by == "caller" else (row.get("route") or "unknown",)
+            cell = table.setdefault(key, {"calls": {}, "pages": 0, "free": 0})
+            if row.get("cost") == 0:
+                cell["free"] += 1
+                continue
+            call = row.get("call") or f"{number}:{index}"
+            cell["calls"][call] = (row["resource"] if row["resource"] in ("core", "graphql") else "other", row.get("via") == "shim")
+            cell["pages"] += 1
+    if by == "route":
+        return sorted(table.items(), key=lambda item: -len(item[1]["calls"]))
+    return sorted(table.items())
+
+
+def usage_report(hours, by="caller"):
+    if by == "route":
+        lines = [f"{'route':<56} {'paid':>6} {'free':>6}"]
+        for (name,), cell in usage_rows(hours, by=by):
+            lines.append(f"{name:<56} {len(cell['calls']):>6} {cell['free']:>6}")
+        return "\n".join(lines)
+    header = f"{'hour':<17} {'caller':<24} {'core':>6} {'graphql':>8} {'other':>6} {'pages':>6} {'free':>6} {'via shim (bypassed the gateway)':>32}"
+    lines = [header]
+    for (hour, name), cell in usage_rows(hours):
+        kinds = [kind for kind, _shim in cell["calls"].values()]
+        shim = sum(shim for _kind, shim in cell["calls"].values())
+        lines.append(f"{hour:<17} {name:<24} {kinds.count('core'):>6} {kinds.count('graphql'):>8} {kinds.count('other'):>6} {cell['pages']:>6} {cell['free']:>6} {shim:>32}")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["log-shim"]:
+        record(["gh", *sys.argv[3:]], caller_name=sys.argv[2] or "unknown", via="shim")
+        sys.exit(0)
+    parser = argparse.ArgumentParser(description="GitHub call usage")
+    parser.add_argument("command", choices=["usage"])
+    parser.add_argument("--hours", type=float, default=24)
+    parser.add_argument("--by", choices=["caller", "route"], default="caller")
+    args = parser.parse_args()
+    print(usage_report(args.hours, args.by))

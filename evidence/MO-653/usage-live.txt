@@ -1,0 +1,27 @@
+$ python3 coordinator/bin/gh_gateway.py usage --hours 2 --by route   (live log, read only; rows written before this change carry no route)
+route                                                      paid   free
+unknown                                                   10433      0
+user                                                        113      0
+repos/*/*/contents/evidence/T-9/check-proof.md               93      0
+repos/*/*/pulls/*                                            15      0
+
+Live log, last 2 hours, paid rows by caller/resource/verb (top 12):
+2282 calls
+   445  ticket         core     api
+   303  python3 -m unittest core     api
+   251  coordq         core     api
+   195  overnight      graphql  list
+   170  ticket         graphql  view
+   168  Python         graphql  view
+   165  Herdr          graphql  view
+   162  lane_driver    graphql  view
+   124  node           core     api
+    80  lane_driver    graphql  list
+    48  Python         graphql  list
+    27  unknown        core     api
+
+Fixture replay through gh_gateway.run (temp log, fake gh): 3 paid reads, 1 cache hit, 1 recorded 304
+route                                                      paid   free
+repos/*/*/issues/*/comments                                   2      1
+repos/*/*/commits/*/statuses                                  1      0
+repos/*/*/pulls/*                                             0      1

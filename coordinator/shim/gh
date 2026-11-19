@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ "$COORDINATOR_GH_VIA" != gateway ]; then
+    caller=${COORDINATOR_CALLER:-$(ps -o comm= -p "$PPID" 2>/dev/null)}
+    (python3 "${0%/*}/gh_gateway.py" log-shim "${caller##*/}" "$@" </dev/null >/dev/null 2>&1 &)
+fi
+exec "@REAL_GH@" "$@"

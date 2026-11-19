@@ -1,0 +1,8 @@
+{"ts": 1795115893.331, "caller": "gateway-caller", "resource": "core", "verb": "api", "call": "0a7a15ce9dfe", "pages": "unknown"}
+{"ts": 1795115893.331, "caller": "gateway-caller", "resource": "core", "verb": "api", "call": "0a7a15ce9dfe", "pages": "unknown"}
+{"ts": 1795115893.331, "caller": "gateway-caller", "resource": "core", "verb": "api", "call": "0a7a15ce9dfe", "pages": "unknown"}
+{"ts": 1795115893.332, "caller": "shim-caller", "resource": "core", "verb": "api", "call": "01138fa88bc3", "via": "shim"}
+
+hour              caller                     core  graphql  other  pages  via shim (bypassed the gateway)
+2026-11-19 11:00  gateway-caller                1        0      0      3                                0
+2026-11-19 11:00  shim-caller                   1        0      0      1                                1

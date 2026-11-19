@@ -1,0 +1,189 @@
+diff --git a/coordinator/bin/coordq b/coordinator/bin/coordq
+index 9b0b6218..c7958453 100755
+--- a/coordinator/bin/coordq
++++ b/coordinator/bin/coordq
+@@ -1294,6 +1294,9 @@ def cmd_status(a):
+ 
+ 
+ 
++OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
++
++
+ def gh_json(endpoint, optional=True, fresh=False):
+     """Read one endpoint as JSON.
+ 
+@@ -1301,7 +1304,7 @@ def gh_json(endpoint, optional=True, fresh=False):
+     a timer, and not an explicit `gate` an operator asked for."""
+     run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
+                          timeout=40, limit=FLOOR if optional else None,
+-                         fresh=fresh)
++                         fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
+     if run.returncode:
+         raise RuntimeError(f"GitHub request failed: {endpoint}")
+     pages = json.loads(run.stdout)
+@@ -1490,6 +1493,28 @@ def gate_changed_count(repo, number):
+     return count if isinstance(count, int) else None
+ 
+ 
++BASE_PIN_TTL = 60
++_base_pins = {}
++
++
++def pinned_base(repo, base):
++    """The commit a base branch points at, read once a minute per branch.
++
++    A compare that names the branch moves with the branch and can never be
++    cached. A compare of two commits cannot move, so the branch is pinned to
++    its commit first and the compare is kept on disk.
++    """
++    pin = _base_pins.get((repo, base))
++    if pin and time.time() - pin[1] < BASE_PIN_TTL:
++        return pin[0]
++    rows = gh_json(f"repos/{repo}/git/ref/heads/{base}")
++    sha = ((rows[0] if rows else {}).get("object") or {}).get("sha")
++    if not isinstance(sha, str) or not sha:
++        raise RuntimeError(f"cannot read the commit of {repo} {base}")
++    _base_pins[(repo, base)] = (sha, time.time())
++    return sha
++
++
+ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, attempts=2):
+     """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
+ 
+@@ -1507,7 +1532,11 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
+     and a truncated or short one is UNKNOWN, never CLEAR.
+     """
+     if base and head:
+-        return prompt_paths.scan_diff(gh_json, repo, base, head, attempts)
++        try:
++            pinned = pinned_base(repo, base)
++        except RuntimeError:
++            return prompt_paths.UNKNOWN
++        return prompt_paths.scan_diff(gh_json, repo, pinned, head, attempts)
+     count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
+     for _ in range(max(1, attempts)):
+         try:
+diff --git a/coordinator/bin/gh_gateway.py b/coordinator/bin/gh_gateway.py
+index e3522394..eff929f8 100644
+--- a/coordinator/bin/gh_gateway.py
++++ b/coordinator/bin/gh_gateway.py
+@@ -66,6 +66,16 @@ COLLECTION_ROUTES = (
+     r"search/(?:issues|repositories|users|commits|code|topics)",
+     r"(?:orgs|users)/[^/]+/(?:repos|members|teams|events|followers)",
+ )
++# A read that names only full commit SHAs returns the same bytes forever, so
++# it is kept for IMMUTABLE_TTL instead of LIST_TTL. A route that names a
++# branch or a tag is never here: `compare/main...<sha>` moves with `main`.
++IMMUTABLE_TTL = 30 * 24 * 3600
++SHA = r"[0-9a-f]{40}"
++IMMUTABLE_ROUTES = (
++    (rf"repos/[^/]+/[^/]+/git/trees/{SHA}", ("", "recursive=1")),
++    (rf"repos/[^/]+/[^/]+/compare/{SHA}\.\.\.{SHA}", ("",)),
++    (r"repos/[^/]+/[^/]+/contents/[^?]+", (f"ref={SHA}",)),
++)
+ READ_COMMANDS = (
+     ("pr", "list"),
+     ("issue", "list"),
+@@ -404,6 +414,8 @@ def cacheable(argv):
+     # `gh api -X POST repos/o/r/dispatches?ref=main`, must never be served
+     # from the cache: the cached success would answer a request that was
+     # never sent.
++    if immutable(argv):
++        return True
+     path = endpoint(argv)
+     if method(argv) != "GET" or "?" not in path:
+         return False
+@@ -415,6 +427,16 @@ def cacheable(argv):
+     return any(re.fullmatch(route, clean) for route in COLLECTION_ROUTES)
+ 
+ 
++def immutable(argv):
++    """True when this api GET names only full commit SHAs, so it never changes."""
++    path = endpoint(argv)
++    if not path or method(argv) != "GET":
++        return False
++    route, _, query = path.lstrip("/").partition("?")
++    return any(re.fullmatch(pattern, route.rstrip("/")) and any(re.fullmatch(q, query) for q in queries)
++               for pattern, queries in IMMUTABLE_ROUTES)
++
++
+ def conditional(argv):
+     """True when a read can be made conditional, so a 304 costs no core call.
+ 
+@@ -648,7 +670,8 @@ def store(argv, stdout):
+     if not cacheable(argv) or not isinstance(stdout, str):
+         return
+     _atomic_write(CACHE_DIR / _key(argv),
+-                  json.dumps({"expiry": time.time() + LIST_TTL, "stdout": stdout}))
++                  json.dumps({"expiry": time.time() + (IMMUTABLE_TTL if immutable(argv) else LIST_TTL),
++                            "stdout": stdout}))
+ 
+ 
+ def filtered(argv):
+diff --git a/coordinator/bin/proof_file.py b/coordinator/bin/proof_file.py
+index ea7c240c..79ff3f7d 100644
+--- a/coordinator/bin/proof_file.py
++++ b/coordinator/bin/proof_file.py
+@@ -10,6 +10,8 @@ import base64
+ import json
+ import subprocess
+ 
++import gh_gateway
++
+ PROOF_NAME = "check-proof.md"
+ DEFAULT_PROOF = f"evidence/{PROOF_NAME}"
+ 
+@@ -43,8 +45,8 @@ def fetch(repo, path, head):
+     if not path:
+         return MISSING, None
+     try:
+-        run = subprocess.run(["gh", "api", f"repos/{repo}/contents/{path}?ref={head}"],
+-                              capture_output=True, text=True, timeout=60)
++        run = gh_gateway.run(["gh", "api", f"repos/{repo}/contents/{path}?ref={head}"],
++                             timeout=60)
+     except subprocess.TimeoutExpired:
+         return UNREADABLE, "the read timed out"
+     except OSError as exc:
+diff --git a/coordinator/launchd/dev.coordinator.gatekeep.plist b/coordinator/launchd/dev.coordinator.gatekeep.plist
+index fe3319f6..4e7f8b11 100644
+--- a/coordinator/launchd/dev.coordinator.gatekeep.plist
++++ b/coordinator/launchd/dev.coordinator.gatekeep.plist
+@@ -10,7 +10,7 @@
+         <string>gatekeep</string>
+     </array>
+     <key>StartInterval</key>
+-    <integer>60</integer>
++    <integer>180</integer>
+     <key>RunAtLoad</key>
+     <true/>
+     <key>EnvironmentVariables</key>
+diff --git a/evidence/MO-616/check-proof.md b/evidence/MO-616/check-proof.md
+new file mode 100644
+index 00000000..9366dc8f
+--- /dev/null
++++ b/evidence/MO-616/check-proof.md
+@@ -0,0 +1,24 @@
++# Check proof
++
++Command: `python3 scripts/mac_ops_fast_check.py`
++Checked commit: `cc20d75fe9255bd8f802a1aaa57d16fc4d84c977`
++Working tree clean when the checks ran: yes
++Run result: passed
++
++| Check | Command | Result | Detail |
++| --- | --- | --- | --- |
++| lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
++| overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
++| python syntax: coordinator/bin/gh_gateway.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/bin/gh_gateway.py` | passed |  |
++| python syntax: coordinator/bin/proof_file.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/bin/proof_file.py` | passed |  |
++| python syntax: tests/test_prompt_paths.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_prompt_paths.py` | passed |  |
++| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 77 findings, all in the baseline |
++| mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
++| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-kf7xe6j7 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-kf7xe6j7/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
++| heavy help | `python3 heavy.py --help` | passed |  |
++| tests: tests.test_prompt_paths | `python3 -m unittest tests.test_prompt_paths` | passed |  |
++
++A result is `passed`, `failed` or `not run`. A failed check stopped the run,
++so every check after it is `not run`. A tool that is not on this machine
++is recorded as `not run` too, and leaves the run incomplete: the run is
++then not a pass.

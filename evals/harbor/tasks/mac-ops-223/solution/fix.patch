@@ -1,0 +1,170 @@
+diff --git a/coordinator/bin/ticket b/coordinator/bin/ticket
+index e7d026db..3a2a0bd8 100755
+--- a/coordinator/bin/ticket
++++ b/coordinator/bin/ticket
+@@ -36,6 +36,11 @@ FENCED_BLOCK = re.compile(r"(?s)```.*?```")
+ REF_STATE = {}
+ KEY_ISSUE = {}
+ COMMENT_TEXT = {}
++PR_REF_WORDS = ("refs", "ref", "fixes", "fix", "fixed", "closes", "close", "closed",
++                "resolves", "resolve", "resolved")
++PR_REF_WORD = re.compile(r"(?i)\b(?:" + "|".join(PR_REF_WORDS) + r")\b")
++PR_REF_NUMBER = re.compile(r"(?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(\d+)")
++RESTART_PATTERN = re.compile(r"(?i)\b(restart|redo|again|reopen|rework|retry|fix|start over|another pass|not done|incomplete)\b")
+ RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
+ RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
+ SHYAM = re.compile(r"\bshyam\b", re.I)
+@@ -452,6 +457,141 @@ def reference_state(repo, number):
+     return state
+ 
+ 
++def iso_time(text):
++    """A GitHub timestamp as a comparable UTC datetime, or None."""
++    if not text:
++        return None
++    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
++        try:
++            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
++        except ValueError:
++            continue
++    return None
++
++
++def time_key(text):
++    """A sort key for a GitHub timestamp; a missing timestamp sorts first."""
++    return iso_time(text) or datetime.min.replace(tzinfo=timezone.utc)
++
++
++def same_repo(named, repo):
++    """True when two `owner/name` names point at the same repository."""
++    if not named or not repo:
++        return False
++    return named.lower().split("/")[-2:] == repo.lower().split("/")[-2:]
++
++
++def references_issue(body, number, repo=None):
++    """True when the body references issue `number` with a reference keyword.
++
++    The keyword carries the numbers that follow it on the same line, so
++    `Refs #160, #161` names both, and `owner/name#160` names the issue only
++    when the repository is the one in play.
++    """
++    for line in (body or "").splitlines():
++        match = PR_REF_WORD.search(line)
++        if not match:
++            continue
++        for token in PR_REF_NUMBER.finditer(line[match.end():]):
++            named_repo, token_number = token.group(1), int(token.group(2))
++            if token_number != number:
++                continue
++            if named_repo and repo and not same_repo(named_repo, repo):
++                continue
++            return True
++    return False
++
++
++def referencing_pulls(repo, number):
++    """The pull requests in `repo` whose body references issue `number`.
++
++    The issue timeline names every pull request that mentions the issue, and
++    the pull request itself says whether the mention is a reference. A pull
++    request in another repository never counts.
++    """
++    events = gh_json(["api", "--paginate", f"repos/{repo}/issues/{number}/timeline?per_page=100"])
++    found = {}
++    for event in events:
++        if event.get("event") != "cross-referenced":
++            continue
++        source = (event.get("source") or {}).get("issue") or {}
++        if "pull_request" not in source:
++            continue
++        if not same_repo((source.get("repository") or {}).get("full_name"), repo):
++            continue
++        pull_number = source.get("number")
++        if pull_number in found:
++            continue
++        if not references_issue(source.get("body") or "", number, repo):
++            continue
++        pull = gh_json(["api", f"repos/{repo}/pulls/{pull_number}"])
++        if not references_issue(pull.get("body") or "", number, repo):
++            continue
++        found[pull_number] = {
++            "number": pull_number,
++            "state": pull.get("state"),
++            "merged": bool(pull.get("merged")),
++            "mergedAt": pull.get("merged_at"),
++            "createdAt": pull.get("created_at"),
++        }
++    return sorted(found.values(), key=lambda pull: pull["number"])
++
++
++def is_restart_comment(body):
++    """True when a coordinator comment says the work starts again.
++
++    A restart is the coordinator's own decision, the comment that opens with
++    `Coordinator` and says the work is not done. The intent comment
++    `ticket start` posts is not a restart: it is the start itself, and
++    counting it would let a relaunch past the guard that stops it.
++    """
++    text = (body or "").strip()
++    if not text.lower().startswith("coordinator"):
++        return False
++    low = text.lower()
++    return bool(RESTART_PATTERN.search(low))
++
++
++def coordinator_restart_time(issue):
++    """When the coordinator last restarted the work on the issue."""
++    newest = None
++    for comment in issue.get("comments") or []:
++        if not is_restart_comment(comment.get("body") or ""):
++            continue
++        created = comment.get("createdAt") or ""
++        if newest is None or created > newest:
++            newest = created
++    return newest
++
++
++def pull_guard_reasons(repo, issue):
++    """Why a start must be refused because a pull request already carries the issue.
++
++    An open pull request means the work is already in flight. A merged one
++    means the work landed, unless the coordinator restarted the issue after
++    that merge.
++    """
++    pulls = referencing_pulls(repo, issue["number"])
++    if not pulls:
++        return []
++    open_pulls = [pull for pull in pulls if pull["state"] == "open"]
++    if open_pulls:
++        newest = max(open_pulls, key=lambda pull: time_key(pull["createdAt"]))
++        return [f"open pull request #{newest['number']} already references this issue"]
++    restart = iso_time(coordinator_restart_time(issue))
++    blocking = []
++    for pull in pulls:
++        if not pull["merged"]:
++            continue
++        merged_at = iso_time(pull["mergedAt"])
++        if restart is None or merged_at is None or merged_at > restart:
++            blocking.append(pull)
++    if blocking:
++        newest = max(blocking, key=lambda pull: time_key(pull["mergedAt"]))
++        return [f"already merged via #{newest['number']}; close the issue"]
++    return []
++
++
+ def own_body(body):
+     """The body without preserved contracts and code, which name other tickets."""
+     return FENCED_BLOCK.sub(" ", DETAILS_BLOCK.sub(" ", body))
+@@ -639,6 +779,11 @@ def ledger_of(issue, login):
+ def validate_start(cfg, repo, issue, check_text=True):
+     rcfg = repo_config(cfg, repo)
+     t = parse_ticket(cfg, repo, issue)
++    # The pull request guard comes before the other checks so the refusal
++    # names the pull request that already carries the issue.
++    pull_reasons = pull_guard_reasons(repo, issue)
++    if pull_reasons:
++        raise Refuse(pull_reasons[0])
+     if t["state"] != "OPEN":
+         suffix = ""
+         if check_text:

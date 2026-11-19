@@ -95,3 +95,25 @@ the field, which is what steps 4 and 5 need for the cost column.
   evidence for step 1; later steps will add one task folder per merged PR.
 - Harbor deletes the container after a trial by default (`--delete`). The
   saved logs are what is left of a run.
+
+## The frozen eval set (ticket #633, PR 1)
+
+`evals/harbor/sets/ladder.json` lists the merged PRs the ladder gate scores
+models on (`{"tasks": [...]}`, each with `id`, `type`, `heldout`, repo, PR,
+ticket, merge and parent commits, test files and test command). About a
+quarter of the tasks are held out, chosen by `sha256(group) % 4 == 0` (a task's `group` is its id unless it shares a test file, so a cluster lands on one side) and recorded
+in the file so the slice never moves; `build_tasks.py check` fails if a
+recorded value disagrees with the hash.
+
+```sh
+evals/harbor/build_tasks.py build      # task folders from the selection
+evals/harbor/build_tasks.py prepare    # parent-commit snapshots into .cache
+evals/harbor/build_tasks.py check
+timeout 900 heavy harbor run -p evals/harbor/tasks/<id> -a oracle -n 1 -o <dir> -y
+```
+
+`prepare` runs `git archive <parent>` from the local clone into the gitignored
+`evals/harbor/.cache/<id>/` and links the tarball into the task's build
+context. No token enters the image, the task files or the logs. The PR's own
+test files live under `tests/files/` and are copied over `/app` only at
+grading. Oracle and nop results per task are in `evidence/MO-633/oracle.md`.
