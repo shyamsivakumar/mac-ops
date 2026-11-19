@@ -33,11 +33,11 @@ BUILDER_RUNS = [{"executedModel": "minimax/MiniMax-M3.1-Flash"}]
 # thread records the gate model coordq launches, which gatekeep requires before
 # it treats a dead gate as retryable; setUpModule checks it against coordq.
 ASTRA_GATE = {"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}
-OPUS_GATE = {"providerInstanceId": "claudeAgent", "model": "claude-opus-5-5"}
+LAST_GATE = {"providerInstanceId": "claudeAgent", "model": "claude-sonnet-5-5"}
 DEAD_GATE = {"thread": {"status": "failed", **ASTRA_GATE},
              "items": [{"type": "user_message", "text": "review"}],
              "recentRuns": [{"executedModel": None}]}
-DEAD_OPUS_GATE = {"thread": {"status": "failed", **OPUS_GATE},
+DEAD_LAST_GATE = {"thread": {"status": "failed", **LAST_GATE},
                  "items": [{"type": "user_message", "text": "review"}],
                  "recentRuns": [{"executedModel": None}]}
 
@@ -172,13 +172,13 @@ class FirstRetryTest(RetryLimitBase):
 class NonAstraGateTest(RetryLimitBase):
     """A dead gate that did not run on the Astra model is left alone."""
 
-    def test_a_dead_opus_gate_is_not_requeued(self):
-        coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_OPUS_GATE))
+    def test_a_dead_last_gate_is_not_requeued(self):
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_LAST_GATE))
         self.write_queue(heads={self.key: 4})
         out, _ = self.run_gatekeep()
         self.assertNotIn("regating", out)
         self.assertEqual(self.gate_items(), [])
-        # The head record is a dict now: the dead Opus gate is not requeued
+        # The head record is a dict now: the dead last gate is not requeued
         # and the head is recorded as given up.
         self.assertEqual(self.read_queue()["gatedHeads"][self.key],
                          {"id": 4, "retries": 0, "at": None, "givenUp": True})
