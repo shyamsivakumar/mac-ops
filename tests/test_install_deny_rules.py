@@ -121,6 +121,16 @@ class InstallTest(FakeHome):
         self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
         self.assertFalse(self.installer.status(SPEC)["t3_gate_instance"])
 
+    def test_reinstall_keeps_a_gate_the_owner_disabled(self):
+        self.installer.install(SPEC)
+        t3_path = self.installer.t3_settings(SPEC)
+        gate_id = SPEC["t3_gate_instance"]["instanceId"]
+        settings = load(t3_path)
+        settings["providerInstances"][gate_id]["enabled"] = False
+        t3_path.write_text(json.dumps(settings))
+        self.installer.install(SPEC)
+        self.assertFalse(load(t3_path)["providerInstances"][gate_id]["enabled"])
+
     def test_uninstall_restores_what_install_replaced(self):
         kept = install_deny_rules.claude_deny(SPEC, self.home)[0]
         settings = load(self.settings_path)
@@ -279,6 +289,11 @@ DENIED_PUSHES = [
     "git push main main",
     "git push master HEAD:master",
     "git push origin t3/x && git push origin main",
+    "if true; then git push origin main; fi",
+    "for b in x; do git push origin main; done",
+    "! git push origin main",
+    "{ git push origin main; }",
+    "while true; do git push; done",
     "git push --force origin t3/x",
     "git push -f upstream t3/x",
     "git push --force-with-lease other t3/x",
@@ -325,6 +340,8 @@ UNPINNED_MERGES = [
     f"gh pr merge 531 --subject 'Merge --match-head-commit {PIN}'",
     "gh pr merge 531 --match-head-commit",
     "gh pr merge 531 --match-head-commit main",
+    "if true; then gh pr merge 531 --squash; fi",
+    "until false; do gh pr merge 531; done",
 ]
 
 
@@ -438,14 +455,18 @@ console.log(JSON.stringify(out));
         ascend = str(self.home / "Code/slash-eureka/README.md")
         gate = {"MAC_OPS_ROLE": "gate"}
 
-        def bash(command, env=None):
-            return ({"toolName": "bash", "input": {"command": command}}, env or {})
+        def bash(command, env=None, cwd=None):
+            event = {"toolName": "bash", "input": {"command": command}}
+            return ({**event, "cwd": cwd} if cwd else event, env or {})
 
         cases = [
             (({"toolName": "read", "input": {"path": ascend}}, {}), True),
             (({"toolName": "edit", "input": {"path": str(fake_env)}}, {}), True),
             (bash(f"cat {fake_env}"), True),
             (bash("git push origin main"), True),
+            (bash("if true; then git push origin main; fi"), True),
+            (bash("cat README.md", cwd=str(self.home / "Code/slash-eureka/x")), True),
+            (bash("cat README.md", cwd=str(self.home)), False),
             (bash("git push"), True),
             (bash("git push origin t3/x --force"), True),
             (bash("git push origin HEAD:main"), True),
@@ -472,7 +493,7 @@ console.log(JSON.stringify(out));
             ),
         ]
         events = [
-            {"cwd": str(self.home), "event": event, "env": env}
+            {"cwd": event.pop("cwd", str(self.home)), "event": event, "env": env}
             for (event, env), _ in cases
         ]
         (self.home / "events.json").write_text(json.dumps(events))

@@ -51,7 +51,9 @@ function hookReason(command, env) {
   return JSON.parse(proc.stdout).hookSpecificOutput.permissionDecisionReason.replace(PREFIX, "");
 }
 
-function checkBash(command, env) {
+function checkBash(command, env, cwd) {
+  const here = abs(cwd, cwd);
+  if (underAscend(here) || underAscend(real(here))) return SPEC.ascend_bash_reason;
   const decided = hookReason(command, env);
   if (decided) return decided;
   if (ASCEND_TEXT_RES.some((re) => re.test(command))) return SPEC.ascend_bash_reason;
@@ -63,7 +65,7 @@ function checkBash(command, env) {
 // path-bearing tool except ls, which only lists names.
 function checkTool(name, input, cwd, env) {
   const tool = String(name || "");
-  if (tool === "bash" || tool === "powershell") return checkBash(String(input.command || ""), env);
+  if (tool === "bash" || tool === "powershell") return checkBash(String(input.command || ""), env, cwd);
   for (const [key, value] of Object.entries(input || {})) {
     if (typeof value !== "string" || !PATH_KEY.test(key)) continue;
     const a = abs(value, cwd);

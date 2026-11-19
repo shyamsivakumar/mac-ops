@@ -149,6 +149,14 @@ ROWS = [
     ("--mirror", "git push --mirror origin", True, {}),
     ("matching refspec", "git push origin :", True, {}),
     ("wildcard refspec", "git push origin 'refs/heads/*:refs/heads/*'", True, {}),
+    ("push main inside an if body", "if true; then git push origin main; fi", True, {}),
+    ("push main inside a for loop", "for b in x; do git push origin main; done", True, {}),
+    ("push main after a negation", "! git push origin main", True, {}),
+    ("push main inside a brace group", "{ git push origin main; }", True, {}),
+    ("bare push inside a while loop", "while true; do git push; done", True, {}),
+    ("builder merge inside an if body", "if true; then gh pr merge 531 --squash; fi", True, {}),
+    ("builder merge inside an until loop", "until false; do gh pr merge 531; done", True, {}),
+    ("task-branch push inside an if body", "if true; then git push origin task; fi", False, {}),
     ("git push origin task", "git push origin task", False, {}),
     ("git push main task (a remote named main)", "git push main task", False, {}),
     ("git push origin HEAD:main", "git push origin HEAD:main", True, {}),
@@ -212,6 +220,8 @@ PI_ONLY_ROWS = [
         {"toolName": "bash", "input": {"command": "ls ~/.ssh; cat ~/.ssh/id_ed25519"}},
         True,
     ),
+    ("relative read while the shell is inside the Ascend tree", {"toolName": "bash", "input": {"command": "cat README.md"}, "cwd": str(HOME / "Code/slash-eureka/x")}, True),
+    ("relative read in an ordinary directory", {"toolName": "bash", "input": {"command": "cat README.md"}, "cwd": str(HOME)}, False),
     (
         "write prose that mentions .env",
         {
@@ -342,7 +352,7 @@ def probe_pi_guards() -> None:
         for label, command, _, env in ROWS
     ]
     events += [
-        {"label": label, "cwd": str(SCRATCH), "event": event}
+        {"label": label, "cwd": event.pop("cwd", str(SCRATCH)), "event": event}
         for label, event, _ in PI_ONLY_ROWS
     ]
     expected = [refused for _, _, refused, _ in ROWS] + [

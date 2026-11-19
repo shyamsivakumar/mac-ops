@@ -1,8 +1,8 @@
 PASS installer: install twice over a scratch home, then status: installed=True
-PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-mcbo8s83/home/.pi/agent/extensions/deny-guar
+PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-nacdczaj/home/.pi/agent/extensions/deny-guar
 PASS installer: claude deny list complete: missing=[]
-PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-mcbo8s83/home/.claude/hooks/deny-merge-guard.py
-PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-mcbo8s83/home/.claude/hooks/deny-merge-guard.py']
+PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-nacdczaj/home/.claude/hooks/deny-merge-guard.py
+PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-nacdczaj/home/.claude/hooks/deny-merge-guard.py']
 not run claude permissions.deny: read under slash-eureka: Read(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: edit under slash-eureka: Edit(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: read an env file: Read(**/.env) installed; Claude evaluates it in a session, so the decision is not run here
@@ -44,6 +44,14 @@ PASS claude hook: --all: deny (mac-ops deny rules (#530): this push names no exp
 PASS claude hook: --mirror: deny (mac-ops deny rules (#530): this push names no explicit destination branch; name the branch)
 PASS claude hook: matching refspec: deny (mac-ops deny rules (#530): this push names no explicit destination branch; name the branch)
 PASS claude hook: wildcard refspec: deny (mac-ops deny rules (#530): this push names no explicit destination branch; name the branch)
+PASS claude hook: push main inside an if body: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
+PASS claude hook: push main inside a for loop: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
+PASS claude hook: push main after a negation: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
+PASS claude hook: push main inside a brace group: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
+PASS claude hook: bare push inside a while loop: deny (mac-ops deny rules (#530): this push names no explicit destination branch; name the branch)
+PASS claude hook: builder merge inside an if body: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a gate thread, with th)
+PASS claude hook: builder merge inside an until loop: deny (mac-ops deny rules (#530): gh pr merge is denied for builders; only a gate thread, with th)
+PASS claude hook: task-branch push inside an if body: allow (no decision)
 PASS claude hook: git push origin task: allow (no decision)
 PASS claude hook: git push main task (a remote named main): allow (no decision)
 PASS claude hook: git push origin HEAD:main: deny (mac-ops deny rules (#530): pushing to main or master is denied; push a task branch instead)
@@ -94,6 +102,14 @@ PASS pi guard agent: --all: blocked
 PASS pi guard agent: --mirror: blocked
 PASS pi guard agent: matching refspec: blocked
 PASS pi guard agent: wildcard refspec: blocked
+PASS pi guard agent: push main inside an if body: blocked
+PASS pi guard agent: push main inside a for loop: blocked
+PASS pi guard agent: push main after a negation: blocked
+PASS pi guard agent: push main inside a brace group: blocked
+PASS pi guard agent: bare push inside a while loop: blocked
+PASS pi guard agent: builder merge inside an if body: blocked
+PASS pi guard agent: builder merge inside an until loop: blocked
+PASS pi guard agent: task-branch push inside an if body: allowed
 PASS pi guard agent: git push origin task: allowed
 PASS pi guard agent: git push main task (a remote named main): allowed
 PASS pi guard agent: git push origin HEAD:main: blocked
@@ -116,6 +132,8 @@ PASS pi guard agent: bash cat of an env file: blocked
 PASS pi guard agent: bash cat of an ssh-directory file (not executed): blocked
 PASS pi guard agent: one directory listing of the ssh directory: allowed
 PASS pi guard agent: a listing followed by a key read: blocked
+PASS pi guard agent: relative read while the shell is inside the Ascend tree: blocked
+PASS pi guard agent: relative read in an ordinary directory: allowed
 PASS pi guard agent: write prose that mentions .env: allowed
 PASS pi guard agent-minimax: task-branch push beside PR text naming main: allowed
 PASS pi guard agent-minimax: task-branch push, then a PR heredoc naming a main push: allowed
@@ -151,6 +169,14 @@ PASS pi guard agent-minimax: --all: blocked
 PASS pi guard agent-minimax: --mirror: blocked
 PASS pi guard agent-minimax: matching refspec: blocked
 PASS pi guard agent-minimax: wildcard refspec: blocked
+PASS pi guard agent-minimax: push main inside an if body: blocked
+PASS pi guard agent-minimax: push main inside a for loop: blocked
+PASS pi guard agent-minimax: push main after a negation: blocked
+PASS pi guard agent-minimax: push main inside a brace group: blocked
+PASS pi guard agent-minimax: bare push inside a while loop: blocked
+PASS pi guard agent-minimax: builder merge inside an if body: blocked
+PASS pi guard agent-minimax: builder merge inside an until loop: blocked
+PASS pi guard agent-minimax: task-branch push inside an if body: allowed
 PASS pi guard agent-minimax: git push origin task: allowed
 PASS pi guard agent-minimax: git push main task (a remote named main): allowed
 PASS pi guard agent-minimax: git push origin HEAD:main: blocked
@@ -173,6 +199,8 @@ PASS pi guard agent-minimax: bash cat of an env file: blocked
 PASS pi guard agent-minimax: bash cat of an ssh-directory file (not executed): blocked
 PASS pi guard agent-minimax: one directory listing of the ssh directory: allowed
 PASS pi guard agent-minimax: a listing followed by a key read: blocked
+PASS pi guard agent-minimax: relative read while the shell is inside the Ascend tree: blocked
+PASS pi guard agent-minimax: relative read in an ordinary directory: allowed
 PASS pi guard agent-minimax: write prose that mentions .env: allowed
 PASS pi guard agent-glm: task-branch push beside PR text naming main: allowed
 PASS pi guard agent-glm: task-branch push, then a PR heredoc naming a main push: allowed
@@ -208,6 +236,14 @@ PASS pi guard agent-glm: --all: blocked
 PASS pi guard agent-glm: --mirror: blocked
 PASS pi guard agent-glm: matching refspec: blocked
 PASS pi guard agent-glm: wildcard refspec: blocked
+PASS pi guard agent-glm: push main inside an if body: blocked
+PASS pi guard agent-glm: push main inside a for loop: blocked
+PASS pi guard agent-glm: push main after a negation: blocked
+PASS pi guard agent-glm: push main inside a brace group: blocked
+PASS pi guard agent-glm: bare push inside a while loop: blocked
+PASS pi guard agent-glm: builder merge inside an if body: blocked
+PASS pi guard agent-glm: builder merge inside an until loop: blocked
+PASS pi guard agent-glm: task-branch push inside an if body: allowed
 PASS pi guard agent-glm: git push origin task: allowed
 PASS pi guard agent-glm: git push main task (a remote named main): allowed
 PASS pi guard agent-glm: git push origin HEAD:main: blocked
@@ -230,6 +266,8 @@ PASS pi guard agent-glm: bash cat of an env file: blocked
 PASS pi guard agent-glm: bash cat of an ssh-directory file (not executed): blocked
 PASS pi guard agent-glm: one directory listing of the ssh directory: allowed
 PASS pi guard agent-glm: a listing followed by a key read: blocked
+PASS pi guard agent-glm: relative read while the shell is inside the Ascend tree: blocked
+PASS pi guard agent-glm: relative read in an ordinary directory: allowed
 PASS pi guard agent-glm: write prose that mentions .env: allowed
 PASS pi guard agent-deepseek: task-branch push beside PR text naming main: allowed
 PASS pi guard agent-deepseek: task-branch push, then a PR heredoc naming a main push: allowed
@@ -265,6 +303,14 @@ PASS pi guard agent-deepseek: --all: blocked
 PASS pi guard agent-deepseek: --mirror: blocked
 PASS pi guard agent-deepseek: matching refspec: blocked
 PASS pi guard agent-deepseek: wildcard refspec: blocked
+PASS pi guard agent-deepseek: push main inside an if body: blocked
+PASS pi guard agent-deepseek: push main inside a for loop: blocked
+PASS pi guard agent-deepseek: push main after a negation: blocked
+PASS pi guard agent-deepseek: push main inside a brace group: blocked
+PASS pi guard agent-deepseek: bare push inside a while loop: blocked
+PASS pi guard agent-deepseek: builder merge inside an if body: blocked
+PASS pi guard agent-deepseek: builder merge inside an until loop: blocked
+PASS pi guard agent-deepseek: task-branch push inside an if body: allowed
 PASS pi guard agent-deepseek: git push origin task: allowed
 PASS pi guard agent-deepseek: git push main task (a remote named main): allowed
 PASS pi guard agent-deepseek: git push origin HEAD:main: blocked
@@ -287,6 +333,8 @@ PASS pi guard agent-deepseek: bash cat of an env file: blocked
 PASS pi guard agent-deepseek: bash cat of an ssh-directory file (not executed): blocked
 PASS pi guard agent-deepseek: one directory listing of the ssh directory: allowed
 PASS pi guard agent-deepseek: a listing followed by a key read: blocked
+PASS pi guard agent-deepseek: relative read while the shell is inside the Ascend tree: blocked
+PASS pi guard agent-deepseek: relative read in an ordinary directory: allowed
 PASS pi guard agent-deepseek: write prose that mentions .env: allowed
 PASS pi guard agent-openai-api: task-branch push beside PR text naming main: allowed
 PASS pi guard agent-openai-api: task-branch push, then a PR heredoc naming a main push: allowed
@@ -322,6 +370,14 @@ PASS pi guard agent-openai-api: --all: blocked
 PASS pi guard agent-openai-api: --mirror: blocked
 PASS pi guard agent-openai-api: matching refspec: blocked
 PASS pi guard agent-openai-api: wildcard refspec: blocked
+PASS pi guard agent-openai-api: push main inside an if body: blocked
+PASS pi guard agent-openai-api: push main inside a for loop: blocked
+PASS pi guard agent-openai-api: push main after a negation: blocked
+PASS pi guard agent-openai-api: push main inside a brace group: blocked
+PASS pi guard agent-openai-api: bare push inside a while loop: blocked
+PASS pi guard agent-openai-api: builder merge inside an if body: blocked
+PASS pi guard agent-openai-api: builder merge inside an until loop: blocked
+PASS pi guard agent-openai-api: task-branch push inside an if body: allowed
 PASS pi guard agent-openai-api: git push origin task: allowed
 PASS pi guard agent-openai-api: git push main task (a remote named main): allowed
 PASS pi guard agent-openai-api: git push origin HEAD:main: blocked
@@ -344,6 +400,8 @@ PASS pi guard agent-openai-api: bash cat of an env file: blocked
 PASS pi guard agent-openai-api: bash cat of an ssh-directory file (not executed): blocked
 PASS pi guard agent-openai-api: one directory listing of the ssh directory: allowed
 PASS pi guard agent-openai-api: a listing followed by a key read: blocked
+PASS pi guard agent-openai-api: relative read while the shell is inside the Ascend tree: blocked
+PASS pi guard agent-openai-api: relative read in an ordinary directory: allowed
 PASS pi guard agent-openai-api: write prose that mentions .env: allowed
 PASS pi guard agent-anthropic-api: task-branch push beside PR text naming main: allowed
 PASS pi guard agent-anthropic-api: task-branch push, then a PR heredoc naming a main push: allowed
@@ -379,6 +437,14 @@ PASS pi guard agent-anthropic-api: --all: blocked
 PASS pi guard agent-anthropic-api: --mirror: blocked
 PASS pi guard agent-anthropic-api: matching refspec: blocked
 PASS pi guard agent-anthropic-api: wildcard refspec: blocked
+PASS pi guard agent-anthropic-api: push main inside an if body: blocked
+PASS pi guard agent-anthropic-api: push main inside a for loop: blocked
+PASS pi guard agent-anthropic-api: push main after a negation: blocked
+PASS pi guard agent-anthropic-api: push main inside a brace group: blocked
+PASS pi guard agent-anthropic-api: bare push inside a while loop: blocked
+PASS pi guard agent-anthropic-api: builder merge inside an if body: blocked
+PASS pi guard agent-anthropic-api: builder merge inside an until loop: blocked
+PASS pi guard agent-anthropic-api: task-branch push inside an if body: allowed
 PASS pi guard agent-anthropic-api: git push origin task: allowed
 PASS pi guard agent-anthropic-api: git push main task (a remote named main): allowed
 PASS pi guard agent-anthropic-api: git push origin HEAD:main: blocked
@@ -401,8 +467,10 @@ PASS pi guard agent-anthropic-api: bash cat of an env file: blocked
 PASS pi guard agent-anthropic-api: bash cat of an ssh-directory file (not executed): blocked
 PASS pi guard agent-anthropic-api: one directory listing of the ssh directory: allowed
 PASS pi guard agent-anthropic-api: a listing followed by a key read: blocked
+PASS pi guard agent-anthropic-api: relative read while the shell is inside the Ascend tree: blocked
+PASS pi guard agent-anthropic-api: relative read in an ordinary directory: allowed
 PASS pi guard agent-anthropic-api: write prose that mentions .env: allowed
 PASS pushing a task branch is still allowed (scratch remote): ['refs/heads/t3/deny-probe']
 PASS scratch remote has no main branch: ['refs/heads/t3/deny-probe']
 
-399 passed, 0 failed, 7 not run
+467 passed, 0 failed, 7 not run
