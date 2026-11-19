@@ -2679,7 +2679,9 @@ def shutdown_simulators_booted_by_job(
     whatever the job's own baseline says, once no other running job may use it,
     so the last job to release a device shuts it down. A pending device that is
     no longer booted, that booted again since it was recorded, that someone
-    else uses, or that was shut down, leaves ``pending``.
+    else uses, or that was shut down, leaves ``pending``. A device whose
+    shutdown fails while it stays booted remains in ``pending`` (or enters it),
+    so the next job retries instead of reading it as part of its own baseline.
     """
     pending = {} if pending is None else pending
     booted_before: set = set()
@@ -2724,8 +2726,8 @@ def shutdown_simulators_booted_by_job(
         if _device_used_by_other_job(udid, epoch, competitors):
             pending[key] = epoch
             continue
-        pending.pop(key, None)
         if udid not in booted_reader():
+            pending.pop(key, None)
             continue
         rows = rows_reader()
         parents = {pid: ppid for pid, ppid, _ in rows}
@@ -2743,9 +2745,15 @@ def shutdown_simulators_booted_by_job(
             and ".simruntime/" not in command
             for pid, _, command in rows
         ):
+            pending.pop(key, None)
             continue
         if shutdown(udid):
+            pending.pop(key, None)
             stopped.append(udid)
+        elif udid in booted_reader():
+            pending[key] = epoch
+        else:
+            pending.pop(key, None)
     booted_keys = {udid.upper() for udid in booted}
     for key in [key for key in pending if key not in booted_keys]:
         del pending[key]
