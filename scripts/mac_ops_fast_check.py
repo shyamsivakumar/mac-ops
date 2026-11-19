@@ -39,6 +39,11 @@ RUFF_VERSION = "0.14.0"
 RUFF_RULES = "F,B"
 RUFF_BASELINE = "scripts/ruff-baseline.txt"
 
+# mypy --strict covers only the modules named here. Imports are followed
+# silently, so a finding in a neighbour never fails a listed module.
+MYPY_VERSION = "1.18.2"
+MYPY_MODULES = ("board_resources.py",)
+
 
 class NotRun(Exception):
     """A check that could not run: recorded as `not run`, not as a failure."""
@@ -163,6 +168,37 @@ def check_ruff():
             f"{sum(count for _, count in extra)} Ruff findings are not in the baseline; "
             f"first: {name} {code} {message}")
     return f"{sum(counts.values())} findings, all in the baseline"
+
+
+def mypy_command():
+    cache = Path(tempfile.gettempdir()) / "mac-ops-mypy-cache"
+    return ["uvx", f"mypy@{MYPY_VERSION}", "--strict", "--follow-imports=silent",
+            "--python-version", "3.9", "--cache-dir", str(cache), *MYPY_MODULES]
+
+
+def check_mypy():
+    """Run mypy --strict over the listed modules; any finding fails.
+
+    A tool that is not there is recorded as `not run` instead.
+    """
+    if shutil.which("uvx") is None:
+        raise NotRun("uvx is not installed")
+    probe = subprocess.run(["uvx", f"mypy@{MYPY_VERSION}", "--version"], cwd=ROOT,
+                           capture_output=True, text=True, timeout=300)
+    if probe.returncode != 0:
+        raise NotRun(f"mypy {MYPY_VERSION} is not available through uvx")
+    result = subprocess.run(mypy_command(), cwd=ROOT, capture_output=True, text=True, timeout=300)
+    lines = (result.stdout or result.stderr).strip().splitlines()
+    if result.returncode == 0:
+        return f"{len(MYPY_MODULES)} module(s), no findings"
+    if result.returncode != 1:
+        raise RuntimeError(f"mypy exited {result.returncode}: {lines[0] if lines else 'no output'}")
+    findings = [line for line in lines if ": error:" in line]
+    for line in findings:
+        print(f"fast-check: new mypy finding: {line}", flush=True)
+    if not findings:
+        raise RuntimeError(f"mypy exited 1: {lines[0] if lines else 'no output'}")
+    raise RuntimeError(f"{len(findings)} mypy findings; first: {findings[0]}")
 
 
 def git(*args):
@@ -374,6 +410,7 @@ def main():
 
     ruff = ruff_command()
     proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
+    proof.check("mypy --strict: " + ", ".join(MYPY_MODULES), shlex.join(mypy_command()), check_mypy)
 
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
