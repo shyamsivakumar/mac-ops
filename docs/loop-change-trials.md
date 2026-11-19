@@ -47,8 +47,13 @@ in a Linux container with hidden tests. Nothing in it is replaced. The trial
 adds three things on top.
 
 1. An **arm**: a named overlay that swaps the rules and skills the agent sees.
-   The baseline arm is the current `main`. The change arm is the same tree
-   with the proposed diff applied.
+   Each trial pins the two arms to git revisions and records both SHAs in the
+   proof file. For a change that is still a PR, "without" is the `main` revision
+   the PR branches from and "with" is that revision plus the PR diff. For a
+   change already merged into `main`, "without" is the revision just before
+   the change landed and "with" is the revision that contains it, never the
+   current `main`, whose baseline would already include the change. Only the
+   builder inputs listed above differ between the two overlays.
 2. A **comparison step** that reads the Harbor result files of two arms and
    writes one table.
 3. A **proof file** under `evidence/` that the PR carries.
@@ -111,9 +116,12 @@ calculation.
 | 4 | 10 | 12 |
 | 5 | 12 | 13 |
 
-A stage 1 result is **borderline** when up exceeds down and p is above 0.10
-and at most 0.25 (for example 5 / 1 or 6 / 2). Borderline results go to stage
-2. Anything with p above 0.25 is rejected.
+For claim A, a stage 1 result is **borderline** when up exceeds down and p is
+above 0.10 and at most 0.25 (for example 5 / 1 or 6 / 2). Borderline results go
+to stage 2. A claim A result with p above 0.25 is rejected. Claim B does not use
+the sign-test p-value or the borderline route. It is decided on its own
+conditions below, so a trial with one task up and one down, and median tokens
+down 20%, is judged by claim B's conditions only.
 
 How often each stage accepts, by simulation. Each task gets a baseline pass
 probability drawn from a Beta(0.8, 0.8) spread (some tasks easy, some hard,
@@ -195,6 +203,9 @@ trimming a rule file or a skill. Accept when all of these hold.
    one rises by more than 5%.
 5. Conditions 3 and 5 of claim A hold.
 
+Claim B is decided at stage 1. The stage 2 limits above apply only when the
+author chooses to confirm a claim B result on 40 tasks.
+
 The 5% allowance is a stated cost, not a proof of no harm. At 20 tasks the
 test cannot rule out a real loss of that size or a little more. Rule 4 is the
 reason claim B asks for a measured saving, so a change is only kept when it
@@ -220,7 +231,7 @@ flowchart TD
     E --> F[compare writes table and proof file]
     F --> G{Accept rule met?}
     G -- yes --> H[Merge with proof file in PR]
-    G -- "borderline" --> I[Stage 2: grow to 40 tasks, extend A/A to the new tasks, rerun both arms]
+    G -- "claim A borderline" --> I[Stage 2: grow to 40 tasks, extend A/A to the new tasks, rerun both arms]
     G -- no --> R[Revert or close PR]
     I --> F
 ```
