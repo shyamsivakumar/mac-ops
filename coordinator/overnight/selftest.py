@@ -652,10 +652,11 @@ def merge_pass():
                 return "updated"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def read(cmd):
+        def read(cmd, **_):
             gh_calls.append(cmd)
-            return dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
-                        body="Refs #10", changedFiles=1)
+            row = dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
+                       body="Refs #10", changedFiles=1)
+            return [row] if cmd[:3] == ["gh", "pr", "list"] else row
 
         def threads(tool, args):
             return {"thread": {"status": "completed" if finished else "running"},
@@ -663,6 +664,7 @@ def merge_pass():
 
         ledger = {} if ledger is None else ledger
         output = io.StringIO()
+        lane.PASS_PRS.clear()
         with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board, \
              patch.dict(os.environ, {"COORDINATOR_OWNER_BOARD": str(Path(scratch) / "owner.json")}), \
              patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
