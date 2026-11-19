@@ -1,0 +1,15 @@
+diff --git a/coordinator/bin/ticket b/coordinator/bin/ticket
+index 9a90d3dc..55908a9f 100755
+--- a/coordinator/bin/ticket
++++ b/coordinator/bin/ticket
+@@ -1257,7 +1257,9 @@ def gate_live(title, gate_id):
+         receipts = {}
+     if receipts.get(gate_id):
+         return f"a gate thread already ran for this head (thread {receipts[gate_id]})"
+-    result = t3_call("t3_thread_list", {"allProjects": True, "limit": 500,
++    # The tool schema caps `limit` at 100, and a larger value is refused by the
++    # server, so the page size is the schema maximum.
++    result = t3_call("t3_thread_list", {"allProjects": True, "limit": 100,
+                                         "statuses": LIVE_STATUSES, "includeSubagents": False})
+     for thread in result.get("threads") or []:
+         if thread.get("title") == title:

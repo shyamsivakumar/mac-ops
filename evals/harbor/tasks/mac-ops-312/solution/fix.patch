@@ -1,0 +1,49 @@
+diff --git a/coordinator/bin/coordq b/coordinator/bin/coordq
+index 37cac413..67882f9c 100755
+--- a/coordinator/bin/coordq
++++ b/coordinator/bin/coordq
+@@ -108,8 +108,12 @@ def gate_state(value):
+     id, which is a head with no retry behind it.
+     """
+     if isinstance(value, dict):
+-        return {"id": value.get("id"), "retries": int(value.get("retries") or 0),
+-                "at": value.get("at"), "givenUp": bool(value.get("givenUp"))}
++        retries = value.get("retries")
++        at = value.get("at")
++        return {"id": value.get("id"),
++                "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
++                "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
++                "givenUp": bool(value.get("givenUp"))}
+     return {"id": value, "retries": 0, "at": None, "givenUp": False}
+ 
+ 
+@@ -1299,7 +1303,12 @@ def cmd_gate(a):
+                 "title": args["title"], "priority": 5000}
+         queue["next"] += 1
+         queue["items"].append(item)
+-        heads[key] = {**state, "id": item["id"]}
++        # The explicit gate is recorded as undecided again, so a second
++        # explicit gate for the same head is refused while this one is live.
++        # Its retry count stays at the limit, so if it dies without a verdict
++        # the next gatekeep run gives up on the head again, in one line,
++        # instead of reopening the automatic retries.
++        heads[key] = {**state, "id": item["id"], "givenUp": False}
+         save(queue)
+     print("queued " + key
+           + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])
+diff --git a/docs/coordq-gatekeep.md b/docs/coordq-gatekeep.md
+index ae5e7f3f..bad1185d 100644
+--- a/docs/coordq-gatekeep.md
++++ b/docs/coordq-gatekeep.md
+@@ -53,7 +53,10 @@ The retry count lives with the head's queue item in `gatedHeads`, as
+ no retry behind it. The record names the head, so a pull request that pushes a
+ new head starts again at no retries. An explicit `coordq gate <repo>#<pr>`
+ still queues a given-up head, because an operator asked for it: it keeps the
+-retry count, so that gate is not retried automatically either.
++retry count and is recorded as undecided again, so a second explicit gate for
++the same head is refused while that one is live, and if it dies without a
++verdict the head is given up again in one line rather than reopening the
++automatic retries.
+ Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
+ visibly. This command never merges; the reviewer brief permits merge only after
+ CHECK and VERDICT pass for the exact head, using --match-head-commit.

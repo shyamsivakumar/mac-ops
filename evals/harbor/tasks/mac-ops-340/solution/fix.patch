@@ -1,0 +1,76 @@
+diff --git a/coordinator/bin/coordq b/coordinator/bin/coordq
+index b4343711..3df0a5a5 100755
+--- a/coordinator/bin/coordq
++++ b/coordinator/bin/coordq
+@@ -910,22 +910,42 @@ def reviewer_model(models):
+ 
+ 
+ def quota_failure(value):
+-    return any(word in str(value).lower() for word in ("spend limit", "usage limit", "rate_limit", "429"))
++    if isinstance(value, str):
++        try:
++            value = json.loads(value)
++        except ValueError:
++            return False
++    if not isinstance(value, dict):
++        return False
++    if "thread" in value:
++        thread = value.get("thread") or {}
++        runs = value.get("recentRuns") or []
++        failure = next((run for run in runs
++                        if run.get("runId") == thread.get("latestRunId")), thread)
++        if failure.get("status") != "failed":
++            return False
++    else:
++        failure = value
++    error = failure.get("error")
++    if isinstance(error, dict):
++        text = " ".join(str(error.get(field) or "") for field in ("code", "message"))
++    elif isinstance(error, str):
++        text = error
++    else:
++        return False
++    return any(word in text.lower() for word in (
++        "spend limit", "usage limit", "quota exhausted", "quota exceeded",
++        "insufficient_quota", "exceeded your current quota"))
+ 
+ 
+ def fallback_reviewer(queue, key, current, models=()):
++    if current != ASTRA_MODEL:
++        return None
+     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
+-    if current["model"] not in tried:
+-        tried.append(current["model"])
+-    openai = any("gpt-" in m.lower() or "openai" in m.lower() or re.search(r"(?:^|/|:)o[0-9](?:-|$)", m.lower()) for m in models)
+-    deepseek = any("deepseek" in m.lower() for m in models)
+-    for candidate in (ASTRA_MODEL, DEEPSEEK_MODEL, SOL_MODEL):
+-        if candidate["model"] in tried:
+-            continue
+-        if (openai and candidate["instanceId"] == "codex") or (deepseek and candidate == DEEPSEEK_MODEL):
+-            continue
+-        return candidate
+-    return None
++    if OPUS_MODEL["model"] in tried:
++        return None
++    tried.append(OPUS_MODEL["model"])
++    return OPUS_MODEL
+ 
+ 
+ def gate_args(settings, repo, issue, number, head, publisher, model):
+@@ -1100,11 +1120,11 @@ def cmd_gatekeep(a):
+                         continue
+                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
+                         continue
+-                    # A gate that ran out of quota, or that already moved to
+-                    # another reviewer, continues on the next eligible one
+-                    # instead of being relaunched on the same account.
+-                    if quota_failure(data) or key in queue.get("gateReviewers", {}):
+-                        current = {"model": thread.get("model")}
++                    current = {"instanceId": thread.get("providerInstanceId"),
++                               "model": thread.get("model")}
++                    if current != ASTRA_MODEL:
++                        continue
++                    if quota_failure(data):
+                         model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
+                         if model is None:
+                             if not a.dry_run:
