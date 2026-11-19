@@ -1,8 +1,8 @@
 PASS installer: install twice over a scratch home, then status: installed=True
-PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-o0755fio/home/.pi/agent/extensions/deny-guar
+PASS installer: every pi guard installed and current: {"/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-pw5m0e36/home/.pi/agent/extensions/deny-guar
 PASS installer: claude deny list complete: missing=[]
-PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-o0755fio/home/.claude/hooks/deny-merge-guard.py
-PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-o0755fio/home/.claude/hooks/deny-merge-guard.py']
+PASS installer: merge hook file present: /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-pw5m0e36/home/.claude/hooks/deny-merge-guard.py
+PASS claude PreToolUse hook registered once in settings.json: ['python3 /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-pw5m0e36/home/.claude/hooks/deny-merge-guard.py']
 not run claude permissions.deny: read under slash-eureka: Read(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: edit under slash-eureka: Edit(~/Code/slash-eureka/**) installed; Claude evaluates it in a session, so the decision is not run here
 not run claude permissions.deny: read an env file: Read(**/.env) installed; Claude evaluates it in a session, so the decision is not run here
