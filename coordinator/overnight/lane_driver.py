@@ -529,9 +529,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         return f"skip {lkey}: every fix model is blocked"
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
-            _, skip = pr_action_skip(repo, attached["number"])
+            attached_pr, skip = pr_action_skip(repo, attached["number"])
             if skip:
                 return skip
+            if pr is None:
+                # The thread's own pull request names the branch the work
+                # belongs to, so the replacement starts there.
+                pr = attached_pr
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
@@ -565,14 +569,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if reroute == "model is not first available" and not barred:
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
-            if pr is None:
-                # No pull request names a branch, so the work starts at
-                # the default branch. The work is not dropped.
-                workspace = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
-            else:
-                if not branch_on_origin(repo, pr["headRefName"]):
-                    return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
-                workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
+            # The work starts in a worktree of its own: at the branch of
+            # the pull request when that branch is on origin, at the
+            # default branch otherwise. The work is never dropped.
+            branch = "main"
+            if pr and branch_on_origin(repo, pr["headRefName"]):
+                branch = pr["headRefName"]
+            workspace = {"type": "worktree", "baseRef": "origin/" + branch, "startFromOrigin": True}
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
@@ -886,9 +889,16 @@ def act_on_pr(repo, number, ledger):
     brief += ("\nLane override: review only. Do not merge or close issues; the lane owns completion. "
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
+    branch = pr.get("headRefName") or ""
+    if not branch_on_origin(repo, branch):
+        # The review reads the branch of the pull request, so a review in
+        # the shared root of the repository is not started: the review
+        # would read the wrong code.
+        return f"#{number}: no gate, the branch {branch} is not on origin, no worktree for the review"
     key = CFG[repo]["key"]
     args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/" + branch, "startFromOrigin": True},
+            "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
 
@@ -919,6 +929,13 @@ def drift_ff(ledger):
             d = "/Users/shyamsivakumar/Code/" + name
             if not os.path.isdir(d):
                 print(f"{CFG[repo]['key']:5} checkout absent: {d}; skipping")
+                continue
+            branch = workspace_branch(d)
+            if branch != "main":
+                # The chore fast-forwards the checkout's own main, so it
+                # only runs when the checkout is on main. A checkout on
+                # another branch is left alone.
+                print(f"{CFG[repo]['key']:5} left alone, the checkout is on {branch or 'an unknown branch'}")
                 continue
             out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
             ids = out.split()

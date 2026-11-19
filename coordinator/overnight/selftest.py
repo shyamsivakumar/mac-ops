@@ -420,6 +420,8 @@ def gate_pipeline():
                     actions.append("builder")
                 else:
                     exact(head in payload["message"], True)
+                    exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/builder/fixture",
+                                                         "startFromOrigin": True})
                     actions.append(payload["modelSelection"]["instanceId"])
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
@@ -441,6 +443,7 @@ def gate_pipeline():
                  patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "barred_workspace", return_value=None), \
+                 patch.object(lane, "branch_on_origin", return_value=True), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
@@ -1388,6 +1391,8 @@ def ff_drift():
     def run(cmd, **kwargs):
         if cmd == ["git", "-C", path, "rev-parse", "main", "origin/main"]:
             return f"{local} {origin}"
+        if cmd == ["git", "-C", path, "symbolic-ref", "--quiet", "HEAD"]:
+            return "refs/heads/main"
         if cmd == ["git", "-C", path, "merge-base", "--is-ancestor", local, origin]:
             if not ancestor:
                 raise subprocess.CalledProcessError(1, cmd)
@@ -1763,7 +1768,7 @@ def root_workspace():
                       "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
 
     def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
-                branch="refs/heads/builder/fixture"):
+                branch="refs/heads/builder/fixture", base="origin/builder/fixture"):
         actions = []
         def read(tool, args):
             return {"thread": {**fixer_identity(), **thread}}
@@ -1781,7 +1786,7 @@ def root_workspace():
                 actions.append("send")
             else:
                 actions.append("fresh")
-                exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/builder/fixture",
+                exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": base,
                                                      "startFromOrigin": True})
             return "receipt"
         pull = pr or dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main")
@@ -1825,11 +1830,11 @@ def root_workspace():
                                branch="refs/heads/herdr/gh-trim")
     exact(result, "fresh (old herdr branch herdr/gh-trim): receipt")
     exact(actions, ["fresh"])
-    # A branch that is not on origin has no safe worktree, so no work is
-    # dispatched at all.
-    result, actions = send_to({"status": "running"}, listing="")
-    exact(result, f"skip {key}: branch builder/fixture is not on origin, no safe worktree")
-    exact(actions, [])
+    # A branch that is not on origin cannot be the base of the worktree,
+    # so the work starts at the default branch instead of being dropped.
+    result, actions = send_to({"status": "running"}, listing="", base="origin/main")
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
     # A herdr pull request is skipped, and a merged one is skipped too.
     result, actions = send_to({"status": "running", "worktreePath": worktree},
                                pr=dict(number=512, state="OPEN", headRefName="herdr/board-stuck-lane",
