@@ -1,773 +1,529 @@
 # Ladder report r1
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 5.0 | 0 |
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 83.3% | 12.0 | 13200 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
 
 ## glm
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 5.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
+| bugfix | 27 | 77.8% |
+| feature | 27 | 88.9% |
 
 ## minimax
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
 
 {
+  "run_id": "r1",
   "date": "2026-11-19",
   "baseline": "minimax",
   "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
   },
   "verdicts": {
     "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": true,
-          "reason": "wins on quota, 0.50x the baseline per correct answer (requests)"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": true,
-          "reason": "wins on quota, 0.50x the baseline per correct answer (requests)"
-        }
+      "pass_rate": 0.8333333333333334,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.3333333333333333,
+      "interval_90": [
+        0.16666666666666666,
+        0.5
       ],
-      "promote": true
+      "interval_half_width": 0.16666666666666669,
+      "clusters": 18,
+      "promote": true,
+      "reason": "pass rate is higher, 90% interval lower bound +0.167 is above zero",
+      "requests_per_correct": [
+        12.0,
+        20.0
+      ],
+      "tokens_per_correct": [
+        13200.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
     }
   },
   "promoted": [
     "glm"
   ]
 }
-PASS  a two clear wins on quota write a proposal: wins on quota, 0.50x the baseline per correct answer (requests); build order ['glm', 'minimax', 'deepseek', 'cursor', 'terra', 'sonnet']; diff 31 lines
+PASS  a clear 30-point gain promotes: diff +0.333, 90% [+0.167, +0.500], half-width 0.167, promote=True: pass rate is higher, 90% interval lower bound +0.167 is above zero; build order ['glm', 'minimax', 'deepseek', 'cursor', 'terra', 'sonnet']
 # Ladder report r1
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 10.0 | 0 |
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 61.1% | 16.4 | 18000 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
 
 ## glm
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 10.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 75.0% | requests | 13.3 | 0 |
+| bugfix | 27 | 55.6% |
+| feature | 27 | 66.7% |
 
 ## minimax
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 50.0% |
-| feature | 6 | 100.0% |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
 
 {
+  "run_id": "r1",
   "date": "2026-11-19",
   "baseline": "minimax",
   "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
   },
   "verdicts": {
     "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": true,
-          "reason": "wins on pass rate, up 0.33 on the non-held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": true,
-          "reason": "wins on pass rate, up 0.33 on the non-held-out tasks"
-        }
+      "pass_rate": 0.6111111111111112,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.1111111111111111,
+      "interval_90": [
+        0.0,
+        0.2222222222222222
       ],
-      "promote": true
+      "interval_half_width": 0.1111111111111111,
+      "clusters": 18,
+      "promote": false,
+      "reason": "interval [+0.000, +0.222] is not inside the tie band of 0.1, so there is no clear gain",
+      "requests_per_correct": [
+        16.363636363636363,
+        20.0
+      ],
+      "tokens_per_correct": [
+        18000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
+    }
+  },
+  "promoted": []
+}
+PASS  b a 10-point gain on 18 tasks does not promote and reports its interval: diff +0.111, 90% [+0.000, +0.222], half-width 0.111, promote=False: interval [+0.000, +0.222] is not inside the tie band of 0.1, so there is no clear gain
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+{
+  "run_id": "r1",
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
+  },
+  "verdicts": {
+    "glm": {
+      "pass_rate": 0.5,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.0,
+      "interval_90": [
+        0.0,
+        0.0
+      ],
+      "interval_half_width": 0.0,
+      "clusters": 18,
+      "promote": false,
+      "reason": "no difference in pass rate, and quota is not used because a quota unit is unconfirmed",
+      "requests_per_correct": [
+        20.0,
+        20.0
+      ],
+      "tokens_per_correct": [
+        22000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
+    }
+  },
+  "promoted": []
+}
+PASS  c identical models show no difference: diff +0.000, 90% [+0.000, +0.000], half-width 0.000, promote=False: no difference in pass rate, and quota is not used because a quota unit is unconfirmed
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 50.0% | 10.0 | 22000 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+{
+  "run_id": "r1",
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
+  },
+  "verdicts": {
+    "glm": {
+      "pass_rate": 0.5,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.0,
+      "interval_90": [
+        0.0,
+        0.0
+      ],
+      "interval_half_width": 0.0,
+      "clusters": 18,
+      "promote": false,
+      "reason": "no difference in pass rate, and quota is not used because a quota unit is unconfirmed",
+      "requests_per_correct": [
+        10.0,
+        20.0
+      ],
+      "tokens_per_correct": [
+        22000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
+    }
+  },
+  "promoted": []
+}
+PASS  d a quota-only win with unconfirmed units does not promote: diff +0.000, 90% [+0.000, +0.000], half-width 0.000, promote=False: no difference in pass rate, and quota is not used because a quota unit is unconfirmed
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 50.0% | 10.0 | 22000 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+## minimax
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
+
+{
+  "run_id": "r1",
+  "date": "2026-11-19",
+  "baseline": "minimax",
+  "config": {
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
+  },
+  "verdicts": {
+    "glm": {
+      "pass_rate": 0.5,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.0,
+      "interval_90": [
+        0.0,
+        0.0
+      ],
+      "interval_half_width": 0.0,
+      "clusters": 18,
+      "promote": true,
+      "reason": "no difference in pass rate, wins on quota at 0.50x the baseline per correct answer (requests)",
+      "requests_per_correct": [
+        10.0,
+        20.0
+      ],
+      "tokens_per_correct": [
+        22000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
     }
   },
   "promoted": [
     "glm"
   ]
 }
-PASS  b two clear wins on pass rate write a proposal: wins on pass rate, up 0.33 on the non-held-out tasks
+PASS  e a quota-only win with confirmed units inside the tie band promotes: diff +0.000, 90% [+0.000, +0.000], half-width 0.000, promote=True: no difference in pass rate, wins on quota at 0.50x the baseline per correct answer (requests)
 # Ladder report r1
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 75.0% | requests | 6.7 | 0 |
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 72 | 50.0% | 20.0 | 22000 | requests | 18 |
 
 ## glm
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 50.0% |
-| feature | 6 | 100.0% |
+| bugfix | 36 | 50.0% |
+| feature | 36 | 50.0% |
+
+Flaky: t00 (2 of 4 correct)
+
+Flaky: t01 (2 of 4 correct)
+
+Flaky: t02 (2 of 4 correct)
+
+Flaky: t03 (2 of 4 correct)
+
+Flaky: t04 (2 of 4 correct)
+
+Flaky: t05 (2 of 4 correct)
+
+Flaky: t06 (2 of 4 correct)
+
+Flaky: t07 (2 of 4 correct)
+
+Flaky: t08 (2 of 4 correct)
+
+Flaky: t09 (2 of 4 correct)
+
+Flaky: t10 (2 of 4 correct)
+
+Flaky: t11 (2 of 4 correct)
+
+Flaky: t12 (2 of 4 correct)
+
+Flaky: t13 (2 of 4 correct)
+
+Flaky: t14 (2 of 4 correct)
+
+Flaky: t15 (2 of 4 correct)
+
+Flaky: t16 (2 of 4 correct)
+
+Flaky: t17 (2 of 4 correct)
 
 # Ladder report r2
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 5.0 | 0 |
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 72 | 50.0% | 20.0 | 22000 | requests | 18 |
 
 ## glm
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
+| bugfix | 36 | 50.0% |
+| feature | 36 | 50.0% |
 
-# Ladder report baseline
+Flaky: t00 (2 of 4 correct)
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
+Flaky: t01 (2 of 4 correct)
+
+Flaky: t02 (2 of 4 correct)
+
+Flaky: t03 (2 of 4 correct)
+
+Flaky: t04 (2 of 4 correct)
+
+Flaky: t05 (2 of 4 correct)
+
+Flaky: t06 (2 of 4 correct)
+
+Flaky: t07 (2 of 4 correct)
+
+Flaky: t08 (2 of 4 correct)
+
+Flaky: t09 (2 of 4 correct)
+
+Flaky: t10 (2 of 4 correct)
+
+Flaky: t11 (2 of 4 correct)
+
+Flaky: t12 (2 of 4 correct)
+
+Flaky: t13 (2 of 4 correct)
+
+Flaky: t14 (2 of 4 correct)
+
+Flaky: t15 (2 of 4 correct)
+
+Flaky: t16 (2 of 4 correct)
+
+Flaky: t17 (2 of 4 correct)
+
+{
+  "model": "glm",
+  "interval_90": [
+    0.0,
+    0.0
+  ],
+  "no_difference": true
+}
+PASS  f self-check: the same model twice reports no difference, and a drifting model fails it: {'steady model': [0.0, 0.0], 'drifting model': [1.0, 1.0]}
+# Ladder report r1
+
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 61.1% | 16.4 | 18000 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+
+## glm
+
+| Task type | Runs | Pass rate |
+| --- | --- | --- |
+| bugfix | 27 | 55.6% |
+| feature | 27 | 66.7% |
 
 ## minimax
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
 
 {
+  "run_id": "r1",
   "date": "2026-11-19",
   "baseline": "minimax",
   "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
+    "confidence": 0.9,
+    "draws": 10000,
+    "seed": 633,
+    "tie_band": 0.1,
+    "max_quota_ratio": 0.67
   },
   "verdicts": {
     "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "pass rate dropped on the non-held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": true,
-          "reason": "wins on quota, 0.50x the baseline per correct answer (requests)"
-        }
+      "pass_rate": 0.6111111111111112,
+      "baseline_pass_rate": 0.5,
+      "difference": 0.1111111111111111,
+      "interval_90": [
+        0.0,
+        0.3333333333333333
       ],
-      "promote": false
+      "interval_half_width": 0.16666666666666666,
+      "clusters": 6,
+      "promote": false,
+      "reason": "interval [+0.000, +0.333] is not inside the tie band of 0.1, so there is no clear gain",
+      "requests_per_correct": [
+        16.363636363636363,
+        20.0
+      ],
+      "tokens_per_correct": [
+        18000.0,
+        22000.0
+      ],
+      "cost_usd_informational": [
+        null,
+        null
+      ]
     }
   },
   "promoted": []
 }
-PASS  c one clear win writes no proposal: [False, True]
+PASS  g tasks sharing a group count as one cluster: diff +0.111, 90% [+0.000, +0.333], half-width 0.167, promote=False: interval [+0.000, +0.333] is not inside the tie band of 0.1, so there is no clear gain
 # Ladder report r1
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 91.7% | requests | 5.5 | 1 |
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 48.1% | 20.8 | 22846 | requests | 1 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
 
 ## glm
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 83.3% |
-| feature | 6 | 100.0% |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 51.9% |
 
-Flaky: alpha-1 (2 of 3 correct)
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 91.7% | requests | 5.5 | 1 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 83.3% |
-| feature | 6 | 100.0% |
-
-Flaky: alpha-1 (2 of 3 correct)
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
+Flaky: t00 (2 of 3 correct)
 
 ## minimax
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
 
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "pass rate dropped on the non-held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": false,
-          "reason": "pass rate dropped on the non-held-out tasks"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-PASS  d pass-rate drop with less quota writes no proposal: pass rate dropped on the non-held-out tasks
+PASS  h flaky task detected: [{'task': 't00', 'correct': 2, 'runs': 3}]
 # Ladder report r1
 
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 83.3% | requests | 6.0 | 1 |
+| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |
+| --- | --- | --- | --- | --- | --- | --- |
+| glm | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
+| minimax | 54 | 50.0% | 20.0 | 22000 | requests | 0 |
 
 ## glm
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 66.7% |
-
-Flaky: beta-4 (1 of 3 correct)
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 83.3% | requests | 6.0 | 1 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 66.7% |
-
-Flaky: beta-4 (1 of 3 correct)
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
 
 ## minimax
 
 | Task type | Runs | Pass rate |
 | --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
+| bugfix | 27 | 44.4% |
+| feature | 27 | 55.6% |
 
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "pass rate dropped on the held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": false,
-          "reason": "pass rate dropped on the held-out tasks"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-PASS  e held-out loss writes no proposal: pass rate dropped on the held-out tasks
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 91.7% | requests | 5.5 | 1 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 83.3% |
-| feature | 6 | 100.0% |
-
-Flaky: alpha-2 (2 of 3 correct)
-
-PASS  f flaky task detected: [{'task': 'alpha-2', 'correct': 2, 'runs': 3}]
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | tokens | 1100.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | tokens | 1100.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
-
-## minimax
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "quota not compared, units differ (tokens vs requests); pass rate gain 0.00 is under 0.1"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": false,
-          "reason": "quota not compared, units differ (tokens vs requests); pass rate gain 0.00 is under 0.1"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | tokens | 1100.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | tokens | 1100.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 75.0% | requests | 13.3 | 0 |
-
-## minimax
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 50.0% |
-| feature | 6 | 100.0% |
-
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": true,
-          "reason": "wins on pass rate, up 0.33 on the non-held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": true,
-          "reason": "wins on pass rate, up 0.33 on the non-held-out tasks"
-        }
-      ],
-      "promote": true
-    }
-  },
-  "promoted": [
-    "glm"
-  ]
-}
-PASS  g different quota units ignore quota and apply the pass-rate rule only: {'equal pass rate': 'no proposal despite 10x less quota', 'pass-rate gain': 'wins on pass rate, up 0.33 on the non-held-out tasks'}
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | UNVERIFIED | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | UNVERIFIED | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
-
-## minimax
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": false,
-          "reason": "quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-PASS  h quota with no trajectory is UNVERIFIED and cannot win: quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 5.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
-
-## minimax
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": true,
-          "reason": "wins on quota, 0.50x the baseline per correct answer (requests)"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-PASS  i the same winning report passed twice writes no proposal: ['r1']
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 6 | 100.0% | requests | 5.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 3 | 100.0% |
-| feature | 3 | 100.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 6 | 100.0% | requests | 5.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 3 | 100.0% |
-| feature | 3 | 100.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 100.0% | requests | 10.0 | 0 |
-
-## minimax
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "ran a different task set or split from the baseline"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": false,
-          "reason": "ran a different task set or split from the baseline"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-PASS  j a win on fewer tasks than the baseline writes no proposal: ran a different task set or split from the baseline
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 25.0% | requests | 20.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 0.0% |
-| feature | 6 | 50.0% |
-
-# Ladder report r2
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 25.0% | requests | 20.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 0.0% |
-| feature | 6 | 50.0% |
-
-# Ladder report baseline
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| minimax | 12 | 25.0% | requests | 40.0 | 0 |
-
-## minimax
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 0.0% |
-| feature | 6 | 50.0% |
-
-{
-  "date": "2026-11-19",
-  "baseline": "minimax",
-  "config": {
-    "max_pass_drop": 0.0,
-    "min_pass_gain": 0.1,
-    "max_quota_ratio": 0.67,
-    "consecutive_reports": 2
-  },
-  "verdicts": {
-    "glm": {
-      "reports": [
-        {
-          "run_id": "r1",
-          "wins_clearly": false,
-          "reason": "quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks"
-        },
-        {
-          "run_id": "r2",
-          "wins_clearly": false,
-          "reason": "quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks"
-        }
-      ],
-      "promote": false
-    }
-  },
-  "promoted": []
-}
-PASS  k a baseline with no correct training answers does not crash or promote: quota per correct answer is UNVERIFIED or has no correct answers on the non-held-out tasks
-# Ladder report r1
-
-| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |
-| --- | --- | --- | --- | --- | --- |
-| glm | 12 | 100.0% | requests | 5.0 | 0 |
-
-## glm
-
-| Task type | Runs | Pass rate |
-| --- | --- | --- |
-| bugfix | 6 | 100.0% |
-| feature | 6 | 100.0% |
-
-PASS  l a run short of its scheduled trials is not scored: score: the run does not match its schedule; do not score it: glm/beta-3: 2 of 3 trials
+PASS  i a run short of its scheduled trials is not scored: score: the run does not match its schedule; do not score it: glm/t05: 2 of 3 trials

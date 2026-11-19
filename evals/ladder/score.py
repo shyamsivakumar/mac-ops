@@ -9,28 +9,29 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
-def trial_quota(path, agent_result, unit):
-    if unit == "tokens":
-        used = [agent_result.get(k) for k in ("n_input_tokens", "n_output_tokens")]
-        return None if None in used else sum(used)
+def trial_usage(path, agent_result):
+    tokens = [agent_result.get(k) for k in ("n_input_tokens", "n_output_tokens")]
     trajectory = path.parent / "agent" / "trajectory.json"
-    if not trajectory.exists():
-        return None
-    return sum(1 for step in json.loads(trajectory.read_text())["steps"] if step.get("source") == "agent")
+    requests = None
+    if trajectory.exists():
+        requests = sum(1 for step in json.loads(trajectory.read_text())["steps"] if step.get("source") == "agent")
+    return requests, None if None in tokens else sum(tokens)
 
 
-def load_trials(run_dir, units):
+def load_trials(run_dir):
     trials = []
     for path in sorted(run_dir.glob("*/*/*/*/result.json")):
         model, task = path.relative_to(run_dir).parts[:2]
         result = json.loads(path.read_text())
         reward = ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward")
         agent_result = result.get("agent_result") or {}
+        requests, tokens = trial_usage(path, agent_result)
         trials.append({
             "model": model,
             "task": task,
             "correct": reward is not None and reward >= 1.0,
-            "quota": trial_quota(path, agent_result, units[model]),
+            "requests": requests,
+            "tokens": tokens,
             "cost": agent_result.get("cost_usd"),
         })
     return trials
@@ -47,36 +48,54 @@ def missing_trials(run_dir, record):
     return short
 
 
-def summarize(trials):
+def total(trials, key):
+    values = [t[key] for t in trials]
+    return sum(values) if values and None not in values else None
+
+
+def per_correct(used, correct):
+    return used / correct if used is not None and correct else None
+
+
+def summarize(trials, unit="requests"):
     runs = len(trials)
     correct = sum(t["correct"] for t in trials)
-    quotas = [t["quota"] for t in trials]
-    measured = runs > 0 and None not in quotas
-    quota = sum(quotas) if measured else None
-    costs = [t["cost"] for t in trials]
+    requests, tokens = total(trials, "requests"), total(trials, "tokens")
+    quota = requests if unit == "requests" else tokens
     return {
         "runs": runs,
         "correct": correct,
         "pass_rate": correct / runs if runs else None,
-        "quota_used": quota,
-        "quota_status": "OK" if measured else "UNVERIFIED",
-        "quota_per_correct": quota / correct if measured and correct else None,
-        "cost_usd_informational": sum(costs) if runs and None not in costs else None,
+        "requests_per_correct": per_correct(requests, correct),
+        "tokens_per_correct": per_correct(tokens, correct),
+        "quota_status": "OK" if quota is not None else "UNVERIFIED",
+        "quota_per_correct": per_correct(quota, correct),
+        "cost_usd_informational": total(trials, "cost"),
     }
 
 
-def score_model(trials, meta, unit):
+def by_task_rows(trials):
+    rows = {}
+    for t in trials:
+        rows.setdefault(t["task"], []).append(t)
+    return rows
+
+
+def score_model(trials, meta, unit, confirmed):
     kind = lambda t: meta.get(t["task"], {}).get("type", "untyped")
     heldout = lambda t: meta.get(t["task"], {}).get("heldout", False)
-    by_task = {}
-    for t in trials:
-        by_task.setdefault(t["task"], []).append(t["correct"])
+    by_task = {task: [t["correct"] for t in rows] for task, rows in by_task_rows(trials).items()}
     return {
         "quota_unit": unit,
-        **summarize(trials),
-        "train": summarize([t for t in trials if not heldout(t)]),
-        "heldout": summarize([t for t in trials if heldout(t)]),
-        "by_type": {k: summarize([t for t in trials if kind(t) == k]) for k in sorted({kind(t) for t in trials})},
+        "quota_unit_confirmed": confirmed,
+        **summarize(trials, unit),
+        "train": summarize([t for t in trials if not heldout(t)], unit),
+        "heldout": summarize([t for t in trials if heldout(t)], unit),
+        "by_type": {k: summarize([t for t in trials if kind(t) == k], unit) for k in sorted({kind(t) for t in trials})},
+        "per_task": {
+            task: {"runs": len(rows), "correct": sum(t["correct"] for t in rows)}
+            for task, rows in sorted(by_task_rows(trials).items())
+        },
         "flaky_tasks": [
             {"task": task, "correct": sum(r), "runs": len(r)}
             for task, r in sorted(by_task.items())
@@ -90,13 +109,13 @@ def render_markdown(report):
     lines = [
         f"# Ladder report {report['run_id']}",
         "",
-        "| Model | Runs | Pass rate | Quota unit | Quota per correct | Flaky tasks |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Model | Runs | Pass rate | Turns per correct | Tokens per correct | Quota unit | Flaky tasks |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for model, s in report["models"].items():
         lines.append(
-            f"| {model} | {s['runs']} | {fmt(s['pass_rate'], '{:.1%}')} | {s['quota_unit']} "
-            f"| {fmt(s['quota_per_correct'], '{:.1f}')} | {len(s['flaky_tasks'])} |"
+            f"| {model} | {s['runs']} | {fmt(s['pass_rate'], '{:.1%}')} | {fmt(s['requests_per_correct'], '{:.1f}')} "
+            f"| {fmt(s['tokens_per_correct'], '{:.0f}')} | {s['quota_unit']} | {len(s['flaky_tasks'])} |"
         )
     for model, s in report["models"].items():
         lines += ["", f"## {model}", "", "| Task type | Runs | Pass rate |", "| --- | --- | --- |"]
@@ -120,13 +139,14 @@ def main(argv=None):
         sys.exit("score: the run does not match its schedule; do not score it: " + "; ".join(short))
     meta = {t["id"]: t for t in record["tasks"]}
     units = {m["id"]: m.get("quota_unit", "requests") for m in record["models"]}
-    trials = load_trials(args.run_dir, units)
+    confirmed = {m["id"]: m.get("quota_unit_confirmed", False) for m in record["models"]}
+    trials = load_trials(args.run_dir)
     report = {
         "run_id": record["run_id"],
         "repeats": record["repeats"],
         "unreachable": record["unreachable"],
         "tasks": record["tasks"],
-        "models": {m: score_model([t for t in trials if t["model"] == m], meta, units[m]) for m in sorted({t["model"] for t in trials})},
+        "models": {m: score_model([t for t in trials if t["model"] == m], meta, units[m], confirmed[m]) for m in sorted({t["model"] for t in trials})},
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / f"{record['run_id']}.json").write_text(json.dumps(report, indent=2) + "\n")

@@ -21,7 +21,7 @@ def load_tasks(selected):
         listed = json.loads(TASK_SET.read_text())
         listed = listed["tasks"] if isinstance(listed, dict) else listed
         tasks = [
-            {"id": t["id"], "type": t.get("type", "untyped"), "heldout": bool(t.get("heldout", False))}
+            {"id": t["id"], "type": t.get("type", "untyped"), "heldout": bool(t.get("heldout", False)), "group": t.get("group")}
             for t in listed
         ]
         if selected:
@@ -30,7 +30,7 @@ def load_tasks(selected):
                 sys.exit(f"run: not in {TASK_SET.relative_to(ROOT)}: {', '.join(unknown)}")
             tasks = [t for t in tasks if t["id"] in selected]
     elif selected:
-        tasks = [{"id": t, "type": "untyped", "heldout": False} for t in selected]
+        tasks = [{"id": t, "type": "untyped", "heldout": False, "group": None} for t in selected]
     else:
         sys.exit(f"run: {TASK_SET.relative_to(ROOT)} is missing; the eval-set PR provides it. Pass --tasks to run named tasks without it.")
     missing = [t["id"] for t in tasks if not (TASKS_DIR / t["id"]).is_dir()]
@@ -107,7 +107,7 @@ def main(argv=None):
     record = {
         "run_id": args.run_id,
         "repeats": args.repeats,
-        "models": [{"id": m["id"], "model": m["model"], "quota_unit": m["quota_unit"]} for m in reachable],
+        "models": [{"id": m["id"], "model": m["model"], "quota_unit": m["quota_unit"], "quota_unit_confirmed": m["quota_unit_confirmed"]} for m in reachable],
         "unreachable": unreachable,
         "tasks": tasks,
     }

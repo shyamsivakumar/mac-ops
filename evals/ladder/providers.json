@@ -5,7 +5,8 @@
     "api_key_name": "MINIMAX_API_KEY",
     "source": "evals/harbor/run-example.sh defaults, used in the step-1 pi run",
     "quota_unit": "requests",
-    "quota_unit_source": "default; the subscription unit is not confirmed with the provider"
+    "quota_unit_source": "default; the subscription unit is not confirmed with the provider",
+    "quota_unit_confirmed": false
   },
   "zai": {
     "base_url": "https://api.z.ai/api/anthropic",
@@ -13,7 +14,8 @@
     "api_key_name": "ZAI_API_KEY",
     "source": "Z.ai Anthropic-compatible endpoint; UNVERIFIED, never run through Harbor here",
     "quota_unit": "requests",
-    "quota_unit_source": "default; the subscription unit is not confirmed with the provider"
+    "quota_unit_source": "default; the subscription unit is not confirmed with the provider",
+    "quota_unit_confirmed": false
   },
   "deepseek": {
     "base_url": "https://api.deepseek.com/anthropic",
@@ -21,6 +23,7 @@
     "api_key_name": "DEEPSEEK_API_KEY",
     "source": "DeepSeek Anthropic-compatible endpoint; UNVERIFIED, never run through Harbor here",
     "quota_unit": "requests",
-    "quota_unit_source": "default; the subscription unit is not confirmed with the provider"
+    "quota_unit_source": "default; the subscription unit is not confirmed with the provider",
+    "quota_unit_confirmed": false
   }
 }
