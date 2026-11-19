@@ -682,14 +682,19 @@ def gate_rounds_used(repo, number, ledger):
 
 
 def clear_gate_round_decision(repo, number, ledger):
-    """Take the decisions item of a pull request off the board when it passes."""
+    """Take the decisions item of a pull request off the board when it passes.
+
+    Returns False when the item is still on the board. The ledger key
+    stays, so the next pass retries the removal.
+    """
     lkey = f"rounds-decision:{repo}#{number}"
     if lkey not in ledger:
-        return
+        return True
     item = gate_round_item(repo, number, "")
     if not DRY and alarms.board_update(DECISIONS_PATH, item["id"], "remove") != "wrote":
-        return
+        return False
     ledger.pop(lkey, None)
+    return True
 
 
 def check_step(repo, proof_path):
@@ -774,7 +779,8 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        clear_gate_round_decision(repo, number, ledger)
+        if not clear_gate_round_decision(repo, number, ledger):
+            return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         if DRY:
