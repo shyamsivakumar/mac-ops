@@ -9,6 +9,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -105,6 +106,10 @@ class RetryLimitBase(unittest.TestCase):
             json.dump(CONFIG, f)
 
     def fake_gh(self, endpoint):
+        if endpoint == f"repos/{REPO}/pulls/7":
+            return {"changed_files": 0}
+        if endpoint.startswith(f"repos/{REPO}/pulls/7/files"):
+            return []
         if endpoint.startswith(f"repos/{REPO}/pulls"):
             return [self.pr]
         if "/issues/" in endpoint and "/comments" in endpoint:
@@ -184,25 +189,105 @@ class NonAstraGateTest(RetryLimitBase):
                          {"id": 4, "retries": 0, "at": None, "givenUp": True})
 
 
-class BackoffTest(RetryLimitBase):
-    """The second retry waits, so a reviewer that cannot run is not
-    relaunched on every run."""
+class GateRetryOnceTest(RetryLimitBase):
+    """A gate with no exact verdict line moves once to the next reviewer."""
 
-    def test_a_second_retry_waits_for_the_backoff(self):
-        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
-                                          "at": time.time(), "givenUp": False}})
+    def report(self, text, status="completed"):
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": status, **ASTRA_GATE},
+                           "items": [{"type": "assistant_message", "text": text}]}))
+
+    def test_only_a_last_line_verdict_is_a_verdict(self):
+        verdicts = ("Fine.\nVERDICT: PASS\n\n", "Bad.\nVERDICT: FAIL  ")
+        for text in verdicts:
+            with self.subTest(text=text):
+                self.report(text)
+                self.write_queue(heads={self.key: 4})
+                out, _ = self.run_gatekeep()
+                self.assertNotIn("regating", out)
+                self.assertEqual(self.gate_items(), [])
+
+    def test_a_quoted_or_trailed_verdict_is_not_a_verdict(self):
+        examples = ("Bad.\nVERDICT: FAIL\nwarning: tool call timed out",
+                    "Fine.\n    VERDICT: PASS",
+                    "Checked.\nUnable to issue VERDICT: PASS",
+                    "Expected output was:\n~~~\n```\nVERDICT: PASS\n~~~\nI could not finish.",
+                    "Expected output was:\n\n    VERDICT: PASS\n\nI could not finish.",
+                    "Expected output was:\n```\nVERDICT: PASS\n```\nI could not finish.")
+        for text in examples:
+            with self.subTest(text=text):
+                self.report(text)
+                self.write_queue(heads={self.key: 4})
+                out, _ = self.run_gatekeep()
+                self.assertIn("regating o/r#7", out)
+
+    def test_a_stalled_thread_read_does_not_hold_the_block_lock(self):
+        finished = []
+        listed = coordq.model_list.entries("review")[1]["selection"]
+
+        def stalled_read(tool, args, rules=None):
+            blocker = threading.Thread(
+                target=coordq.model_list.block_provider, args=(listed, time.time() + 600))
+            blocker.start()
+            blocker.join(3)
+            finished.append(not blocker.is_alive())
+            return 0, json.dumps(DEAD_GATE)
+        coordq.call = stalled_read
+        self.addCleanup(os.unlink, coordq.model_list.blocked_path())
+        self.write_queue(heads={self.key: 4})
+        self.run_gatekeep()
+        self.assertEqual(finished, [True])
+
+    def test_the_retry_is_one_queue_write(self):
+        self.write_queue(heads={self.key: 4})
+        saves = []
+        real_save = coordq.save
+        coordq.save = lambda queue: (saves.append(json.dumps(queue)), real_save(queue))[1]
+        self.addCleanup(setattr, coordq, "save", real_save)
+        self.run_gatekeep()
+        self.assertTrue(all(self.key in json.loads(saved)["gatedHeads"] for saved in saves))
+        self.assertEqual(len([saved for saved in saves if '"retryOf"' in saved]), len(saves))
+        head = self.read_queue()["gatedHeads"][self.key]
+        self.assertEqual((head["retries"], head["retryOf"]), (1, "gate-1"))
+
+    def test_the_stale_receipt_does_not_queue_a_second_retry(self):
+        self.write_queue(heads={self.key: {"id": 5, "retries": 1, "at": time.time(),
+                                          "givenUp": False, "retryOf": "gate-1"}})
         out, _ = self.run_gatekeep()
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn("regating", out)
 
-    def test_a_second_retry_happens_after_the_backoff(self):
-        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
-                                          "at": time.time() - coordq.GATE_RETRY_BACKOFF - 1,
-                                          "givenUp": False}})
+    def test_a_block_after_the_selection_is_not_queued_on_a_fresh_head(self):
+        self.write_queue()
+        first = coordq.model_list.entries("review")[0]["selection"]
+        real = coordq.gate_candidates
+
+        def blocking(config):
+            for event in real(config):
+                coordq.model_list.block_provider(first, time.time() + 600)
+                yield event
+        coordq.gate_candidates = blocking
+        self.addCleanup(setattr, coordq, "gate_candidates", real)
+        self.addCleanup(os.unlink, coordq.model_list.blocked_path())
+        self.run_gatekeep()
+        chosen = self.gate_items()[0]["args"]["modelSelection"]
+        self.assertFalse(coordq.model_list.same_selection(chosen, first))
+
+    def test_a_second_dead_gate_is_given_up(self):
+        self.write_queue(heads={self.key: {"id": 5, "retries": 1, "at": 0,
+                                          "givenUp": False, "retryOf": "gate-0"}})
         out, _ = self.run_gatekeep()
-        self.assertIn("regating o/r#7", out)
-        self.assertEqual(len(self.gate_items()), 1)
-        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 2)
+        self.assertIn("gave up", out)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_blocked_reviewer_is_skipped_on_the_retry(self):
+        self.write_queue(heads={self.key: 4})
+        second = coordq.model_list.entries("review")[1]["selection"]
+        coordq.model_list.block_provider(second, time.time() + 600)
+        self.addCleanup(os.unlink, coordq.model_list.blocked_path())
+        self.run_gatekeep()
+        chosen = self.gate_items()[0]["args"]["modelSelection"]
+        self.assertFalse(coordq.model_list.same_selection(chosen, second))
 
 
 class GiveUpTest(RetryLimitBase):

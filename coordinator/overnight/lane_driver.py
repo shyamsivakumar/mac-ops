@@ -2055,15 +2055,35 @@ def run_pass(ledger):
         raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures")
 
 
+def load_ledger():
+    try:
+        with open(LEDGER) as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        sys.exit(f"lane: REFUSED: the ledger {LEDGER} is unreadable ({exc}); it was left as is")
+
+
+def save_ledger(ledger):
+    temporary = f"{LEDGER}.{os.getpid()}.tmp"
+    try:
+        with open(temporary, "w") as handle:
+            json.dump(ledger, handle, indent=1)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, LEDGER)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
 def main():
     global CFG
     STALL_EVENTS.clear()
+    ledger = load_ledger()
     with open("/Users/shyamsivakumar/.coordinator/tickets.json") as handle:
         CFG = json.load(handle)["repos"]
-    try:
-        ledger = json.load(open(LEDGER))
-    except (OSError, ValueError):
-        ledger = {}
     before = None
     try:
         before = api_remaining()
@@ -2086,5 +2106,4 @@ def main():
         except ApiBudgetExhausted as exc:
             print(f"API USAGE unavailable: {exc}")
         if not DRY:
-            with open(LEDGER, "w") as handle:
-                json.dump(ledger, handle, indent=1)
+            save_ledger(ledger)

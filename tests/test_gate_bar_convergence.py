@@ -21,12 +21,21 @@ if str(BIN) not in sys.path:
 
 CONVERGENCE = (
     "Round 1 must list every critical and major found, not just the first.",
-    "Round 2 and later: a new major (not raised in an earlier round of this PR) blocks only "
-    "with a failing case (a concrete input or sequence with the wrong result) or inside lines "
-    "changed since the last review; otherwise it is a minor under 'Left for later'.",
+    "Round 2 and later: raise only findings in lines changed since the previous reviewed head, "
+    "plus any earlier critical or major still open. Anything else you notice is a minor under "
+    "'Left for later'.",
     "Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.",
     "After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; "
     "no 4th review as is.",
+)
+SEVERITY = (
+    "A finding is critical or major only when it is likely to happen in this fleet's real use, "
+    "or would cause harm that is hard to undo: data loss, a merge or push that should not happen, "
+    "a lane or queue that stays stuck, a secret leak, a wrong trade or exit. State in one sentence "
+    "how it happens in practice: who or what triggers it, and how often.",
+    "A case that needs an unlikely sequence of events, an attacker inside our own agents, or input "
+    "our own tools never produce is minor. Minors never fail a PR.",
+    "If every remaining finding is minor, the verdict is PASS.",
 )
 SHYAM = ("When a question is for Shyam, start it with 'Shyam,' so the board routes it to "
          "Needs you; otherwise the question goes to the coordinator.")
@@ -48,6 +57,20 @@ class GateBarTests(unittest.TestCase):
                                               "a" * 40, publisher=False, base="main")
         for line in CONVERGENCE:
             self.assertIn(line, brief)
+
+    def test_the_bar_carries_the_severity_bar(self):
+        for line in SEVERITY:
+            self.assertIn(line, gate_bar.GATE_BAR)
+
+    def test_the_reviewer_prompt_carries_the_severity_bar(self):
+        prompt = flat((ROOT / "coordinator" / "config" / "agents" / "code-reviewer.md").read_text())
+        for phrase in ("likely to happen in this fleet's real use",
+                       "State in one sentence how it happens in practice",
+                       "an attacker inside our own agents",
+                       "they never fail a PR",
+                       "since the previous reviewed head",
+                       "a report with only minors passes"):
+            self.assertIn(phrase, prompt)
 
     def test_the_bar_carries_the_question_rule_for_shyam(self):
         self.assertIn(SHYAM, gate_bar.GATE_BAR)

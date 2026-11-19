@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+evals/ladder/runs/
 
 # Harbor eval snapshots
 evals/harbor/.cache/
