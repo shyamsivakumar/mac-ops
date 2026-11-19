@@ -30,6 +30,13 @@ request (`repo#pr head reason`), and the file holds only the pull requests
 that are still stuck. `coordq status` reports the same list, so the
 coordinator tick sees a gate that cannot run.
 
+The lane driver also puts a pull request on the list `coordq status` reports,
+with reason `rounds`, when the 3-round cap stops it
+(`coordq stuck <repo#pr> --head <sha>`). The entry lives in queue.json's
+`roundsStuck` map, so gatekeep's skip counts never touch it. It adds no
+decisions item, so the stop never asks Shyam. The lane clears the entry
+(`coordq stuck <repo#pr> --clear`) when the pull request passes.
+
 SRW requires a successful srw/agent-check status. Other repositories use the
 exact full-head `Builder check: PASS <sha>` line unless a publisher status
 exists or their tickets.json entry sets `macPublisher: true`.

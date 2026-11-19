@@ -75,6 +75,12 @@ STUCK_COUNT = 3
 # driver, gatekeep and the shift share this one floor.
 FLOOR = gh_gateway.floor()
 STUCK_FILE = "gatekeep-stuck.txt"
+# A pull request the lane stopped at its review-round cap is on the stuck
+# list that `coordq status` reports, under this reason. The entries live in
+# their own queue key, so gatekeep's skip counts never touch them and only
+# the lane clears them.
+ROUNDS_REASON = "rounds"
+ROUNDS_STUCK = "roundsStuck"
 # A gate that dies without a verdict is queued again, but a reviewer that
 # cannot run at all fails the same way, so a retry with no end relaunches it
 # on every run. A head is retried at most GATE_RETRY_LIMIT times, with
@@ -1274,6 +1280,8 @@ def cmd_status(a):
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
+    stuck += [f"{pr} {value['head']} {ROUNDS_REASON}"
+              for pr, value in sorted((before.get(ROUNDS_STUCK) or {}).items())]
     threads = live()
     # A start can enqueue between a read and a write, and saving an older
     # snapshot would drop the item it just queued. So the queue is read,
@@ -1739,6 +1747,23 @@ def write_counts(counts, seen, stuck, dry_run):
     os.replace(tmp, path(STUCK_FILE))
 
 
+def cmd_stuck(a):
+    """Put one pull request on the stuck list for its review rounds, or take it off.
+
+    The entry is keyed by the pull request, so a second call for the same
+    pull request rewrites the entry instead of adding one.
+    """
+    with Lock(True):
+        queue = load()
+        entries = queue.setdefault(ROUNDS_STUCK, {})
+        if a.clear:
+            entries.pop(a.ref, None)
+        else:
+            entries[a.ref] = {"head": a.head}
+        save(queue)
+    print(f"{'cleared' if a.clear else 'stuck'} {a.ref}")
+
+
 def cmd_fix(a):
     """Send a failed gate's findings back to the builder of one pull request.
 
@@ -1998,6 +2023,11 @@ def main():
     o.add_argument("ref", help="the pull request to gate, as owner/repo#number")
     o.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
     o.set_defaults(fn=cmd_gate)
+    k = sub.add_parser("stuck")
+    k.add_argument("ref", help="the pull request, as owner/repo#number")
+    k.add_argument("--head", default="")
+    k.add_argument("--clear", action="store_true")
+    k.set_defaults(fn=cmd_stuck)
     f = sub.add_parser("fix")
     f.add_argument("ref", help="the pull request whose findings go back, as owner/repo#number")
     f.set_defaults(fn=cmd_fix)
