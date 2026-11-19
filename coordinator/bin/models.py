@@ -29,7 +29,7 @@ BLOCKED_LOCK = "providers-blocked.lock"
 BLOCK_SECONDS = 3600.0
 UNITS = {"d": 86400.0, "h": 3600.0, "m": 60.0, "s": 1.0}
 AMOUNT = r"(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b"
-RELATIVE = re.compile(rf"(?:resets?|retry|try again)\s+(?:in|after)\s+((?:{AMOUNT}[\s,]*(?:and\s+)?)+)", re.I)
+RELATIVE = re.compile(rf"(?:resets?|retry|try(?:\s+again)?)\s+(?:in|after)\s+((?:{AMOUNT}[\s,]*(?:and\s+)?)+)", re.I)
 ABSOLUTE = re.compile(
     r"reset(?:s| at|ting at)?\s+(?:at\s+)?(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{1,2}:\d{2}(?::\d{2})?)"
     r"\s*((?:UTC|GMT)?[+-]\d{2}:?\d{2}|UTC|GMT|Z\b|[A-Za-z_]+(?:/[A-Za-z0-9_+-]+)+)?", re.I)
@@ -38,7 +38,7 @@ PROVIDER_ERROR = re.compile(
     r"|^\s*(?:401|402|403|429)(?=\s*(?:$|[;:,.-]|unauthorized|forbidden|too many|payment))"
     r"|usage limit|rate limit|too many requests|no credits|out of credits|credit balance"
     r"|insufficient[_ ]quota|quota (?:exceeded|exhausted)|payment required|invalid api key"
-    r"|unauthorized|forbidden|authentication",
+    r"|authentication_error",
     re.I,
 )
 LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full", re.I)
@@ -172,11 +172,12 @@ def reset_at(message, failed):
             zone = zone_of(zone_text)
             hour, _, rest = clock.partition(":")
             local_day = day or datetime.fromtimestamp(failed, zone).date().isoformat()
-            until = datetime.fromisoformat(f"{local_day}T{hour.zfill(2)}:{rest}").replace(tzinfo=zone).timestamp()
+            local = datetime.fromisoformat(f"{local_day}T{hour.zfill(2)}:{rest}")
+            until = local.replace(tzinfo=zone).timestamp()
+            if not day and until <= failed:
+                until = (local + timedelta(days=1)).replace(tzinfo=zone).timestamp()
         except (ValueError, KeyError):
             return failed + BLOCK_SECONDS
-        if not day and until <= failed:
-            until += 86400.0
         if until > failed:
             return until
     return failed + BLOCK_SECONDS
