@@ -6,9 +6,8 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, 
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
-import { flushFlowLog, logAct, logLaneChange, markPass } from "./flowlog.js";
+import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, actsHeight, actsSheet, awayNotice, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { actRates, awayCounts, flushFlowLog, logAct, logLaneChange, markPass, readFlow } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -18,6 +17,10 @@ const POP_PAD = 12;
 const BOARD_EVERY = 10000;
 const IDLE_AFTER = 90000;
 const TICK = 60000;
+const AWAY_AFTER = 1800000;
+const SEEN_EVERY = 10000;
+const ACTS_EVERY = 300000;
+const NEEDS_EVERY = 50000;
 const POP_FOLLOW = 600000;
 const SAVED = "board";
 const PROJECT_KEY = "project";
@@ -113,7 +116,11 @@ export default class Board extends View {
     this.notice = props()?.notice ?? null;
     this.chooser = props()?.projects ?? props()?.snooze ?? null;
     this.rows = props()?.rows ?? null;
-    this.sheet = Boolean(props()?.keys || this.notice || this.chooser || this.rows);
+    this.acts = props()?.acts ?? null;
+    this.actsAt = 0;
+    this.touched = 0;
+    this.needKeys = new Set();
+    this.sheet = Boolean(props()?.keys || this.notice || this.chooser || this.rows || this.acts);
     this.chosen = this.chooser ? Math.max(0, this.chooser.list.findIndex((p) => p.name === this.chooser.current)) : 0;
     this.projects = [];
     this.project = this.pop || this.dec || this.reviewMode || this.sheet ? null : localStorage.getItem(PROJECT_KEY);
@@ -245,6 +252,7 @@ export default class Board extends View {
     }
     if (shared("cockpit.pop")) setShared("cockpit.pop", null);
     if (shared("cockpit.notice")) dismiss();
+    if (shared("cockpit.away")) setShared("cockpit.away", null);
     this.fanView = localStorage.getItem("fan") === "1";
     this.fanFolded = new Set(JSON.parse(localStorage.getItem("fan-folded") ?? "[]"));
     this.search = InputState.new({ placeholder: "Ticket ID or title" });
@@ -252,18 +260,18 @@ export default class Board extends View {
     this.search.on("submit", () => this.handle.focus());
     this.search.on("focus", () => (this.searching = true));
     this.search.on("blur", () => (this.searching = false));
-    this.copyId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    hydrateAlerts();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
-    cx.timer.every(CHECK_EVERY, (cx) => this.alertTick(cx));
     cx.timer.every(TICK, (cx) => {
-      if (!this.pop) this.logAnswers();
+      this.logAnswers();
       cx.spawn(() => flushFlowLog(Date.now()));
+      this.refreshActs(cx);
+      this.publishNeeds();
     });
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
     this.restore();
     this.refresh(cx);
+    this.refreshActs(cx);
     cx.spawn(async (cx) => {
       for (;;) {
         this.command(await nextCommand(), cx);
@@ -274,36 +282,6 @@ export default class Board extends View {
 
   watching() {
     return Date.now() - this.drawn < IDLE_AFTER;
-  }
-
-  alertTick(cx) {
-    if (!this.watching() && alertState().on && leaseOpen(this.copyId, Date.now())) this.refresh(cx);
-  }
-
-  alertCheck() {
-    if (this.pop || this.dec || this.unsure() || !this.board) return;
-    const now = Date.now();
-    const rows = this.place(this.groups(), now).map(([g, lane]) => ({
-      key: g.key,
-      held: holds(lane, g.needs),
-      asleep: g.asleep,
-      unsettled: g.info.status === "open" && (g.info.gh?.ci ?? "loading") === "loading" || this.holdsAlerts(g),
-      label: this.cleanTitle(g).slice(0, 40),
-      pr: g.info.pr?.number,
-    }));
-    checkAlerts(rows, this.copyId, now);
-  }
-
-  holdsAlerts(g) {
-    const verdict = this.verdictFor(g);
-    return verdict === LOADING_VERDICT || verdict?.state === "unverified";
-  }
-
-  toggleAlerts(cx) {
-    const on = !alertState().on;
-    setAlertsOn(on);
-    say("info", on ? "Phone alerts on" : "Phone alerts off");
-    cx.notify();
   }
 
   refresh(cx, force) {
@@ -382,6 +360,7 @@ export default class Board extends View {
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     if (id === "project") return this.openProjects(cx);
     if (id === "snoozed") return this.openSnoozed(cx);
+    if (id === "acts") return openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: actsHeight(this.acts.rows.length), props: { acts: this.acts } });
     if (id === "wt" || id === "wtfail") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
     openOverlay({ mod: "ops-panels", kind: "dialog", width: 520, height: 340, props: { panel: "queue", seed: { running: this.board?.running ?? 0, cap: this.cap } } });
   }
@@ -542,7 +521,7 @@ export default class Board extends View {
       this.cap = await queueCap().catch(() => 6);
       const late = !this.unchanged("prs", this.prStamp());
       if (late) this.persist();
-      this.alertCheck();
+      this.publishNeeds();
       const planned = await this.planNext();
       return planned || late;
     }, cx, force);
@@ -622,6 +601,7 @@ export default class Board extends View {
     this.pruneSent(live);
     this.pruneMarks([...live, ...queued]);
     for (const [, lane] of placed) cols[COLUMN_OF[lane]].total += 1;
+    this.needKeys = new Set(placed.filter(([g, lane]) => COLUMN_OF[lane] === "needs" && !g.asleep).map(([g]) => g.key));
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
     for (const [g, lane] of placed) if (keep(g)) cols[COLUMN_OF[lane]].groups.push(g);
     cols.run.groups.push(...queued.filter(keep).map((g) => Object.assign(g, { lane: "backlog" })));
@@ -645,10 +625,13 @@ export default class Board extends View {
         if (p?.key === key && !p.moved) this.activate(this.entryOf(key), cx);
       },
       keys: (cx) => this.openKeys(cx),
-      notice: (cx) => this.openNotice(shared("cockpit.notice"), cx),
-      dismiss,
+      notice: (notice, cx) => this.openNotice(notice, cx),
+      dismiss: () => (shared("cockpit.notice") ? dismiss() : setShared("cockpit.away", null)),
+      glance: (cx) => {
+        this.glanceNext();
+        cx.notify();
+      },
       panel: (id, cx) => this.openPanel(id, cx),
-      alerts: (cx) => this.toggleAlerts(cx),
       command: (name) => run(name),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
@@ -831,7 +814,7 @@ export default class Board extends View {
       const prev = this.seen[g.key];
       next[g.key] = prev?.col === col ? prev : { col, at: prev ? now : 0 };
       dirty ||= next[g.key] !== prev;
-      if (prev?.col !== col) logLaneChange({ t: now, key: g.key, from: prev?.col ?? null, to: col, project: g.project, pr: g.info?.pr?.number ?? null });
+      if (prev?.col !== col) logLaneChange({ t: now, key: g.key, from: prev?.col ?? null, to: col, project: g.project, pr: g.info?.pr?.number ?? null, src: srcOf(g) });
     }
     for (const key of Object.keys(this.seen)) if (!next[key]) logLaneChange({ t: now, key, from: this.seen[key].col, to: null, project: null, pr: null });
     if (!dirty) return;
@@ -845,7 +828,7 @@ export default class Board extends View {
 
   logAnswers() {
     const fresh = Object.entries(shared("co.decided") ?? {}).filter(([key, d]) => d.at > (this.answerSeen.get(key) ?? 0));
-    for (const [key, d] of fresh) logAct({ t: d.at, key, act: "answer", src: "coordinator", project: null });
+    for (const [key, d] of fresh) logAct({ t: d.at, key: `ask:${key}`, act: "answer", src: "coordinator", project: null });
     for (const [key, d] of fresh) this.answerSeen.set(key, d.at);
   }
 
@@ -1075,6 +1058,71 @@ export default class Board extends View {
     openOverlay({ mod: "cockpit", kind: "dialog", width: POP_WIDTH, height, props: { pop: key, cursor: this.cursor, snap } });
   }
 
+  refreshActs(cx) {
+    if (Date.now() - this.actsAt < ACTS_EVERY) return;
+    this.actsAt = Date.now();
+    cx.spawn(async (cx) => {
+      this.acts = actRates(await readFlow(), Date.now());
+      cx.notify();
+    });
+  }
+
+  isBoard() {
+    return !(this.pop || this.dec || this.reviewMode || this.sheet);
+  }
+
+  needGroups(now) {
+    return this.place(this.groups(), now).filter(([g, lane]) => COLUMN_OF[lane] === "needs" && !g.asleep).map(([g]) => g).sort((a, b) => this.enteredAt("needs", a) - this.enteredAt("needs", b));
+  }
+
+  publishNeeds() {
+    if (!this.isBoard() || this.unsure() || !this.board) return;
+    const now = Date.now();
+    const n = this.needGroups(now).length;
+    const prev = shared("cockpit.needs");
+    if (prev?.n !== n || now - prev.at >= NEEDS_EVERY) setShared("cockpit.needs", { n, at: now });
+  }
+
+  touch(cx) {
+    if (!this.isBoard() || !this.board || this.unsure()) return;
+    const now = Date.now();
+    if (now - this.touched < SEEN_EVERY) return;
+    this.touched = now;
+    const last = shared("cockpit.seen") ?? 0;
+    if (now - last < SEEN_EVERY) return;
+    setShared("cockpit.seen", now);
+    if (last && now - last >= AWAY_AFTER) this.glance(last, now, cx);
+  }
+
+  glance(from, now, cx) {
+    cx.spawn(async (cx) => {
+      const events = await readFlow();
+      const merged = new Set(this.groups().filter((g) => this.prInfo(g).status === "merged").map((g) => g.key));
+      setShared("cockpit.away", { need: this.needGroups(Date.now()).map((g) => g.key), opened: [], for: ago(from, now), ...awayCounts(events, from, now, (key) => merged.has(key)) });
+      cx.notify();
+    });
+  }
+
+  glancePending(away) {
+    return away.need.filter((key) => this.needKeys.has(key) && !away.opened.includes(key));
+  }
+
+  glanceOpened(key) {
+    const away = shared("cockpit.away");
+    if (away?.need.includes(key) && !away.opened.includes(key)) setShared("cockpit.away", { ...away, opened: [...away.opened, key] });
+  }
+
+  glanceNext() {
+    const away = shared("cockpit.away");
+    const pending = away ? this.glancePending(away) : [];
+    if (!pending.length) return false;
+    const at = pending.findIndex((key) => this.cursor === this.rowKey("needs", { key }));
+    const next = pending[(at + 1) % pending.length];
+    if (!this.fanView && this.isFolded("needs")) this.peeked.add("needs");
+    this.moveTo(this.rowKey("needs", { key: next }));
+    return true;
+  }
+
   expireNotice(notice, cx) {
     if (this.noticeSeen === notice.id) return;
     this.noticeSeen = notice.id;
@@ -1291,6 +1339,7 @@ export default class Board extends View {
   }
 
   activate(e, cx) {
+    if (e) this.glanceOpened(e.group.key);
     if (e?.group.kind === "ask") return run("coordinator.asks");
     if (e && !e.thread) this.openDecision(e, cx);
     else this.openEntry(e, cx);
@@ -1510,6 +1559,7 @@ export default class Board extends View {
 
   openEntry(e, cx) {
     if (!e || this.opening === e.key) return;
+    this.glanceOpened(e.group.key);
     if (e.group.kind === "ask") return run("coordinator.asks");
     if (e.group.issue) return exec("open", [e.group.issue.url]);
     const thread = this.threadOf(e);
@@ -1531,6 +1581,7 @@ export default class Board extends View {
   openReply(e, cx, label = null) {
     this.replyMarked = false;
     if (!e || (e.group.issue && label !== ABANDON_LABEL)) return;
+    this.glanceOpened(e.group.key);
     if (e.group.kind === "ask") return run("coordinator.asks");
     this.replyLabel = label;
     this.followed = false;
@@ -1983,7 +2034,9 @@ export default class Board extends View {
 
   openTab(e) {
     const pane = e && this.tabOf(e.group);
-    if (pane) run("pane.focus", { terminal: pane.terminal });
+    if (!pane) return;
+    this.glanceOpened(e.group.key);
+    run("pane.focus", { terminal: pane.terminal });
   }
 
   openFiles(e) {
@@ -2018,6 +2071,7 @@ export default class Board extends View {
   }
 
   key(e, cx) {
+    this.touch(cx);
     if (e.is_held && (this.dec || this.reviewMode || this.sheet || !NAV_KEYS.has(e.key))) return;
     if (this.typing || this.searching) {
       if (e.key !== "escape") return;
@@ -2074,6 +2128,7 @@ export default class Board extends View {
     else if (k === "p") this.openPr(c);
     else if (k === "c") this.openFiles(c);
     else if (k === "w") this.openTab(c);
+    else if (k === "b" && this.isBoard()) this.glanceNext();
     else if (k === "n") this.jump();
     else if (k === "P" && !this.pop) this.openProjects(cx);
     else if (k === "f" && c && !this.pop) this.toggleFold(c.column);
@@ -2143,6 +2198,7 @@ export default class Board extends View {
         cx.notify();
       })
       .on_scroll_wheel((e, cx) => {
+        this.touch(cx);
         this.scrollY[key] -= e.delta.y;
         cx.notify();
       })
@@ -2169,7 +2225,7 @@ export default class Board extends View {
     return v_flex().id("ck-keys").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (item) => this.choose(item) }) : this.rows ? rowSheet(t, this.rows, this.chosen, this.armed, { close: () => closeOverlay(this.overlay), act: (row, cx) => this.rowAction(row, cx) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
+      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (item) => this.choose(item) }) : this.rows ? rowSheet(t, this.rows, this.chosen, this.armed, { close: () => closeOverlay(this.overlay), act: (row, cx) => this.rowAction(row, cx) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : this.acts ? actsSheet(t, this.acts, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
   }
 
   renderDecision(t) {
@@ -2360,6 +2416,7 @@ export default class Board extends View {
     this.compact = !this.pop && this.area.width < COMPACT_BELOW;
     const notice = shared("cockpit.notice");
     if (notice && !this.pop) this.expireNotice(notice, cx);
+    const away = !this.pop && shared("cockpit.away");
     const folded = COLUMN_KEYS.filter((k) => this.isFolded(k)).length;
     this.colW = this.pop ? POP_WIDTH : this.compact || this.fanView ? this.area.width : Math.max(MIN_COL, Math.floor((this.area.width - folded * H.folded) / Math.max(1, COLUMN_KEYS.length - folded)));
     const before = this.current();
@@ -2397,8 +2454,9 @@ export default class Board extends View {
     }
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
+      .on_mouse_move((_e, cx) => this.touch(cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, marks: this.marks.size, markedShown: this.layout.marked.length, armedMark: this.armed?.kind.startsWith("mark-") ? this.armed : null, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice: notice ?? (away && awayNotice(away, this.glancePending(away))), acts: this.acts, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, marks: this.marks.size, markedShown: this.layout.marked.length, armedMark: this.armed?.kind.startsWith("mark-") ? this.armed : null, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
       .when(this.searchOpen, (el) => el.child(searchRow(t, { quick: this.quick, searching: this.searching, compact: this.compact, ...this.scope }, this.search, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()

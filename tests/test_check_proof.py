@@ -3,6 +3,7 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 import subprocess
 import sys
 import tempfile
@@ -144,6 +145,124 @@ class CheckProofTest(unittest.TestCase):
         proof.check("heavy help", "python3 heavy.py --help", lambda: None)
         self.assertTrue(proof.failed)
         self.assertEqual([row[2] for row in proof.rows], ["failed", "not run"])
+
+    def test_a_missing_tool_is_recorded_as_not_run(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        proof = check.Proof("evidence/MO-501/check-proof.md")
+
+        def missing():
+            raise check.NotRun("uvx is not installed")
+
+        proof.check("ruff F,B", "uvx ruff@0.14.0 check", missing)
+        self.assertFalse(proof.failed)
+        self.assertEqual([row[2] for row in proof.rows], ["not run"])
+        self.assertIn("uvx is not installed", proof.rows[0][3])
+
+    def test_the_ruff_command_pins_the_version_and_the_rule_sets(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        command = check.ruff_command(".")
+        self.assertEqual(command[:2], ["uvx", f"ruff@{check.RUFF_VERSION}"])
+        self.assertEqual(check.RUFF_RULES, "F,B")
+        self.assertIn("--select", command)
+        self.assertIn("F,B", command)
+        self.assertEqual(command[-1], ".")
+
+    def test_a_finding_outside_the_baseline_fails_and_one_inside_it_does_not(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        baseline = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 2}
+        known = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 2}
+        self.assertEqual(check.new_findings(known, baseline), [])
+        current = dict(known)
+        current[("b.py", "F841", "Local variable `y` is assigned to but never used")] = 1
+        extra = check.new_findings(current, baseline)
+        self.assertEqual(len(extra), 1)
+        self.assertEqual(extra[0][1], 1)
+
+    def test_the_baseline_file_round_trips(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        counts = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 2}
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "ruff-baseline.txt"
+            check.write_baseline(counts, path)
+            self.assertEqual(check.read_baseline(path), counts)
+
+    def test_a_path_with_a_space_round_trips(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        counts = {("dir with spaces/a.py", "F401", "`os` imported but unused"): 1}
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "ruff-baseline.txt"
+            check.write_baseline(counts, path)
+            self.assertEqual(check.read_baseline(path), counts)
+
+    def test_the_gate_fails_on_a_finding_the_baseline_does_not_have(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        new = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 1}
+        with patch.object(check, "ruff_counts", return_value=new), \
+                patch.object(check, "read_baseline", return_value={}):
+            with self.assertRaises(RuntimeError) as raised:
+                check.check_ruff()
+        self.assertIn("not in the baseline", str(raised.exception))
+
+    def test_the_gate_passes_on_a_finding_the_baseline_has(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        known = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 1}
+        with patch.object(check, "ruff_counts", return_value=known), \
+                patch.object(check, "read_baseline", return_value=known):
+            detail = check.check_ruff()
+        self.assertIn("in the baseline", detail)
+
+    def test_the_check_runs_the_ruff_gate(self):
+        """The gate is wired into the run, not only defined."""
+        source = (ROOT / "scripts" / "mac_ops_fast_check.py").read_text()
+        self.assertIn("proof.check(f\"ruff {RUFF_RULES}\", shlex.join(ruff), check_ruff)", source)
+
+    def test_the_ruff_command_lints_the_runners_without_a_suffix(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        command = check.ruff_command()
+        for name in check.SUFFIXLESS_PYTHON:
+            if (ROOT / name).is_file():
+                self.assertIn(name, command)
+
+    def test_a_missing_tool_leaves_the_run_incomplete(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        proof = check.Proof("evidence/MO-501/check-proof.md")
+
+        def missing():
+            raise check.NotRun("uvx is not installed")
+
+        proof.check("ruff F,B", "uvx ruff@0.14.0 check", missing)
+        self.assertFalse(proof.failed)
+        self.assertTrue(proof.incomplete)
+
+    def test_the_gate_counts_every_new_finding(self):
+        """Three new findings with one message are three findings."""
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        key = ("a.py", "F841", "Local variable `x` is assigned to but never used")
+        with patch.object(check, "ruff_counts", return_value={key: 4}), \
+                patch.object(check, "read_baseline", return_value={key: 1}):
+            with self.assertRaises(RuntimeError) as raised:
+                check.check_ruff()
+        self.assertIn("3 Ruff findings are not in the baseline", str(raised.exception))
+
+    def test_a_ruff_run_with_no_report_is_not_a_clean_run(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        probe = SimpleNamespace(returncode=0, stdout="ruff 0.14.0", stderr="")
+        empty = SimpleNamespace(returncode=1, stdout="", stderr="")
+        with patch.object(check.shutil, "which", return_value="/usr/local/bin/uvx"), \
+                patch.object(check.subprocess, "run", side_effect=[probe, empty]):
+            with self.assertRaises(RuntimeError) as raised:
+                check.ruff_counts()
+        self.assertIn("without a JSON report", str(raised.exception))
+
+    def test_a_ruff_run_that_exits_one_with_no_findings_is_not_a_clean_run(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        probe = SimpleNamespace(returncode=0, stdout="ruff 0.14.0", stderr="")
+        empty = SimpleNamespace(returncode=1, stdout="[]", stderr="")
+        with patch.object(check.shutil, "which", return_value="/usr/local/bin/uvx"), \
+                patch.object(check.subprocess, "run", side_effect=[probe, empty]):
+            with self.assertRaises(RuntimeError) as raised:
+                check.ruff_counts()
+        self.assertIn("reported no findings", str(raised.exception))
 
     def test_the_check_keeps_the_original_deadlines(self):
         """The proof file must not let a slower run pass the check."""
