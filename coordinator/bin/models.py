@@ -40,14 +40,15 @@ ABSOLUTE = re.compile(
     r"(?:\s*([ap]\.?m\.?)(?![A-Za-z]))?"
     rf"(?:\s*\(\s*({ZONE_TEXT})\s*\)|\s*({ZONE_TEXT}))?", re.I)
 PROVIDER_ERROR = re.compile(
-    r"\b(?:http|status|code|error)\b[\s:=]*(?:401|402|403|429)\b"
+    r"\b(?:http|status|error(?:\s+code)?)\b[\s:=]*(?:401|402|403|429)\b"
+    r"|\"code\"\s*:\s*(?:401|402|403|429)\b"
     r"|^\s*(?:401|402|403|429)(?=\s*(?:$|[;:,.-]|unauthorized|forbidden|too many|payment))"
     r"|(?:usage limit|rate limit|too many requests|no credits|out of credits|credit balance"
     r"|insufficient[_ ]quota|quota (?:exceeded|exhausted)|payment required|invalid api key"
     r"|authentication_error)(?:ed|s)?(?!\w|\.\w)",
     re.I,
 )
-LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full|no such file|filenotfounderror", re.I)
+LOCAL_ERROR = re.compile(r"disk quota|no space left|enospc|disk full|no such file|filenotfounderror|\bexit(?:ed|s)?\b|non-zero|return ?code", re.I)
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
@@ -216,7 +217,11 @@ def block_provider(selection, error, failed=None):
     failed = time.time() if failed is None else failed
     with blocked_lock():
         blocked = {n: e for n, e in read_blocked().items() if live(e, time.time())}
-        blocked[name] = {"failed": failed, "until": reset_at(error, failed)}
+        entry = {"failed": failed, "until": reset_at(error, failed)}
+        held = blocked.get(name)
+        if isinstance(held, dict) and isinstance(held.get("until"), (int, float)) and held["until"] >= entry["until"]:
+            return True
+        blocked[name] = entry
         target = os.path.join(queue_dir(), BLOCKED_FILE)
         with open(f"{target}.tmp", "w") as f:
             json.dump({"blocked": blocked}, f, indent=2)
