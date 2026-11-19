@@ -470,8 +470,34 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+IDLE_STATUSES = {"completed", "interrupted", "failed"}
+
+
+def reusable_worktree(thread):
+    """Say whether a replacement may take over a thread's own worktree.
+
+    Only an idle thread hands its checkout over, so a pending edit of the
+    old thread cannot overwrite the replacement's. The worktree has to be
+    a linked worktree of its own, on a branch that can be read and is not
+    a herdr branch; a worktree that cannot be read is refused too.
+    """
+    if thread.get("status") not in IDLE_STATUSES or root_workspace(thread):
+        return False
+    try:
+        branch = run(["git", "-C", thread["worktreePath"], "rev-parse", "--abbrev-ref", "HEAD"], timeout=60).strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return branch not in ("", "HEAD") and not branch.startswith("herdr/")
+
+
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False,
+         task_type="fix"):
     """Send work to a thread, or start a fresh one when it cannot take it.
+
+    A thread on a blocked model takes no message: the work starts on the
+    first unblocked entry of the list for `task_type` (fix list for a fix, build list otherwise), in a worktree the
+    replacement can own (see `reusable_worktree`), on the pull request's
+    branch or on main when the work has no pull request yet.
 
     With `worktree_only` the work belongs in a worktree of its own: a
     thread that works in a shared checkout of a repository never takes
@@ -487,29 +513,34 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     if lkey in ledger:
         return f"already done {lkey}"
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
-    fixer = model_list.first_available("fix")
+    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+    thread_blocked = model_list.is_blocked(thread_model)
+    launch_type = task_type if thread_blocked else "fix"
+    list_name = "fix" if launch_type == "fix" else "build"
+    fixer = model_list.first_available(list_name)
     if fixer is None:
-        return f"skip {lkey}: every fix model is blocked"
+        return f"skip {lkey}: every {list_name} model is blocked"
+    attached_pr = None
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
-            _, skip = pr_action_skip(repo, attached["number"])
+            attached_pr, skip = pr_action_skip(repo, attached["number"])
             if skip:
                 return skip
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
-    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    thread_blocked = model_list.is_blocked(thread_model)
-    if not model_list.same_selection(thread_model, fixer["selection"]):
-        live = thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}
-        if live and not thread_blocked:
+    if thread_blocked:
+        sendable = False
+        reroute = "model is blocked"
+    elif not model_list.same_selection(thread_model, fixer["selection"]):
+        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
                     f"not the first available fix model; held until it is idle")
-        if live or thread.get("status") in {"completed", "interrupted", "failed"}:
+        if thread.get("status") in IDLE_STATUSES:
             sendable = False
-            reroute = "model is blocked" if thread_blocked else "model is not first available"
+            reroute = "model is not first available"
     if sendable and worktree_only and root_workspace(thread):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
@@ -524,7 +555,15 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute in {"model is blocked", "model is not first available"} and not root_workspace(thread):
+        if reroute == "model is blocked":
+            if reusable_worktree(thread):
+                workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
+            else:
+                base = (pr or attached_pr or {}).get("headRefName") or "main"
+                if not branch_on_origin(repo, base):
+                    return f"skip {lkey}: branch {base} is not on origin, no safe worktree"
+                workspace = {"type": "worktree", "baseRef": "origin/" + base, "startFromOrigin": True}
+        elif reroute == "model is not first available" and not root_workspace(thread):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
@@ -535,7 +574,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "taskType": "fix", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
+                "taskType": launch_type, "modelSelection": fixer["selection"], "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message,
                 "clientRequestId": lkey}
         options = ["--priority", str(priority)]
@@ -986,7 +1025,7 @@ def unstick(repo, ledger, excl=frozenset()):
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
-                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900)
+                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, task_type="standard")
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
