@@ -30,9 +30,15 @@ BLOCK_SECONDS = 3600.0
 UNITS = {"d": 86400.0, "h": 3600.0, "m": 60.0, "s": 1.0}
 AMOUNT = r"(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b"
 RELATIVE = re.compile(rf"(?:resets?|retry|try(?:\s+again)?)\s+(?:in|after)\s+((?:{AMOUNT}[\s,]*(?:and\s+)?)+)", re.I)
+# A reset the provider names as a clock time: "resets at 14:00 UTC", "resets
+# at 3:20am (America/Los_Angeles)", "will reset at 2026-11-18 11:58:52
+# (Asia/Shanghai)". The zone is the one the message states beside the clock:
+# an offset, then a named zone, then a bare UTC.
+ZONE_TEXT = r"(?:UTC|GMT)?[+-]\d{2}:?\d{2}|[A-Za-z_]+/[A-Za-z0-9_+-]+|UTC|GMT|Z\b"
 ABSOLUTE = re.compile(
-    r"reset(?:s| at|ting at)?\s+(?:at\s+)?(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{1,2}:\d{2}(?::\d{2})?)"
-    r"\s*((?:UTC|GMT)?[+-]\d{2}:?\d{2}|UTC|GMT|Z\b|[A-Za-z_]+(?:/[A-Za-z0-9_+-]+)+)?", re.I)
+    r"reset(?:s|ting at| at)?\s+(?:at\s+)?(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{1,2}:\d{2}(?::\d{2})?)"
+    r"(?:\s*([ap]\.?m\.?)(?![A-Za-z]))?"
+    rf"(?:\s*\(\s*({ZONE_TEXT})\s*\)|\s*({ZONE_TEXT}))?", re.I)
 PROVIDER_ERROR = re.compile(
     r"\b(?:http|status|code|error)\b[\s:=]*(?:401|402|403|429)\b"
     r"|^\s*(?:401|402|403|429)(?=\s*(?:$|[;:,.-]|unauthorized|forbidden|too many|payment))"
@@ -151,6 +157,7 @@ def blocked_identities(now=None):
 
 
 def zone_of(text):
+    """The zone a message names, as a zoneinfo zone or a fixed offset."""
     if not text or text.upper() in ("UTC", "GMT", "Z"):
         return timezone.utc
     if "/" in text:
@@ -159,7 +166,6 @@ def zone_of(text):
     offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:4]))
     return timezone(-offset if sign == "-" else offset)
 
-
 def reset_at(message, failed):
     """Epoch seconds of the reset a provider error names, else an hour after the failure."""
     relative = RELATIVE.search(message)
@@ -167,14 +173,24 @@ def reset_at(message, failed):
         return failed + sum(float(n) * UNITS[u[0].lower()] for n, u in re.findall(AMOUNT, relative.group(1), re.I))
     absolute = ABSOLUTE.search(message)
     if absolute:
-        day, clock, zone_text = absolute.groups()
+        day, clock, meridiem, parenthesised, zone_text = absolute.groups()
         try:
-            zone = zone_of(zone_text)
+            zone = zone_of(parenthesised or zone_text)
             hour, _, rest = clock.partition(":")
+            hour = int(hour)
+            if meridiem:
+                if meridiem.lower().startswith("p") and hour < 12:
+                    hour += 12
+                elif meridiem.lower().startswith("a") and hour == 12:
+                    hour = 0
             local_day = day or datetime.fromtimestamp(failed, zone).date().isoformat()
-            local = datetime.fromisoformat(f"{local_day}T{hour.zfill(2)}:{rest}")
+            local = datetime.fromisoformat(f"{local_day}T{hour:02d}:{rest}")
             until = local.replace(tzinfo=zone).timestamp()
             if not day and until <= failed:
+                # The clock time has passed today, so the reset is the same
+                # clock time tomorrow. The local calendar date moves first
+                # and the zone is applied after, so a day that changes its
+                # offset still holds the provider for the window it names.
                 until = (local + timedelta(days=1)).replace(tzinfo=zone).timestamp()
         except (ValueError, KeyError):
             return failed + BLOCK_SECONDS
