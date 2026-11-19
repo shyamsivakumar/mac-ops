@@ -38,9 +38,14 @@ Additional Ascend entries can set `ascend: true`.
 
 Queued heads are saved in queue.json's gatedHeads map in the same atomic write
 as their queue item. Keep that map across restarts. A recorded gate whose thread is failed, interrupted, or completed without a
-final `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the next run.
-The old receipt is cleared under the queue lock. Each head is retried at most
-once per run. Live gates, gates with verdicts, and missing receipts stay deduplicated.
+line that is exactly `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the
+next run. A line such as `Unable to issue VERDICT: PASS` is not a verdict, and
+a verdict line followed by a diagnostic line still counts. The retry replaces
+the head's record and queues its item in one queue save, and the record keeps
+`retryOf`, the dead thread it replaces. Until the retry's launch overwrites
+that thread's receipt, a run that finds the receipt still on `retryOf` leaves
+the head alone, so a run that stopped after the save neither retries again nor
+resets the count. Each head is retried at most once per run. Live gates, gates with verdicts, and missing receipts stay deduplicated.
 Dry-run reports `regating` without writing state. A new head can receive a gate.
 
 A gate that dies without a verdict looks the same whether it lost its thread
@@ -53,7 +58,8 @@ a verdict` in `queue/gatekeep.log`, and nothing is queued for that head again.
 A head moves to another reviewer once, even when `COORDQ_GATE_RETRY_LIMIT` is
 raised (`GATE_MOVE_LIMIT` in `coordq`).
 The retry count lives with the head's queue item in `gatedHeads`, as
-`{id, retries, at, givenUp}`, and a bare queue item id is read as a head with
+`{id, retries, at, givenUp}` (plus `retryOf` while a retry waits for its
+launch), and a bare queue item id is read as a head with
 no retry behind it. The record names the head, so a pull request that pushes a
 new head starts again at no retries. An explicit `coordq gate <repo>#<pr>`
 still queues a given-up head, because an operator asked for it: it keeps the
