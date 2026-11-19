@@ -118,7 +118,7 @@ Existing idle personal-project threads with no issue stay on the board as today.
 
 Round two (MO-139 Sol: conditional go; MO-140 GLM: go with conditions), full text in `~/Code/coordinator/evidence/local-tickets-design-critiques-round2-2026-11-09.md`. Shyam approved building v1 with these conditions:
 
-- **Default routing:** build task types default to GLM 5.3 and chores to MiniMax M3.1 Flash (`routing.json`, commit 078cc91). Review stays on Opus.
+- **Default routing:** build task types defaulted to GLM 5.3 and chores to MiniMax M3.1 Flash (`routing.json`, commit 078cc91). Superseded: every build type now uses the `build` list in `coordinator/models.json`, Terra first (#633). Review stays on Opus.
 - **One command owns GitHub:** `coordinator/bin/ticket` (labels, list, start, abandon, show). The board calls it; nothing else talks to GitHub.
 - **Durable dispatch:** the start writes an intent comment before `coordq start` and a receipt after; the request id is `ticket:<repo>#<n>:a<attempt>`, not tied to the body, so an edit cannot start a second agent. A start is refused while the latest attempt's thread is live or queued. A failed receipt retries the comment, never the start. Machine lines are trusted only from the authenticated gh user.
 - **T3:** `t3_thread_send` dedupes on `clientRequestId` like launch does, so follow-ups cannot be sent twice.

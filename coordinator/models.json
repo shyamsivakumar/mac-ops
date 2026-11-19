@@ -144,7 +144,7 @@
     }
   ],
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order: terra first, then minimax, glm, deepseek, cursor and sonnet as fallbacks",
     "fix and finish rounds": "use the fix list in order",
     "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
