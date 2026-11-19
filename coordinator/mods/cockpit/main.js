@@ -1151,7 +1151,7 @@ export default class Board extends View {
 
   glance(from, now, cx) {
     cx.spawn(async (cx) => {
-      const events = await readFlow();
+      const events = (await readFlow()).filter((e) => !this.hides(e));
       const merged = new Set(this.groups().filter((g) => this.prInfo(g).status === "merged").map((g) => g.key));
       setShared("cockpit.away", { need: this.needGroups(Date.now()).map((g) => g.key), opened: [], for: ago(from, now), ...awayCounts(events, from, now, (key) => merged.has(key)) });
       cx.notify();
@@ -1835,7 +1835,7 @@ export default class Board extends View {
   pruneRefused() {
     const refused = shared("cockpit.refused");
     if (!refused) return;
-    const live = new Map(this.groups().map((g) => [g.key, g]));
+    const live = new Map(this.groups(true).map((g) => [g.key, g]));
     const kept = Object.entries(refused).filter(([key, r]) => live.has(key) && r.stamp === this.stamp(live.get(key)));
     if (kept.length !== Object.keys(refused).length) setShared("cockpit.refused", Object.fromEntries(kept));
   }
