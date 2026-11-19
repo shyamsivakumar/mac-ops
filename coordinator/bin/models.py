@@ -2,7 +2,7 @@
 
 `models.json` is the only place a model is listed. The ticket tool, coordq,
 the lane driver and the pi route generator read it through this module.
-Lists: `build` (every build type; an entry's optional `leads` names the task types it goes first for), `fix` (fix and finish rounds), `review`
+Lists: `build` (every build type; an entry's optional `leads` names the task types it goes first for and `only` the task types it serves), `fix` (fix and finish rounds), `review`
 (the gate) and `panel` (only when Shyam asks for one).
 
 A provider that fails for a blocking reason is recorded in
@@ -63,9 +63,10 @@ def validate(data):
                 raise ModelsError(
                     f"models.json {name} entry needs id, vendor and a selection with instanceId and model: {entry!r}"
                 )
-            leads = entry.get("leads", [])
-            if not (isinstance(leads, list) and all(nonempty_string(t) for t in leads)):
-                raise ModelsError(f"models.json {name} entry leads must be a list of task types: {entry!r}")
+            for key in ("leads", "only"):
+                types = entry.get(key, [])
+                if not (isinstance(types, list) and all(nonempty_string(t) for t in types)):
+                    raise ModelsError(f"models.json {name} entry {key} must be a list of task types: {entry!r}")
             if entry["id"] in seen:
                 raise ModelsError(f"models.json {name} lists {entry['id']} twice")
             seen.add(entry["id"])
@@ -208,13 +209,20 @@ def is_blocked(selection, blocked=None):
 
 def in_order(list_name, preferred=None, task_type=None):
     """The entries of a list: the preferred id first, then the entries whose
-    `leads` names the task type, then the rest, each group in list order."""
+    `leads` names the task type, then the rest, each group in list order.
+
+    With a task type, an entry whose `only` omits it is left out unless it is
+    the preferred id."""
     def rank(entry):
         if entry["id"] == preferred:
             return 0
         return 1 if task_type in entry.get("leads", ()) else 2
 
-    return sorted(entries(list_name), key=rank)
+    listed = [
+        e for e in entries(list_name)
+        if e["id"] == preferred or task_type is None or "only" not in e or task_type in e["only"]
+    ]
+    return sorted(listed, key=rank)
 
 
 def first_available(list_name, preferred=None, blocked=None, task_type=None):

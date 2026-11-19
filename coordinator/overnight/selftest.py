@@ -147,6 +147,14 @@ def start_routing():
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
                                        print_brief=False, dry_run=False))
         exact(len(commands), 1)
+    morph = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
+    for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["cursor", "sol"])]:
+        blocked = set(morph)
+        for expected_id in walk:
+            exact(lane.model_list.first_available("build", None, blocked, kind)["id"], expected_id)
+            blocked.add(lane.model_list.identity(lane.model_list.first_available("build", None, blocked, kind)["selection"]))
+    exact(lane.model_list.first_available("fix")["selection"]["model"], "morph/morph-dsv41flash")
+    exact(lane.model_list.entries("fix")[-1]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
                    priority=1, title=title) for n, title in [(10, "bot"), (11, "census"), (12, "dashboard")]]

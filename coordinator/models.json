@@ -23,12 +23,41 @@
       ]
     },
     {
+      "id": "cursor",
+      "selection": {
+        "instanceId": "cursor",
+        "model": "default"
+      },
+      "vendor": "cursor"
+    },
+    {
       "id": "terra",
       "selection": {
         "instanceId": "codex",
         "model": "gpt-6.1-terra"
       },
-      "vendor": "openai"
+      "vendor": "openai",
+      "only": [
+        "quick",
+        "chore",
+        "standard",
+        "ui",
+        "research"
+      ]
+    },
+    {
+      "id": "sol",
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6.2-sol"
+      },
+      "vendor": "openai",
+      "only": [
+        "rca",
+        "risky",
+        "design",
+        "hard"
+      ]
     }
   ],
   "fix": [
@@ -49,10 +78,24 @@
       "vendor": "moonshot"
     },
     {
-      "id": "terra",
+      "id": "cursor",
+      "selection": {
+        "instanceId": "cursor",
+        "model": "default"
+      },
+      "vendor": "cursor"
+    },
+    {
+      "id": "sol-max",
       "selection": {
         "instanceId": "codex",
-        "model": "gpt-6.1-terra"
+        "model": "gpt-6.2-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "max"
+          }
+        ]
       },
       "vendor": "openai"
     }
@@ -126,12 +169,12 @@
     }
   ],
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "uses the build list in order, and an entry with leads goes first for those types: DeepSeek V4.1 Flash first for quick, chore, standard, ui and research (parallel volume), Kimi K3.1 first for rca, risky, design and hard (long reasoning sessions), Terra last",
-    "fix and finish rounds": "use the fix list in order: DeepSeek V4.1 Flash, Kimi K3.1, then Terra",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: quick, chore, standard, ui, research run DeepSeek V4.1 Flash, Kimi K3.1, Cursor auto, Terra; rca, risky, design, hard run Kimi K3.1, DeepSeek V4.1 Flash, Cursor auto, Sol",
+    "fix and finish rounds": "use the fix list in order: DeepSeek V4.1 Flash, Kimi K3.1, Cursor auto, Sol at max reasoning",
     "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor; reviews are Astra then Opus",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
     "builder:<id> label": "tries that entry first, then the list",
     "panel": "runs only when Shyam asks for one (Fable on request); nothing starts a panel on its own",
-    "never": "Sol or other OpenAI API models as builders"
+    "never": "OpenAI API models (instance openai-api) as builders"
   }
 }
