@@ -507,6 +507,18 @@ def reusable_worktree(thread):
     return branch not in ("", "HEAD") and not branch.startswith("herdr/")
 
 
+def claim_worktree(repo, thread, ledger, lkey, title):
+    """Reserve an idle thread's worktree for one replacement until that replacement stops."""
+    key = "worktree:" + thread["worktreePath"]
+    holder = ledger.get(key)
+    if holder and holder[0] != lkey:
+        rows = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"], "titleContains": holder[1], "limit": 5}).get("threads") or []
+        if not rows or any(row.get("status") in {"preparing", "queued", "starting", "running", "waiting"} for row in rows):
+            return False
+    ledger[key] = [lkey, title]
+    return True
+
+
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False,
          task_type="fix"):
     """Send work to a thread, or start a fresh one when it cannot take it.
@@ -568,14 +580,15 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if not repo:
             raise ValueError(f"No repository for {lkey}")
         if reroute == "model is blocked":
-            if reusable_worktree(thread) and ledger.setdefault("worktree:" + thread["worktreePath"], lkey) == lkey:
+            if reusable_worktree(thread) and claim_worktree(repo, thread, ledger, lkey, title):
                 workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
             else:
                 base = (pr or attached_pr or {}).get("headRefName") or "main"
                 if not branch_on_origin(repo, base):
                     return f"skip {lkey}: branch {base} is not on origin, no safe worktree"
                 workspace = {"type": "worktree", "baseRef": "origin/" + base, "startFromOrigin": True}
-        elif reroute == "model is not first available" and not root_workspace(thread):
+        elif reroute == "model is not first available" and not root_workspace(thread) \
+                and claim_worktree(repo, thread, ledger, lkey, title):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:

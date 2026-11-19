@@ -213,7 +213,7 @@ class BlockedModelSendTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.cmds, self.git, self.root, self.dir = [], "builder/x", False, tmp.name
+        self.cmds, self.git, self.root, self.dir, self.listed = [], "builder/x", False, tmp.name, []
         receipts = Path(tmp.name, "receipts.json")
         receipts.write_text(json.dumps({f"ticket:{REPO}#9:a1": "t1"}))
         env = {"COORDQ_DIR": tmp.name, "COORDINATOR_MODELS": str(ROOT / "coordinator" / "models.json")}
@@ -232,7 +232,7 @@ class BlockedModelSendTests(unittest.TestCase):
             patch.object(lane, "root_workspace", lambda thread: self.root),
             patch.object(lane, "pr_action_skip", return_value=({"headRefName": "builder/pr"}, None)),
             patch.object(lane, "run", run),
-            patch.object(lane, "t3", lambda tool, args: {"thread": self.thread}),
+            patch.object(lane, "t3", lambda tool, args: {"thread": self.thread, "threads": self.listed}),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -305,6 +305,17 @@ class BlockedModelSendTests(unittest.TestCase):
             lane.send("t1", "fix it", "t", ledger, key, repo=REPO)
         workspaces = [json.loads(c[2])["workspaceStrategy"] for c in self.cmds if c[0] == lane.COORDQ]
         self.assertEqual(workspaces, [OWN, MAIN])
+
+    def test_an_unblocked_send_waits_while_a_replacement_holds_the_worktree(self):
+        self.thread_on("sonnet", "completed", ("sonnet",))
+        ledger = {}
+        lane.send("t1", "fix it", "a", ledger, f"fix:{REPO}#1", repo=REPO)
+        self.thread_on("sonnet", "completed")
+        for status, workspace in (("running", {**MAIN, "baseRef": "origin/builder/pr"}), ("completed", OWN)):
+            self.listed = [{"status": status}]
+            lane.send("t1", "fix it", "b", ledger, f"fix:{REPO}#2", repo=REPO, pr_number=7)
+            self.assertEqual(json.loads(self.cmds[-1][2])["workspaceStrategy"], workspace)
+            ledger.pop(f"fix:{REPO}#2")
 
 
 if __name__ == "__main__":
