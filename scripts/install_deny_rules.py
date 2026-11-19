@@ -93,7 +93,7 @@ def build_pi_spec(spec: dict, root: Path) -> dict:
         "ascend_text_res": ascend_text_res(roots, str(root)),
         "secret_file_re": spec["secret_file_re"],
         "secret_text_re": derive_text_re(spec["secret_file_re"]),
-        "bash_denies": spec["bash_denies"],
+        "push_deny": spec["push_deny"],
         "merge_deny": spec["merge_deny"],
         "ascend_bash_reason": spec["ascend_bash_reason"],
         "secret_bash_reason": spec["secret_bash_reason"],

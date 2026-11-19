@@ -83,6 +83,25 @@ class InstallTest(FakeHome):
             for h in block.get("hooks", [])
         ]
         self.assertEqual(sum("deny-merge-guard.py" in c for c in commands), 1)
+        # the registered matcher must fire for Bash and for the T3 thread
+        # tools, or the hook's thread-tool check is unreachable
+        hook_matchers = [
+            block.get("matcher")
+            for block in settings["hooks"]["PreToolUse"]
+            for h in block.get("hooks", [])
+            if "deny-merge-guard.py" in h.get("command", "")
+        ]
+        self.assertEqual(len(hook_matchers), 1)
+        matcher = re.compile(hook_matchers[0])
+        self.assertTrue(matcher.search("Bash"))
+        for tool in (
+            "mcp__t3-code__t3_thread_launch",
+            "t3_thread_send",
+            "create_threads",
+            "mcp__t3-code__create_threads",
+        ):
+            self.assertTrue(matcher.search(tool), tool)
+        self.assertFalse(matcher.search("Read"))
         # scope sections
         for entry in SPEC["scope_files"]["copies"]:
             text = (self.home / entry[2:]).read_text()
@@ -217,8 +236,12 @@ class ListTest(unittest.TestCase):
         self.assertIn("SINGLE_LS", guard_text)
         self.assertNotIn("bareLs", guard_text)
 
-        force, main = (re.compile(SPEC["bash_denies"][0][0]),
-                       re.compile(SPEC["bash_denies"][1][0]))
+        hook_spec = importlib.util.spec_from_file_location("deny_merge_guard", HOOK)
+        hook = importlib.util.module_from_spec(hook_spec)
+        hook_spec.loader.exec_module(hook)
+        push = SPEC["push_deny"]
+        self.assertEqual(hook.PROTECTED, set(push["protected"]))
+        self.assertEqual(hook.FORCE_FLAGS, set(push["force_flags"]))
         for denied in (
             "git push --force origin main",
             "git push -f origin x",
@@ -237,8 +260,12 @@ class ListTest(unittest.TestCase):
             # refspec and a full ref destination are the same rule
             "git push origin :main",
             "git push origin feature:refs/heads/main",
+            # a remote URL contains ':', so the repository token must allow it
+            "git push https://github.com/shyamsivakumar/mac-ops.git main",
+            "git push git@github.com:shyamsivakumar/mac-ops.git master",
+            "git push -u https://github.com/shyamsivakumar/mac-ops.git main",
         ):
-            self.assertTrue(force.search(denied) or main.search(denied), denied)
+            self.assertIsNotNone(hook.decision(denied), denied)
         for allowed in (
             "git push origin t3/deny-rules",
             "git push origin t3/main-fix",
@@ -258,9 +285,11 @@ class ListTest(unittest.TestCase):
             "git push origin main:task-530",
             "git push origin master:task-530",
             "git push origin refs/heads/main:task-530",
+            # a task branch pushed to a URL remote stays allowed
+            "git push https://github.com/shyamsivakumar/mac-ops.git t3/deny-rules",
+            "git push git@github.com:shyamsivakumar/mac-ops.git t3/main-fix",
         ):
-            self.assertFalse(force.search(allowed), allowed)
-            self.assertFalse(main.search(allowed), allowed)
+            self.assertIsNone(hook.decision(allowed), allowed)
 
         merge = re.compile(SPEC["merge_deny"]["match_re"])
         self.assertTrue(merge.search("gh pr merge 531 -R shyamsivakumar/mac-ops --squash"))
@@ -361,6 +390,8 @@ class HookTest(unittest.TestCase):
             "git -C /tmp/r push elsewhere refs/heads/main",
             "git push origin :main",
             "git push origin feature:refs/heads/main",
+            "git push https://github.com/shyamsivakumar/mac-ops.git main",
+            "git push git@github.com:shyamsivakumar/mac-ops.git master",
         ):
             decision = self.decided(command)
             self.assertIsNotNone(decision, command)
@@ -405,6 +436,7 @@ class HookTest(unittest.TestCase):
             "git push --set-upstream upstream t3/deny-rules",
             "git -C /tmp/r push other t3/main-fix",
             "git push origin feature/main-work",
+            "git push https://github.com/shyamsivakumar/mac-ops.git t3/deny-rules",
         ):
             self.assertIsNone(self.decided(command), command)
 

@@ -338,9 +338,22 @@ def gate_pipeline():
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("quota", repo, "none", "Astra quota exhausted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
+        ("opus-gate-instance-unavailable", repo, "none", "Astra quota exhausted",
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+        ("opus-gate-instance-error", repo, "none", "Astra quota exhausted",
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
         ("ascend", "ascend/fixture", "absent", "", {}, []),
     ]
+    gate_caps = {
+        # the orchestrator lists a runnable gate instance: the gate launches on it
+        "quota": {"providers": [dict(providerInstanceId=lane.GATE_INSTANCE,
+                                     canRunChildTask=True, constraints=[])]},
+        # the instance is not listed: no gate is launched without its role
+        "opus-gate-instance-unavailable": {"providers": []},
+        # the capabilities call itself fails: no gate is launched without its role
+        "opus-gate-instance-error": None,
+    }
     for name, target, verdict, reply, ledger, expected in cases:
         actions = []
         pr = dict(number=20, state="OPEN", headRefOid=head,
@@ -382,11 +395,19 @@ def gate_pipeline():
                 else:
                     exact(head in payload["message"], True)
                     model = payload["modelSelection"]["model"]
+                    if "opus" in model:
+                        # a Claude gate launches only on the role-carrying instance
+                        exact(payload["modelSelection"]["instanceId"], lane.GATE_INSTANCE)
                     actions.append("astra" if model == "gpt-6-astra" else "opus" if "opus" in model else model)
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
+            if tool == "orchestrator_capabilities":
+                caps = gate_caps[name]
+                if caps is None:
+                    raise AssertionError("orchestrator unavailable")
+                return caps
             if tool == "t3_thread_list":
                 exact(head[:8] in args["titleContains"], True)
                 return {"threads": [] if verdict == "absent" else [
@@ -404,8 +425,12 @@ def gate_pipeline():
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
-                lane.act_on_pr(target, 20, dict(ledger))
+                out = lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
+            if name in ("opus-gate-instance-unavailable", "opus-gate-instance-error"):
+                # no role-less gate: the lane reports and waits instead of
+                # launching on the plain Claude instance
+                exact("needs-you" in out and "no role-less gate" in out, True)
             try:
                 exact(actions + ["forbidden-action"], expected)
             except AssertionError:

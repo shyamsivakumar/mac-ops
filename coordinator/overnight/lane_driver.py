@@ -532,26 +532,28 @@ GATE_INSTANCE = "claudeAgentGate"
 
 
 def gate_launch_model(chain_model):
-    """The gate's launch model, on the role-carrying instance when it can run.
+    """The gate's launch model, on the role-carrying instance or not at all.
 
     The role rides the provider instance, so a gate thread holds it from the
-    moment it starts, and it merges the pinned head itself. T3 can report the
-    instance as unlaunchable (it did when the instance was first registered),
-    and a gate launch must never break, so the reviewer chain's own instance is
-    used then and the launcher merges the pinned head below instead.
+    moment it starts, and its own pinned merge passes the deny rules. When the
+    orchestrator cannot launch that instance there is no role-carrying Claude
+    gate to run: launching on the plain Claude instance instead would hand the
+    thread no role, so its own pinned merge would be denied and the launcher
+    would have to merge for it, which does not meet the ticket's gate-thread
+    requirement. The lane then reports the instance and waits (None).
     """
     if chain_model.get("instanceId") != "claudeAgent":
         return chain_model
     try:
         providers = t3("orchestrator_capabilities", {}).get("providers") or []
     except Exception:
-        return chain_model
+        return None
     gate = next(
         (p for p in providers if p.get("providerInstanceId") == GATE_INSTANCE), None
     )
     if gate and gate.get("canRunChildTask") and not gate.get("constraints"):
         return {**chain_model, "instanceId": GATE_INSTANCE}
-    return chain_model
+    return None
 
 
 def check_step(repo, proof_path):
@@ -657,7 +659,16 @@ def act_on_pr(repo, number, ledger):
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": gate_launch_model(model),
+    model_selection = gate_launch_model(model)
+    if model_selection is None:
+        # No role-less Claude gate: without the instance there is no gate role
+        # to hand the thread, and a launcher-owned merge in its place would not
+        # meet the ticket's gate-thread requirement. Report and wait instead.
+        ledger[f"needs-you:{repo}#{number}:{head}"] = (
+            f"gate instance {GATE_INSTANCE} cannot run; no role-less gate launched"
+        )
+        return f"#{number}: needs-you, gate instance {GATE_INSTANCE} cannot run; no role-less gate launched"
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": model_selection,
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
