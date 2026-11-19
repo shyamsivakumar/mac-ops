@@ -9,7 +9,6 @@ import fcntl
 import json
 import math
 import os
-import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
