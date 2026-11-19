@@ -422,6 +422,10 @@ def gate_pipeline():
         ("pass-check-wrong-head", repo, "none", f"PROVIDES: PASS {head}\nCHECK: PASS {'b' * 40}\nVERDICT: PASS", {}, [chain[0]], None),
         ("no-receipts-file", repo, "absent", "", {}, [chain[0]], None),
         ("retargeted-after-pass", repo, "PASS", full, {}, [chain[0]], None),
+        ("trailing-space-pass", repo, "PASS", full.replace(f"PROVIDES: PASS {head}", f"PROVIDES: PASS {head}  "), {}, ["merge", "provides", "ff"], None),
+        ("indented-verdict", repo, "none", full.replace("\nVERDICT", "\n  VERDICT"), {}, [chain[0]], None),
+        ("older-pass-not-superseded", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
+        ("older-fail-superseded", repo, "FAIL", "finding\nVERDICT: FAIL", {}, [], None),
     ]
     gate_key = f"gate:{repo}#20:{head}"
     extra = {"stray-pass-ignored": {"stray": "VERDICT: PASS"},
@@ -440,7 +444,8 @@ def gate_pipeline():
         thread_replies = {**replies, **replies_by_case.get(name, {}), "gate": reply}
         pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
-        snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+        newer = [dict(number=21, state="OPEN", body="Refs #10")] if name.startswith("older-") and "superseded" in name else []
+        snapshot = {"repos": {target: {"prs": [pr, *newer], "issues": [dict(number=10, labels=[])]}}}
 
         def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
                     head=head, reply=reply, verdict=verdict, name=name):
