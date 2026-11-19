@@ -655,13 +655,20 @@ OPEN_FINDINGS_NONE = "Open critical or major findings: none"
 OPEN_FINDINGS_INSTRUCTION = (
     "This is the last review round. The second-to-last line of your report must be exactly "
     f"`{OPEN_FINDINGS_NONE}` or `Open critical or major findings: <n>` (the count of critical "
-    "and major findings still open), followed by the final VERDICT line.")
+    "and major findings still open), after your CHECK line and followed by the final VERDICT line.")
 
 
-def no_open_findings(reply):
-    """True when the last non-blank line before the final VERDICT line says no critical or major finding is open."""
-    lines = [line.strip() for line in reply.splitlines() if line.strip()]
-    return len(lines) >= 2 and lines[-1].startswith("VERDICT:") and lines[-2] == OPEN_FINDINGS_NONE
+def no_open_findings(reply, head):
+    """True when a FAIL report fails only for the round cap.
+
+    The report needs `CHECK: PASS <head>` and no `CHECK: FAIL` line, the none
+    line as the last non-blank line before `VERDICT: FAIL`, and nothing but
+    trailing whitespace stripped from any line.
+    """
+    lines = [line.rstrip() for line in reply.splitlines() if line.strip()]
+    return (len(lines) >= 2 and lines[-1] == "VERDICT: FAIL" and lines[-2] == OPEN_FINDINGS_NONE
+            and f"CHECK: PASS {head}" in lines
+            and not any(line.startswith("CHECK: FAIL") for line in lines))
 
 
 def gate_round_item(repo, number, head):
@@ -1114,7 +1121,7 @@ def act_on_pr(repo, number, ledger):
         # at the cap is never sent "Continue fixing".
         reviews = record_failed_review(repo, number, head, ledger)
         if reviews >= GATE_ROUND_CAP:
-            if no_open_findings(reply):
+            if no_open_findings(reply, head):
                 return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
             return gate_round_decision(repo, number, head, ledger)
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
