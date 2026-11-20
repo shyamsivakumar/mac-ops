@@ -6,6 +6,7 @@ prepare  writes the parent-commit snapshot into .cache/<id>/ and links it into
          the task's build context; the snapshot never holds a credential and is
          gitignored.
 check    verifies ids, merge parents and the frozen held-out slice.
+add      appends one merged PR to the selection (usage: add REPO PR).
 """
 
 import argparse
@@ -38,6 +39,9 @@ SENSITIVE = re.compile(
     r"(?i)railway (project|service|variable|cli)|_secret\b|_token\b|--skip-deploys|api[_ -]?key|"
     r"\bcopy\b[^.]*\bsecret|\bproduction (service|variable|env)"
 )
+TEST_FILE = re.compile(r"(?i)^(test_.*|.*_test\.\w+|test\w*\.(js|cjs|mjs))$")
+TICKET_REF = re.compile(r"(?i)\b(?:refs|closes|fixes|resolves)\s+#(\d+)")
+NOT_SOURCE = ("tests/", "evidence/", "docs/")
 FIX_STATEMENT = (
     r"(?i)builder check: pass [0-9a-f]{{7,}}|closing note|merged via #{pr}\b|"
     r"fix round \d+ on|\bhead: [0-9a-f]{{7,}}"
@@ -383,6 +387,66 @@ def build_task(selection, task):
     )
 
 
+def add_task(selection, repo, pr):
+    if repo not in selection["repos"]:
+        raise ValueError(f"unknown repo {repo}")
+    task_id = f"{repo}-{pr}"
+    if any(t["id"] == task_id for t in selection["tasks"]):
+        return None
+    profile = selection["repos"][repo]
+    local = local_repo(selection, repo)
+    pull = json.loads(run(["gh", "api", f"repos/{profile['github']}/pulls/{pr}"]))
+    if not pull.get("merged_at"):
+        raise ValueError(f"PR {pr} is not merged")
+    merge = pull["merge_commit_sha"]
+    parents = run(["git", "rev-list", "--parents", "-n", "1", merge], cwd=local).split()[1:]
+    if len(parents) != 1:
+        raise ValueError(f"{merge} is not a single-parent merge commit")
+    ticket = TICKET_REF.search(pull["body"] or "")
+    if not ticket:
+        raise ValueError(f"PR {pr} does not name its ticket")
+    changes = [
+        entry.partition("\t")[::2]
+        for entry in run(
+            ["git", "diff", "--name-status", parents[0], merge], cwd=local
+        ).splitlines()
+    ]
+    files = [path.split("\t")[-1] for _, path in changes if TEST_FILE.match(Path(path).name)]
+    if not files:
+        raise ValueError(f"PR {pr} changes no test file")
+    added = [
+        path.split("\t")[-1]
+        for status, path in changes
+        if status == "A" and not path.startswith(NOT_SOURCE)
+    ]
+    command = (
+        f"python3 -m pytest -q -x {' '.join(files)}"
+        if profile["profile"] == "python"
+        else f"node {' '.join(files)}"
+    )
+    selection["tasks"].append(
+        {
+            "id": task_id,
+            "repo": repo,
+            "pr": pr,
+            "ticket": int(ticket.group(1)),
+            "merge": merge,
+            "parent": parents[0],
+            "type": "feature" if added else "bugfix",
+            "test_command": command,
+            "test_files": files,
+            "heldout": False,
+            "group": task_id,
+        }
+    )
+    groups = shared_groups(selection["tasks"])
+    for entry in selection["tasks"]:
+        entry["group"] = groups[entry["id"]]
+        entry["heldout"] = heldout_for(entry["group"])
+    SELECTION.write_text(json.dumps(selection, indent=2) + "\n")
+    return task_id
+
+
 def prepare_task(selection, task):
     local = local_repo(selection, task["repo"])
     cache = CACHE / task["id"]
@@ -427,10 +491,16 @@ def check(selection):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["build", "prepare", "check"])
-    parser.add_argument("ids", nargs="*", help="task ids; default is every task")
+    parser.add_argument("command", choices=["build", "prepare", "check", "add"])
+    parser.add_argument("ids", nargs="*", help="task ids, or REPO PR for add")
     args = parser.parse_args()
     selection = load()
+    if args.command == "add":
+        if len(args.ids) != 2:
+            parser.error("usage: build_tasks.py add REPO PR")
+        added = add_task(selection, args.ids[0], int(args.ids[1]))
+        print(f"add: {added}" if added else "add: already present")
+        return
     tasks = [t for t in selection["tasks"] if not args.ids or t["id"] in args.ids]
     if args.command == "check":
         problems = check(selection)
