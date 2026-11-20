@@ -2838,10 +2838,49 @@ def stall():
     orphan = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
         {"number": 9, "title": "bot repair", "labels": []}]}}}
     from unittest.mock import mock_open
+    import datetime as dt
+    started = {f"ticket:{repo}#9:a1": "old"}
+    cooling = {"cont:old": [dt.datetime.now(dt.timezone.utc).isoformat(), "receipt"]}
     with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
          patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data=json.dumps(started))):
+        exact(lane.unstick(repo, dict(cooling)), "DRY unstick [9]")
+
+    # A receipt is the proof a builder was started. A fresh ticket with no
+    # receipt was never started, so nothing finished and unstick leaves it
+    # alone; a started ticket with no pull request is still swept.
+    fresh = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
+        {"number": 8, "title": "bot repair", "labels": []},
+        {"number": 9, "title": "bot repair", "labels": []}]}}}
+    with patch.object(lane, "SNAPSHOT", fresh), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data=json.dumps(started))):
+        exact(lane.unstick(repo, dict(cooling)), "DRY unstick [9]")
+    with patch.object(lane, "SNAPSHOT", fresh), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
          patch("builtins.open", mock_open(read_data="{}")):
-        exact(lane.unstick(repo, {}), "DRY unstick [9]")
+        exact(lane.unstick(repo, {}), "nothing ready")
+
+    # The brief the thread receives tells it to re-read the ticket's open
+    # pull requests before closing, so a pull request opened after the
+    # snapshot is not missed.
+    brief = lane.unstick_brief_path().read_text()
+    exact("re-read its open pull requests" in brief, True)
+    exact("leave the issue untouched" in brief, True)
+    exact("Refs #<n>" in brief, True)
+    exact("{repo}" in brief, True)
+    exact("{list}" in brief, True)
+
+    # A matching pull request and an incomplete lookup are terminal: the
+    # thread reports the issue and moves on, so the disposition rule cannot
+    # send it back to close a ticket that has a pull request.
+    exact("Two outcomes end the work on an issue at once" in brief, True)
+    exact("The lookup is incomplete (the command fails, or the list reaches the limit)" in brief, True)
+    exact("report it and leave the issue alone" in brief, True)
+    exact("skipped: matching PR #<n>" in brief, True)
+    exact("skipped: incomplete PR lookup" in brief, True)
+    exact("Every confirmed orphan must end closed" in brief, True)
+    exact("Every issue must end closed" in brief, False)
 
 
 def alarm_mute_on_one_board():
