@@ -409,3 +409,17 @@ class QueueCrashSafetyTests(unittest.TestCase):
         self.q.save({"next": 2, "items": []})
         prev = json.loads(Path(self.tmp.name, "queue.json.prev").read_text())
         self.assertEqual(prev["next"], 1)
+
+    def test_first_dispatch_after_corruption_dispatches_nothing(self):
+        self.q.live = lambda: 0
+        self.q.cap = lambda: 6
+        Path(self.tmp.name, "queue.json").write_text('{"next":2,"items":[')
+        Path(self.tmp.name, "queue.json.prev").write_text(json.dumps({"next": 2, "items": [
+            {"id": 1, "tool": "t3_thread_send", "args": {"threadId": "1"},
+             "priority": 0, "title": "pending"}]}))
+        with patch.object(self.q, "call", return_value=(0, "{}")) as call, patch.object(
+                self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "flush_provider_blocks"), patch.object(self.q, "safe_refill"):
+            self.q.cmd_dispatch(argparse.Namespace(dry_run=False))
+        call.assert_not_called()
+        self.assertTrue(Path(self.tmp.name, "dispatch.stopped").exists())
