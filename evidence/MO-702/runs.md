@@ -8,6 +8,8 @@ Code head these runs used: `a429384032d19450288406c078e562f3d1b9e00f`. The check
 
 A temp queue dir, a temp COORD_JOURNAL_DIR and a stub t3mcp (two live threads) stand in for the live queue, so no real thread is launched. Only `coordq start` ran (its drain launches the item); `coordq dispatch` was not used because it also runs the ticket refill against the real board.
 
+Record of an earlier run: a first sandbox run used `coordq dispatch`, which reached the real refill and started the real ticket shyamsivakumar/mac-ops#693 (MO-1127). It posted an intent comment and a receipt comment on that issue and removed its stage label. No thread ran, because the launch went to the temp queue with the stub `t3mcp`. The Coordinator restored `stage:todo` and commented on the issue. The runs below used `coordq start` only.
+
 ```
 $ coordq start {"threadId":"t-x","message":"<omitted>"} --title "fable idle " + 150 x's
 started #1
