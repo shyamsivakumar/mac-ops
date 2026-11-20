@@ -953,6 +953,15 @@ def require_main_source(checkout: Path) -> str:
     return head
 
 
+def manifest_hashes(checkout: Path) -> dict[str, str]:
+    root = checkout / "coordinator"
+    arms = json.loads((root / "config" / "factory.json").read_text())["arms"]
+    return {
+        arm: hashlib.sha256(b"".join((root / name).read_bytes() for name in names)).hexdigest()
+        for arm, names in arms.items()
+    }
+
+
 def install(
     checkout: Path,
     dry_run: bool,
@@ -1042,6 +1051,7 @@ def install(
             "installed_at": time.time(),
             "written": [str(t) for t, _, _ in pending],
             "mod_hashes": mod_hashes,
+            "manifest": manifest_hashes(checkout),
             "backups": str(backups),
         }
         write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
