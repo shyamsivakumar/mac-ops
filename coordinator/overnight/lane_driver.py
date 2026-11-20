@@ -1506,6 +1506,19 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
     return unstick(repo, ledger, excl)
 
 
+def unstick_brief_path():
+    """The unstick brief: the copy installed beside this module, else the
+    tracked copy in the checkout, else the coordinator runtime copy on a
+    machine that has not reinstalled yet."""
+    beside = Path(__file__).with_name("unstick-brief.md")
+    if beside.is_file():
+        return beside
+    tracked = Path(__file__).resolve().parent.parent / "bin" / "unstick-brief.md"
+    if tracked.is_file():
+        return tracked
+    return Path("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md")
+
+
 def unstick(repo, ledger, excl=frozenset()):
     issues = SNAPSHOT["repos"][repo]["issues"]
     referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
@@ -1519,6 +1532,7 @@ def unstick(repo, ledger, excl=frozenset()):
         return "nothing ready"
     receipts = json.load(open(RECEIPTS))
     failures_before = ledger.get("_item_failures", 0)
+    started = set()
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
@@ -1526,6 +1540,7 @@ def unstick(repo, ledger, excl=frozenset()):
                         if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
             if not best:
                 continue
+            started.add(n)
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
                 continue
@@ -1551,7 +1566,10 @@ def unstick(repo, ledger, excl=frozenset()):
         if isinstance(v, list) and (now - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
             return True
         return False
-    orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}")]
+    # A receipt is the proof a builder was started. A ticket with no receipt
+    # was never started, so nothing finished and there is nothing to re-cut:
+    # the batch takes only the started tickets.
+    orphans = [n for n in orphans if n in started and not marked(f"unstick:{repo}#{n}")]
     if not orphans:
         return "nothing ready"
     batch = orphans[:7]
@@ -1561,7 +1579,7 @@ def unstick(repo, ledger, excl=frozenset()):
     unsticker = model_list.first_available("build")
     if unsticker is None:
         return "unstick waits, every builder is blocked"
-    msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
+    msg = open(unstick_brief_path()).read().replace("{repo}", repo).replace("{list}", lst)
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]
