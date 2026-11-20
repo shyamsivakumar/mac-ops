@@ -643,7 +643,7 @@ def merged_restart():
              patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
              patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": [dict(number=10, labels=[])]}}}), \
              patch.object(lane, "DRY", False), \
-             patch.object(lane.close_check, "run_check", lambda *args: checklist), \
+             patch.object(lane.close_check, "run_check", lambda *args, checklist=checklist: checklist), \
              patch.object(lane, "run", command), patch.object(lane, "t3", threads):
             Path(scratch, "receipts.json").write_text(json.dumps(receipts))
             for _ in range(2):
