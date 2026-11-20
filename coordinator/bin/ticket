@@ -244,7 +244,7 @@ def repo_config(cfg, repo):
 
 def ensure_labels(a):
     cfg = load_config()
-    wanted = label_names(cfg)
+    wanted = label_names(cfg) + [("stage", STARTED_LABEL)]
     for repo in cfg["repos"]:
         existing = {l["name"].lower(): l for l in gh_json(["label", "list", "-R", repo, "--limit", "1000", "--json", "name,color"])}
         create, recolor, ok = [], [], 0
@@ -1492,6 +1492,16 @@ def cmd_start(a):
         die(f"started, but the receipt comment could not be posted after 3 tries; coordq output was: {output}")
 
 
+STARTED_LABEL_READY = set()
+
+
+def ensure_started_label(repo):
+    if repo not in STARTED_LABEL_READY:
+        gh(["label", "create", STARTED_LABEL, "-R", repo, "--color", FAMILY_COLORS["stage"],
+            "--description", "A builder thread has the ticket", "--force"])
+        STARTED_LABEL_READY.add(repo)
+
+
 def swap_stage(repo, n, old, new):
     """Replace the one stage label `old` with `new` in a single edit.
 
@@ -1499,6 +1509,7 @@ def swap_stage(repo, n, old, new):
     below re-asserts that and the message names the state that is left."""
     edit = ["issue", "edit", str(n), "-R", repo]
     try:
+        ensure_started_label(repo)
         gh(edit + ["--add-label", new, "--remove-label", old])
     except GhError as e:
         try:
