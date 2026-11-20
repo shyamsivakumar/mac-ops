@@ -15,3 +15,9 @@ ugrep: warning: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.29DPuqQalp/
 ## Cause
 
 Both call sites keyed the ledger by `journal-outside:{repo}#{number}:{head}`, so a PR whose head differed (fake heads) or a ledger that lost a write emitted again. `journal_merged` keys by PR only and also checks the current month journal.
+
+## Garbage lines in the journal
+
+Journal with a partial line, a `merged_outside_lane` row for r/x#5, then another partial line. `journal_has_merged('r/x',5), journal_has_merged('r/x',6)` prints (no exception):
+
+    True False
