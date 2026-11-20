@@ -27,7 +27,7 @@ import models
 
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
-CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
+CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "factory.json")
 # The board config belongs to the machine. The policy the coordinator runs
 # with is decided on the Mac, so the installed copy is the live file and the
 # repository copy is only the seed for a machine that has none. A local
