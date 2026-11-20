@@ -26,6 +26,11 @@ T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 # on without end.
 T3MCP_TIMEOUT = 60
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
+# A lane thread that waits for an answer is still a builder in flight: the
+# ticket CLI counts `waiting` as live, so the lane rule has to as well, or a
+# second builder can start on the same repo while the first one waits. The
+# cap keeps its own list, so this does not change how many slots are used.
+LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
@@ -1018,7 +1023,7 @@ def live_lane_repositories(config):
         receipts = {}
     cursor = None
     while True:
-        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+        args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES,
                 "includeSubagents": False}
         if cursor is not None:
             args["cursor"] = cursor
@@ -1045,7 +1050,72 @@ def live_lane_repositories(config):
         cursor = next_cursor
 
 
-def lane_candidates(rows, occupied):
+# A pull request body refs a ticket with one of these words. The lane's own
+# briefs write `Refs #n`, and a builder that closes its ticket writes
+# `Closes #n` or `Fixes #n`; all three are evidence that a builder is in
+# flight for that ticket.
+PR_REF = re.compile(r"(?i)\b(?:refs|closes|fixes)\s+#(\d+)")
+# One page of open pull requests is the whole read allowance a repo gets in a
+# pass. A repo with more open pull requests than this cannot be read within
+# that allowance, so the pass stops instead of spending a second call.
+PR_PAGE = 100
+
+
+def open_pr_refs(repo):
+    """The ticket numbers the open, non-draft pull requests of one repo ref.
+
+    One read per repo per pass, through the gateway like the issue read, so
+    the refill's GitHub budget stays known. The read is fresh: a pull request
+    opened after a cached read would be invisible for the cache's two
+    minutes, and a ticket could start while its own pull request is open. A
+    draft pull request is not a builder in flight, so it is skipped.
+    """
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls?state=open&per_page={PR_PAGE}"],
+                         timeout=40, limit=FLOOR, fresh=True)
+    if run.returncode:
+        raise RuntimeError(f"open pull request snapshot failed for {repo}")
+    pulls = json.loads(run.stdout)
+    if not isinstance(pulls, list) or not all(isinstance(pull, dict) for pull in pulls):
+        raise RuntimeError(f"open pull request snapshot is not a list for {repo}")
+    if len(pulls) >= PR_PAGE:
+        raise RuntimeError(f"open pull request list is longer than one page for {repo}")
+    refs = set()
+    for pull in pulls:
+        if pull.get("draft"):
+            continue
+        refs.update(int(number) for number in PR_REF.findall(str(pull.get("body") or "")))
+    return refs
+
+
+def stale_started(rows, occupied, pr_refs):
+    """The stage:started tickets with no live lane thread and no open pull
+    request that refs them.
+
+    A label is a claim; the thread and the pull request are the evidence. The
+    refill logs one line per ticket per pass and changes nothing, so a person
+    or the lane decides what the label means.
+    """
+    stale = []
+    for row in rows:
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        repo = row["repository"]["nameWithOwner"]
+        if "stage:started" not in names or repo in occupied:
+            continue
+        if row["number"] in pr_refs.get(repo, ()):
+            continue
+        stale.append(row)
+    return stale
+
+
+def lane_candidates(rows, occupied, pr_refs=None):
+    """The stage:todo tickets the refill may start, in board order.
+
+    A repo is busy when a live lane thread works it, or when an open,
+    non-draft pull request refs one of its open tickets. A `stage:started`
+    label alone is not evidence of a builder in flight, so a stale label no
+    longer makes its repo busy.
+    """
     def order(row):
         names = [label["name"] if isinstance(label, dict) else str(label)
                  for label in row.get("labels") or []]
@@ -1057,12 +1127,12 @@ def lane_candidates(rows, occupied):
         return (min(priorities, default=999), tuple(blockers), row["number"],
                 row["repository"]["nameWithOwner"])
 
+    pr_refs = pr_refs or {}
     busy = set(occupied)
     for row in rows:
-        names = [label["name"] if isinstance(label, dict) else str(label)
-                 for label in row.get("labels") or []]
-        if "stage:started" in names:
-            busy.add(row["repository"]["nameWithOwner"])
+        repo = row["repository"]["nameWithOwner"]
+        if row["number"] in pr_refs.get(repo, ()):
+            busy.add(repo)
     selected = []
     for row in sorted(rows, key=order):
         repo = row["repository"]["nameWithOwner"]
@@ -1077,6 +1147,7 @@ def board_candidates():
         cfg = json.load(f)
     occupied = live_lane_repositories(cfg)
     rows = []
+    pr_refs = {}
     for repo in cfg["repos"]:
         run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
                               f"repos/{repo}/issues?state=open&per_page=100"],
@@ -1088,7 +1159,10 @@ def board_candidates():
                 if "pull_request" not in row:
                     rows.append({**row, "repository": {"nameWithOwner": repo},
                                  "updatedAt": row["updated_at"]})
-    return lane_candidates(rows, occupied)
+        pr_refs[repo] = open_pr_refs(repo)
+    for row in stale_started(rows, occupied, pr_refs):
+        log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
+    return lane_candidates(rows, occupied, pr_refs)
 
 
 def ticket_start(repo, number, dry_run):
