@@ -25,3 +25,7 @@ type:large 5 files: None
 
 ## Open stage:todo bodies (check_body, no labels)
 762, 758, 742 pass; 740 and 708 have no Proof command line; 631 has no Goal and why section (old format, would be refused at open).
+
+## key-mint selftest case (run alone, no heavy)
+origin/main code with the new selftest: AssertionError: a body without a proof line was opened
+branch: key_mint ok
