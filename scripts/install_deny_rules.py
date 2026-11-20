@@ -32,7 +32,7 @@ ROOT_REPO = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT_REPO / "runtime/agents/deny-rules.json"
 GUARD_TEMPLATE = ROOT_REPO / "runtime/agents/deny-guard.ts"
 GUARD_MARKER = "/*__MAC_OPS_DENY_SPEC__*/{}"
-HOOK_CONSTANTS = ("ASCEND_ROOTS", "SECRET_FILE_RE", "FAMILY_MODES", "AUDIT_PATH")
+HOOK_CONSTANTS = ("ASCEND_ROOTS", "SECRET_FILE_RE", "FAMILY_MODES", "AUDIT_PATH", "SECRET_VALUE_RES")
 OWNER = "mac-ops/deny-rules.v1"
 BEGIN = "<!-- BEGIN mac-ops deny-rules -->"
 END = "<!-- mac-ops deny-rules END -->"
@@ -126,6 +126,7 @@ def render_guard(spec: dict, root: Path) -> str:
         "ascend_bash_reason": spec["ascend_bash_reason"],
         "secret_bash_reason": spec["secret_bash_reason"],
         "family_modes": family_modes(spec),
+        "secret_value_res": spec["secret_value_res"],
         "audit_log": expand(spec["audit_log"], root),
         "hook_path": expand(spec["claude_code"]["hook"]["target"], root),
     }
@@ -139,6 +140,7 @@ def render_hook(spec: dict, root: Path) -> str:
         "SECRET_FILE_RE": spec["secret_file_re"],
         "FAMILY_MODES": family_modes(spec),
         "AUDIT_PATH": expand(spec["audit_log"], root),
+        "SECRET_VALUE_RES": spec["secret_value_res"],
     }
     for name in HOOK_CONSTANTS:
         text, count = re.subn(
