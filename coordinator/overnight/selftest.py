@@ -612,7 +612,7 @@ def merged_restart():
 
         def command(cmd, timeout=150, actions=actions, board=board, searches=searches):
             if cmd[:3] == ["gh", "pr", "list"]:
-                exact(cmd[cmd.index("--limit") + 1], str(lane.SETTLE_PR_LIMIT))
+                exact(cmd[cmd.index("--limit") + 1], "300")
                 searches.append(cmd[cmd.index("--search") + 1])
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:

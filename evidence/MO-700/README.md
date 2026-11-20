@@ -48,7 +48,7 @@ only affects whether a close can pass, which this ticket leaves unchanged.
 ## What this change does
 
 - `settle_merged_prs` reads merged PRs with
-  `--search merged:>=<date>` and `--limit 100`, and skips any older than
+  `--search merged:>=<date>` and `--limit 300`, and skips any older than
   `SETTLE_LOOKBACK_DAYS` (3). The window no longer depends on the first run
   or on PR numbers. A PR is attempted once, keyed by its ledger entry, so a
   failed close is not repeated.
