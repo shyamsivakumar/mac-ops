@@ -472,7 +472,7 @@ def journal_merged(repo, number, head, ledger, **fields):
     journal_event(event, repo, number, head, **fields)
 
 
-def classify_failure(report, size, prev_changed):
+def classify_failure(report, size, prev_lines):
     if size == "recut":
         return "size"
     if "fails the same on origin/main" in report.lower():
@@ -483,14 +483,14 @@ def classify_failure(report, size, prev_changed):
     blocking = [(path, line) for severity, path, line in findings if severity in ("critical", "major")]
     if not blocking:
         return "minor_only"
-    if all(int(line) in prev_changed.get(path, ()) for path, line in blocking):
+    if all(int(line) in prev_lines.get(path, ()) for path, line in blocking):
         return "moved_bar"
     return "logic"
 
 
-def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_changed=None):
+def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_lines=None):
     if verdict in ("PASS", "FAIL", "SPLIT"):
-        extra = {"class": classify_failure(report, size, prev_changed or {})} if verdict == "FAIL" else {}
+        extra = {"class": classify_failure(report, size, prev_lines or {})} if verdict == "FAIL" else {}
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
