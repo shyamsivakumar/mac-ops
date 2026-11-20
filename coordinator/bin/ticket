@@ -36,6 +36,8 @@ COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- coordinator-ticket (\{.*\}) -->")
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+MAX_CODE_FILES = 3
+MAX_CODE_LINES = 150
 # The key and the title are joined the way a ticket reads: `MO-1017 · name`.
 KEY_SEPARATOR = " · "
 # A page holds 100 issues. The cap keeps a broken page from looping forever.
@@ -537,15 +539,18 @@ def cmd_open(a):
     title = " ".join(a.title.split())
     if not title:
         die("refused: the title is empty", 2)
+    body = a.body or ""
+    if a.body_file:
+        with open(a.body_file) as handle:
+            body = handle.read()
+    refusal = check_body(cfg, body, [n.strip() for n in (a.label or "").split(",")])
+    if refusal:
+        die(f"refused: {refusal}", 2)
     allowed = {name for _, name in label_names(cfg)}
     labels = [name.strip() for name in (a.label or "").split(",") if name.strip()]
     unknown = [name for name in labels if name not in allowed]
     if unknown:
         die(f"refused: unknown labels: {', '.join(unknown)}", 2)
-    body = a.body or ""
-    if a.body_file:
-        with open(a.body_file) as handle:
-            body = handle.read()
     try:
         lock = with_open_lock(repo)
         state = read_last_key(repo, rcfg["key"])
@@ -739,6 +744,41 @@ def body_section(body, name):
                 end = j
                 break
         return "\n".join(lines[i + 1:end]).strip()
+    return None
+
+
+def check_body(cfg, body, labels):
+    for name, status in template_status(cfg, body).items():
+        if status != "ok":
+            return f"template section '{name}' is {status}"
+    lines = body.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == "In:"), None)
+    files = []
+    if start is not None:
+        for line in lines[start + 1:]:
+            if line.startswith(("Out:", "Size:", "#")):
+                break
+            for token in re.findall(r"^- `([^`\s]+)`", line):
+                if not ("/" in token or re.search(r"\.\w+$", token)):
+                    continue
+                if token.startswith(("evidence/", "docs/")) or token.endswith(".md"):
+                    continue
+                if token not in files:
+                    files.append(token)
+    cap = cfg.get("limits", {}).get("maxCodeFiles", MAX_CODE_FILES)
+    if len(files) > cap and "type:large" not in labels:
+        return f"Scope In names {len(files)} code files, the cap is {cap}"
+    size = next((line for line in lines if line.startswith("Size:")), None)
+    match = re.search(r"(\d[\d,]*) code lines", size or "")
+    if match:
+        value = match.group(1)
+        cap = cfg.get("limits", {}).get("maxCodeLines", MAX_CODE_LINES)
+        if int(value.replace(",", "")) > cap and "type:large" not in labels:
+            return f"Size names {value} code lines, the cap is {cap}"
+    proofs = re.findall(r"(?m)^\s*(?:\d+\.\s*)?Proof command:[ \t]*(.*)$", body)
+    if not proofs:
+        return ("a behavior ticket needs a `Proof command:` block "
+                "(docs and config tickets say `Proof command: none (prose)`)")
     return None
 
 
