@@ -10,6 +10,7 @@ else, so a test that needs a real call is caught instead of passing against
 a fake that always succeeds.
 """
 import atexit
+import json
 import os
 import shutil
 import stat
@@ -105,6 +106,13 @@ def _fake_gh(directory):
 # land in a file the launcher never reads.
 ROOT_VAR = "COORDINATOR_TEST_ISOLATION_DIR"
 
+# The live state the code reads and writes through an environment variable.
+# A run that does not name one gets a folder of its own in the run's root, so
+# it neither writes fixture events to the live journal nor reads the live
+# queue. A test that sets one on purpose keeps its value.
+QUEUE_CONFIG = {"cap": 8}
+STATE_DIRS = {"COORD_JOURNAL_DIR": "journal", "COORDQ_DIR": "queue"}
+
 
 def environment(base=None):
     """Return the environment a test run needs, with the fake `gh` first.
@@ -138,6 +146,13 @@ def environment(base=None):
     if "OVERNIGHT_GH" in env:
         env["OVERNIGHT_GH"] = str(bin_dir / "gh")
     env[ROOT_VAR] = str(root)
+    for variable, folder in STATE_DIRS.items():
+        if variable not in env:
+            (root / folder).mkdir(exist_ok=True)
+            env[variable] = str(root / folder)
+    queue = Path(env["COORDQ_DIR"])
+    if not (queue / "config.json").exists():
+        (queue / "config.json").write_text(json.dumps(QUEUE_CONFIG))
     env["COORDINATOR_GH_USAGE_LOG"] = str(root / "gh-usage.jsonl")
     env["COORDINATOR_GH_CACHE_DIR"] = str(root / "gh-cache")
     env["COORDINATOR_SKIP_LOG"] = str(root / "skips.log")
