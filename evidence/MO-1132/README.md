@@ -28,7 +28,8 @@ read per configured repo.
 
 Measured on this head with `live_lane_repositories` stubbed to an empty set, so
 only the board reads ran, counting the rows the pass appended to
-`~/Library/Logs/coordinator/gh-usage.jsonl`:
+`~/Library/Logs/coordinator/gh-usage.jsonl` under this script's own caller
+name (`evidence/MO-1132/count-pass.py`):
 
 ```
 new usage rows 24
@@ -37,16 +38,28 @@ paid 24 free 0
 distinct calls 24
 ```
 
-The pull read is a cacheable list route (`repos/o/r/pulls?state=open`), so a
-repeated pass inside the 120s list TTL is served from the gateway cache and
-costs nothing.
+The pull read is one page (`per_page=100`, no `--paginate`) and it is fresh, so
+a pull request opened a moment ago is never hidden by the gateway's 120s list
+cache. A repo with a full page of open pull requests cannot be read within the
+one-read allowance, so the pass stops and logs
+`refill stopped: open pull request list is longer than one page for <repo>`
+rather than spending a second call.
 
 ## The log line
 
 `refill: #<n> is stage:started with no live thread or open PR`, one line per
 ticket per pass, from `board_candidates`. `check_lane_selection` asserts the
 exact line for a stale ticket, asserts no line when an open pull request refs
-the ticket, and asserts no line when a live thread works the repo.
+the ticket, asserts no line for a draft pull request, and asserts no line when
+a live thread works the repo.
+
+## A waiting builder still holds its repo
+
+`coordq`'s cap list does not count a thread that waits for an answer, but the
+ticket CLI does (`coordinator/bin/ticket` `LIVE_STATUSES` includes `waiting`).
+The `stage:started` label used to cover that gap. `live_lane_repositories` now
+asks for `LANE_STATUSES` (`LIVE_STATUSES` plus `waiting`), so a waiting builder
+still makes its repo busy and the cap is unchanged.
 
 The live board had no open `stage:started` ticket when this ran
 (`gh search issues --owner shyamsivakumar --state open --label stage:started`
@@ -55,8 +68,10 @@ returned `[]`), so the line is proven by the check rather than by a live pass.
 ## Stop condition
 
 A pull request list that cannot be read raises `RuntimeError` from
-`open_pr_refs`, which `refill` already catches and logs as
-`refill stopped: open pull request snapshot failed for <repo>`. The pass stops
-with no partial busy set, and `gh_gateway.run(..., limit=FLOOR)` raises
+`open_pr_refs`: a failed read, a body that is not a list, a page that is not a
+list of pull requests, or a list longer than the one page the pass may read.
+`refill` already catches that and logs
+`refill stopped: open pull request snapshot failed for <repo>`, so the pass
+stops with no partial busy set. `gh_gateway.run(..., limit=FLOOR)` raises
 `ApiBudgetExhausted` (a `RuntimeError`) below the existing budget floor, so the
 same path covers the floor.
