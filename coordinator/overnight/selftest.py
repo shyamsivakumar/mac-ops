@@ -2552,8 +2552,14 @@ def build_here():
                      patch.object(lane, "send", send):
                     exact(lane.act_on_pr(repo, 20, {}), f"#20: {repo} is built in the Herdr session, board card raised")
             exact(sent, [])
-            items = json.loads(decisions.read_text())["items"]
-            exact([item["id"] for item in items], [f"herdr-build-MO-20-{head[:8]}"])
+            card_id = "herdr-build-MO-20"
+            owner_board = Path(lane.alarms.board_for(decisions, card_id))
+            exact(bool(lane.alarms.OWNER_IDS.fullmatch(card_id)), True)
+            exact(owner_board, decisions.with_name("mac-ops-owner.json"))
+            exact(json.loads(decisions.read_text())["items"], [])
+            items = json.loads(owner_board.read_text())["items"]
+            exact([item["id"] for item in items], [card_id])
+            exact(head[:8] in items[0]["title"], True)
 
 
 def root_workspace():
