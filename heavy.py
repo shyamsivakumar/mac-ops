@@ -3305,6 +3305,7 @@ def watchdog_loop(
 ) -> int:
     """Watch a job's registry record and heartbeat, terminating its workload when they fail."""
     cached = None
+    last_record = None
     while True:
         try:
             record = _record(registry, job_id)
@@ -3313,6 +3314,17 @@ def watchdog_loop(
             if cached is None:
                 return 1
             if not _job_directory_absent(registry, job_id):
+                try:
+                    if _limit_action(last_record, clock_ns(), boot_reader) is not None:
+                        if terminate(
+                            cached["workload"],
+                            reason="watchdog-registry-failure-limit",
+                            table_reader=table_reader,
+                            boot_reader=boot_reader,
+                        ):
+                            return 1
+                except Exception:
+                    pass
                 sleep(WATCHDOG_INTERVAL)
                 continue
             try:
@@ -3327,6 +3339,7 @@ def watchdog_loop(
                 pass
             sleep(WATCHDOG_INTERVAL)
             continue
+        last_record = record
         if cached is None:
             cached = {
                 "task_key": record.get("task_key"),
