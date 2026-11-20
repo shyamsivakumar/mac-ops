@@ -32,6 +32,7 @@ LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 # cap keeps its own list, so this does not change how many slots are used.
 LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
+PROVIDER_BLOCK_SECONDS = 3600
 JOURNAL_TITLE_LIMIT = 120
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
@@ -670,6 +671,14 @@ def undispatchable_tool(item):
     return None
 
 
+pending_blocks = []
+
+
+def flush_provider_blocks():
+    while pending_blocks:
+        block_quota_provider(*pending_blocks.pop(0))
+
+
 def drain():
     statuses = {}
     while True:
@@ -827,6 +836,7 @@ def drain():
             item["last_error"] = out[:200]
             if request_id and request_id.startswith("gate:"):
                 key = ":".join(request_id.split(":")[:3])
+                pending_blocks.append((item["args"]["modelSelection"], {"error": out}, key))
                 model = failed_gate_reviewer(queue, key, item["args"]["modelSelection"], out)
                 if model:
                     item["args"]["modelSelection"] = model
@@ -978,6 +988,7 @@ def cmd_start(a):
             print(f"queued #{item['id']}")
         else:
             print(f"started #{item['id']}")
+    flush_provider_blocks()
 
 
 def last_refill():
@@ -1412,6 +1423,7 @@ def cmd_dispatch(a):
             log("lock held by another run, skipping")
             return
         drain()
+    flush_provider_blocks()
     safe_refill(a)
 
 
@@ -1643,9 +1655,26 @@ def quota_failure(value):
         text = error
     else:
         return False
-    return any(word in text.lower() for word in (
+    return next((word for word in (
         "spend limit", "usage limit", "quota exhausted", "quota exceeded",
-        "insufficient_quota", "exceeded your current quota"))
+        "insufficient_quota", "exceeded your current quota",
+        "no credits remaining", "credit balance") if word in text.lower()), False)
+
+
+def block_quota_provider(selection, failure, key):
+    word = quota_failure(failure)
+    if not word:
+        return
+    model_list.block_provider(selection, time.time() + PROVIDER_BLOCK_SECONDS)
+    provider = model_list.identity(selection)
+    log(f"blocked provider {provider} for 1h: {word}")
+    journal.emit("provider_blocked", "coordq", provider=provider, reason=word,
+                 seconds=PROVIDER_BLOCK_SECONDS, **journal.parse_request_id(key))
+
+
+def thread_selection(data):
+    thread = data.get("thread") or {}
+    return {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
 
 
 def fallback_reviewer(queue, key, current, models=()):
@@ -1999,6 +2028,8 @@ def cmd_gatekeep(a):
                 continue
             observed = load()
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) else None
+            if dead is not None and not a.dry_run:
+                block_quota_provider(thread_selection(dead[1]), dead[1], key)
             with model_list.blocked_lock(), Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
@@ -2032,9 +2063,7 @@ def cmd_gatekeep(a):
                             heads[key] = {**state, "givenUp": True}
                             save(queue)
                         continue
-                    current = {"instanceId": thread.get("providerInstanceId"),
-                               "model": thread.get("model")}
-                    model = failed_gate_reviewer(queue, key, current, data, event.get("builderModels", []))
+                    model = failed_gate_reviewer(queue, key, thread_selection(data), data, event.get("builderModels", []))
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}

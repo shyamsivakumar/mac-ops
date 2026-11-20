@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 from unittest.mock import patch
 
@@ -3836,6 +3837,103 @@ def router_blocked():
     exact(resolved["modelSelection"], {"instanceId": "cursor", "model": "default"})
 
 
+def credit_block():
+    """A gate that fails on no credits blocks its provider for every caller.
+
+    The dispatch launch failure and gatekeep's dead-gate retry both read the
+    failure. Explicit exhaustion text blocks the provider for an hour and the
+    retry goes to the next reviewer. A rate limit or a transport error blocks
+    nothing.
+    """
+    import lane_driver as lane
+    coordq = load_coordq()
+    model_list = lane.model_list
+    review = model_list.entries("review")
+    first, second = review[0]["selection"], review[1]["selection"]
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    key = f"gate:{repo}#20:{head}"
+    outage = "You have no credits remaining"
+
+    def blocked(scratch):
+        file = Path(scratch) / model_list.BLOCKED_FILE
+        return model_list.read_blocked_file(str(file))["blocked"] if file.exists() else {}
+
+    def gatekeep(message):
+        run = {"runId": "r1", "status": "failed", "error": {"message": message}}
+        data = {"thread": {"status": "failed", "latestRunId": "r1", "providerInstanceId": first["instanceId"],
+                           "model": first["model"]}, "recentRuns": [run], "items": []}
+        args = {"title": "gate", "modelSelection": first}
+        event = {"kind": "gate", "pr": f"{repo}#20", "head": head, "key": key, "args": args, "builderModels": []}
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq, "gate_candidates", side_effect=lambda *a, **k: iter([event])), \
+             patch.object(coordq, "call", return_value=(0, json.dumps(data))), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [], "gatedHeads": {key: 1}}))
+            Path(scratch, "dispatch-receipts.json").write_text(json.dumps({key: "gate"}))
+            Path(scratch, "gatekeep-config.json").write_text(json.dumps({"repos": {}}))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(Path(scratch, "gatekeep-config.json")), dry_run=False))
+            queue = json.loads(Path(scratch, "queue.json").read_text())
+            return queue["items"], blocked(scratch), Path(scratch, "dispatch.log").read_text() if Path(scratch, "dispatch.log").exists() else ""
+
+    items, stored, log = gatekeep(outage)
+    identity = model_list.identity(first)
+    exact(list(stored), [identity])
+    exact(0 < stored[identity]["expires_at"] - time.time() <= 3600, True)
+    exact(f"blocked provider {identity} for 1h: no credits remaining" in log, True)
+    exact([item["args"]["modelSelection"] for item in items], [second])
+    for message in ("429 rate_limit_exceeded", "connect ECONNRESET", "Too many requests"):
+        items, stored, _ = gatekeep(message)
+        exact(stored, {})
+
+    def dispatch(message):
+        item = {"id": 1, "tool": "t3_thread_launch", "title": "gate", "priority": 5000, "attempts": 0,
+                "args": {"clientRequestId": key, "taskType": "review", "modelSelection": first}}
+
+        queue_held = threading.Event()
+        provider_held = threading.Event()
+        reached_queue = []
+
+        def call(tool, args, rules=None):
+            if tool == "t3_thread_list":
+                return 0, json.dumps({"total": 0, "threads": []})
+            queue_held.set()
+            return 1, message if args["modelSelection"] == first else "connect ECONNRESET"
+
+        def gatekeeper():
+            with model_list.blocked_lock():
+                provider_held.set()
+                queue_held.wait(10)
+                with coordq.Lock(True):
+                    reached_queue.append(True)
+
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "call", side_effect=call), \
+             patch.object(coordq, "read_rules", return_value=""), \
+             patch.object(coordq, "safe_refill"):
+            Path(scratch, "config.json").write_text(json.dumps({"cap": 3}))
+            Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [item], "reserved": {},
+                                                               "reservedThreads": {}}))
+            gate = threading.Thread(target=gatekeeper, daemon=True)
+            gate.start()
+            provider_held.wait(10)
+            run = threading.Thread(target=coordq.cmd_dispatch, args=(argparse.Namespace(dry_run=False),), daemon=True)
+            run.start()
+            run.join(10)
+            gate.join(10)
+            exact((run.is_alive(), gate.is_alive(), reached_queue), (False, False, [True]))
+            return blocked(scratch)
+
+    exact(list(dispatch(outage)), [identity])
+    exact(dispatch("429 rate_limit_exceeded"), {})
+
+
 def key_mint():
     """Back-to-back opens against a list that never catches up.
 
@@ -3990,7 +4088,7 @@ def close_evidence():
     exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "close-evidence": close_evidence}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "close-evidence": close_evidence}
 
 
 def main():
