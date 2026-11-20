@@ -99,7 +99,7 @@
     "hook": {
       "source": "runtime/agents/deny-merge-guard.py",
       "target": "~/.claude/hooks/deny-merge-guard.py",
-      "matcher": "Bash"
+      "matcher": "Bash|Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob"
     }
   },
   "scope_files": {
