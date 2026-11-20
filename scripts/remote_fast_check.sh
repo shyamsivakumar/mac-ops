@@ -7,10 +7,13 @@ if [ "${1:-}" = --remote ]; then
     remote=1
     shift
 fi
-[ $# -eq 3 ] || { echo "usage: $0 [--remote] <branch> <sha> <proof-path>" >&2; exit 2; }
+[ $# -eq 3 ] || { echo "usage: $0 [--remote] <branch> <sha> <proof-path> (local mode checks the current tree and ignores <sha>)" >&2; exit 2; }
 branch=$1
 sha=$2
 proof=$3
+printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || { echo "remote_fast_check: sha must be 40 lowercase hex characters" >&2; exit 2; }
+printf '%s' "$branch" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || { echo "remote_fast_check: invalid branch name" >&2; exit 2; }
+printf '%s' "$proof" | grep -Eq '^evidence/[A-Za-z0-9._/-]+\.md$' || { echo "remote_fast_check: proof must be evidence/<path>.md" >&2; exit 2; }
 
 if [ "$remote" = 0 ]; then
     waiting=$(heavy status | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["queue"]))')
@@ -32,6 +35,7 @@ exit \$missing
 EOS
 
 captured=$(mktemp)
+trap 'rm -f "$captured"' EXIT
 status=0
 ssh m1 'zsh -l -s' >"$captured" <<EOS || status=$?
 repo=\$HOME/Code/mac-ops
@@ -52,5 +56,4 @@ grep -qxF "Checked commit: \`$sha\`" "$captured" && grep -q '^Host: ' "$captured
 }
 mkdir -p "$(dirname "$proof")"
 cp "$captured" "$proof"
-rm -f "$captured"
 exit "$status"
