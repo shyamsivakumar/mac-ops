@@ -34,6 +34,25 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("lane_driver.py", tokens)
         self.assertIn("herdr/*", tokens)
 
+    def test_a_dockerfile_is_a_file_the_ticket_can_name(self):
+        """A Dockerfile carries its variant in the name, not an extension.
+
+        A ticket that names `Dockerfile.dashboard` permits a change to it, and
+        the name alone bounds the scope, exactly as a `.cjs` name does.
+        """
+        check = close_check()
+        body = "In: the dashboard image copies the new module. Files: Dockerfile.dashboard"
+        tokens = check.scope_tokens(body)
+        self.assertIn("Dockerfile.dashboard", tokens)
+        ok, _ = check.in_scope("Dockerfile.dashboard", tokens)
+        self.assertTrue(ok)
+        self.assertTrue(check.names_a_scope(check.scope_tokens("In: Dockerfile.dashboard")))
+
+    def test_a_dockerfile_the_ticket_never_names_is_out_of_scope(self):
+        check = close_check()
+        ok, _ = check.in_scope("Dockerfile.dashboard", {"Dockerfile"})
+        self.assertFalse(ok)
+
     def test_a_named_file_is_in_scope(self):
         check = close_check()
         ok, _ = check.in_scope("coordinator/overnight/lane_driver.py", {"lane_driver.py"})
