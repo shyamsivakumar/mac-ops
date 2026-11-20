@@ -98,6 +98,14 @@ def _fake_gh(directory):
     return path
 
 
+# The run's temp root. A launcher that names one owns it, and every entry
+# point that installs the isolation again reuses it, so the fake `gh`, the
+# logs and the refusal file are one set for the whole run. Without it each
+# install would make its own root, and a refusal written by a suite would
+# land in a file the launcher never reads.
+ROOT_VAR = "COORDINATOR_TEST_ISOLATION_DIR"
+
+
 def environment(base=None):
     """Return the environment a test run needs, with the fake `gh` first.
 
@@ -105,12 +113,22 @@ def environment(base=None):
     redirected to it, and the gh usage log, the gh cache, the skip log and
     the refusal log all point into one temp directory, so a run leaves the
     live files untouched. The caller name marks every row the run writes.
+
+    A launcher that sets `COORDINATOR_TEST_ISOLATION_DIR` owns that
+    directory and reads the refusal file in it. An install that finds the
+    variable reuses the directory and leaves the cleanup to the owner, so
+    the entry points and the launcher share one set of files.
     """
     env = dict(os.environ if base is None else base)
-    root = Path(tempfile.mkdtemp(prefix="mac-ops-test-"))
-    atexit.register(shutil.rmtree, str(root), True)
+    named = env.get(ROOT_VAR)
+    if named:
+        root = Path(named)
+        root.mkdir(parents=True, exist_ok=True)
+    else:
+        root = Path(tempfile.mkdtemp(prefix="mac-ops-test-"))
+        atexit.register(shutil.rmtree, str(root), True)
     bin_dir = root / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     _fake_gh(bin_dir)
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     # The overnight runner takes an absolute path from this variable, which
@@ -119,6 +137,7 @@ def environment(base=None):
     # PATH above, which is the fake.
     if "OVERNIGHT_GH" in env:
         env["OVERNIGHT_GH"] = str(bin_dir / "gh")
+    env[ROOT_VAR] = str(root)
     env["COORDINATOR_GH_USAGE_LOG"] = str(root / "gh-usage.jsonl")
     env["COORDINATOR_GH_CACHE_DIR"] = str(root / "gh-cache")
     env["COORDINATOR_SKIP_LOG"] = str(root / "skips.log")
