@@ -1496,6 +1496,7 @@ def cmd_status(a):
 
 
 OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
+SINGLE_OBJECT = re.compile(r"repos/[^/]+/[^/]+/(?:(?:issues|pulls)/\d+|git/ref/.+)$")
 
 
 class GhReadError(RuntimeError):
@@ -1508,8 +1509,11 @@ def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
     `optional` is what the floor applies to: the polling reads that run on
-    a timer, and not an explicit `gate` an operator asked for."""
-    run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
+    a timer, and not an explicit `gate` an operator asked for. A single
+    object is one unpaginated GET, so it takes the gateway's conditional
+    path and an unchanged object costs a free 304."""
+    command = ["gh", "api", endpoint] if SINGLE_OBJECT.match(endpoint) else ["gh", "api", "--paginate", "--slurp", endpoint]
+    run = gh_gateway.run(command,
                          timeout=40, limit=FLOOR if optional else None,
                          fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
     if run.returncode:
@@ -1865,11 +1869,14 @@ def gate_candidates(config, rounds=None):
     run (`cmd_gatekeep`). A caller that passes none reads no ledger, so a
     test of the gate path never touches the live one.
     """
-    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
-                               timeout=40, limit=FLOOR)
-    if login_run.returncode:
-        raise RuntimeError("cannot identify authenticated GitHub user")
-    login = login_run.stdout.strip()
+    def read_login():
+        login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
+                                   timeout=40, limit=FLOOR)
+        if login_run.returncode:
+            raise RuntimeError("cannot identify authenticated GitHub user")
+        return login_run.stdout.strip()
+
+    login = gh_gateway.cached_login(DIR, read_login)
     receipts = load_receipts()
     queue = load()
     rounds = rounds or {}
@@ -2341,10 +2348,13 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
-    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
-    if login_run.returncode:
-        die("refused: the authenticated GitHub user is unknown")
-    login = login_run.stdout.strip()
+    def read_login():
+        login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
+        if login_run.returncode:
+            die("refused: the authenticated GitHub user is unknown")
+        return login_run.stdout.strip()
+
+    login = gh_gateway.cached_login(DIR, read_login)
     # An explicit gate is a required read: the floor applies to polling.
     found = gate_request(repo, pr, settings, config, load_receipts(), login,
                          optional=False, fresh=True)
