@@ -7,7 +7,9 @@ fatal: path 'scripts/remote_fast_check.sh' exists on disk, but not in 'origin/ma
 no Host line in proof writer
 ```
 
-## After: `scripts/remote_fast_check.sh --remote mo785-remote-fast-check e14c81af0917c1406b28224e07c0c60829dbe6ab evidence/MO-785/check-proof.md`
+## After (final code commit; the first run on e14c81af passed the same way, before the argument checks were added)
+
+## Run: `scripts/remote_fast_check.sh --remote mo785-remote-fast-check 83cbcf468d56f6b8240438bf9578b89fbb79fd6d evidence/MO-785/check-proof.md`
 
 Remote commands run through a login shell (`ssh m1 zsh -l -s`), so python3 is /opt/homebrew/bin/python3 3.14.7, not the non-login /usr/bin/python3 3.9.6.
 
@@ -89,3 +91,16 @@ scripts/remote_fast_check.sh --remote mo785-remote-fast-check    0.04s user 0.04
 ```
 
 Local host: Shyams-M4.local. Proof host: Shyams-MacBook-Pro.local (M1). After the run `git worktree list` on the M1 shows only ~/Code/mac-ops on main, and no /tmp/fastcheck-* directory is left.
+
+## Rejected arguments (no ssh call)
+
+A stub `ssh` that prints SSH-CALLED and exits 99 was first on PATH. Neither run reached it (0 SSH-CALLED lines).
+
+```
+== branch: x;id
+remote_fast_check: invalid branch name
+exit=2
+== branch: -evil
+remote_fast_check: invalid branch name
+exit=2
+```

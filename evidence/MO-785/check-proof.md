@@ -2,7 +2,7 @@
 
 Command: `python3 scripts/mac_ops_fast_check.py`
 Host: Shyams-MacBook-Pro.local
-Checked commit: `e14c81af0917c1406b28224e07c0c60829dbe6ab`
+Checked commit: `83cbcf468d56f6b8240438bf9578b89fbb79fd6d`
 Working tree clean when the checks ran: yes
 Run result: passed
 
@@ -15,7 +15,7 @@ Run result: passed
 | shell syntax: scripts/remote_fast_check.sh | `/bin/sh -n scripts/remote_fast_check.sh` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/bin/scorecard coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/4d/l9996sv53p7dl4l5x5y0skhc0000gn/T/heavy-queue-tlc-2k8ztsjt -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/4d/l9996sv53p7dl4l5x5y0skhc0000gn/T/heavy-queue-tlc-2k8ztsjt/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/4d/l9996sv53p7dl4l5x5y0skhc0000gn/T/heavy-queue-tlc-poc6zv2j -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/4d/l9996sv53p7dl4l5x5y0skhc0000gn/T/heavy-queue-tlc-poc6zv2j/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
