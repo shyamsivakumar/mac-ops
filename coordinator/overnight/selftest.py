@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 from unittest.mock import patch
 
@@ -3799,20 +3800,40 @@ def credit_block():
         item = {"id": 1, "tool": "t3_thread_launch", "title": "gate", "priority": 5000, "attempts": 0,
                 "args": {"clientRequestId": key, "taskType": "review", "modelSelection": first}}
 
+        queue_held = threading.Event()
+        provider_held = threading.Event()
+        reached_queue = []
+
         def call(tool, args, rules=None):
             if tool == "t3_thread_list":
                 return 0, json.dumps({"total": 0, "threads": []})
+            queue_held.set()
             return 1, message if args["modelSelection"] == first else "connect ECONNRESET"
+
+        def gatekeeper():
+            with model_list.blocked_lock():
+                provider_held.set()
+                queue_held.wait(10)
+                with coordq.Lock(True):
+                    reached_queue.append(True)
 
         with tempfile.TemporaryDirectory() as scratch, \
              patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
              patch.object(coordq, "DIR", scratch), \
              patch.object(coordq, "call", side_effect=call), \
-             patch.object(coordq, "read_rules", return_value=""):
+             patch.object(coordq, "read_rules", return_value=""), \
+             patch.object(coordq, "safe_refill"):
             Path(scratch, "config.json").write_text(json.dumps({"cap": 3}))
             Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [item], "reserved": {},
                                                                "reservedThreads": {}}))
-            coordq.drain()
+            gate = threading.Thread(target=gatekeeper, daemon=True)
+            gate.start()
+            provider_held.wait(10)
+            run = threading.Thread(target=coordq.cmd_dispatch, args=(argparse.Namespace(dry_run=False),), daemon=True)
+            run.start()
+            run.join(10)
+            gate.join(10)
+            exact((run.is_alive(), gate.is_alive(), reached_queue), (False, False, [True]))
             return blocked(scratch)
 
     exact(list(dispatch(outage)), [identity])

@@ -665,6 +665,14 @@ def undispatchable_tool(item):
     return None
 
 
+pending_blocks = []
+
+
+def flush_provider_blocks():
+    while pending_blocks:
+        block_quota_provider(*pending_blocks.pop(0))
+
+
 def drain():
     statuses = {}
     while True:
@@ -822,7 +830,7 @@ def drain():
             item["last_error"] = out[:200]
             if request_id and request_id.startswith("gate:"):
                 key = ":".join(request_id.split(":")[:3])
-                block_quota_provider(item["args"]["modelSelection"], {"error": out}, key)
+                pending_blocks.append((item["args"]["modelSelection"], {"error": out}, key))
                 model = failed_gate_reviewer(queue, key, item["args"]["modelSelection"], out)
                 if model:
                     item["args"]["modelSelection"] = model
@@ -973,6 +981,7 @@ def cmd_start(a):
             print(f"queued #{item['id']}")
         else:
             print(f"started #{item['id']}")
+    flush_provider_blocks()
 
 
 def last_refill():
@@ -1407,6 +1416,7 @@ def cmd_dispatch(a):
             log("lock held by another run, skipping")
             return
         drain()
+    flush_provider_blocks()
     safe_refill(a)
 
 
