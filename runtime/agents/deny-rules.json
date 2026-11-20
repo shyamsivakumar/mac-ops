@@ -1,7 +1,7 @@
 {
   "owner": "mac-ops/deny-rules.v1",
   "issue": 530,
-  "tighten_only": "This list only denies. It never allows anything, and no entry widens a permission.",
+  "tighten_only": "Families in ask mode prompt the owner in an interactive thread and are denied everywhere else. Families in deny mode are denied even with approval. No entry widens a permission.",
   "pi_instances": [
     "~/.pi/agent",
     "~/.pi/agent-minimax",
@@ -63,8 +63,37 @@
     "--force-with-lease",
     "--force-if-includes"
   ],
-  "ascend_bash_reason": "reads and edits under ~/Code/slash-eureka (Ascend) are denied",
-  "secret_bash_reason": "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) are denied",
+  "families": {
+    "merge": {
+      "mode": "ask"
+    },
+    "push_protected": {
+      "mode": "ask"
+    },
+    "secret_files": {
+      "mode": "ask"
+    },
+    "cloud_secret": {
+      "mode": "ask"
+    },
+    "ascend": {
+      "mode": "ask"
+    },
+    "force_push": {
+      "mode": "deny"
+    },
+    "remote_delete": {
+      "mode": "deny"
+    },
+    "protected_removal": {
+      "mode": "deny"
+    },
+    "push_destination": {
+      "mode": "deny"
+    }
+  },
+  "ascend_bash_reason": "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval",
+  "secret_bash_reason": "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval",
   "claude_code": {
     "settings": "~/.claude/settings.json",
     "hook": {
@@ -87,10 +116,19 @@
     "A machine guard enforces this list before tools run; prose cannot override it.",
     "The list lives in `mac-ops runtime/agents/deny-rules.json` and `scripts/install_deny_rules.py` installs it.",
     "",
-    "- No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).",
-    "- No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.",
-    "- No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.",
-    "- No `gh pr merge` by an agent. Merges belong to the lane and the merge pass.",
+    "Asks the owner in an interactive thread (a headless run is denied):",
+    "",
+    "- Reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN) from a session that did not start there.",
+    "- Commands on secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.",
+    "- A push to `main` or `master`, and `gh pr merge`.",
+    "- Printing secret values with `gcloud secrets versions access`, `heroku config` or `config:get`, or a gcloud `--format` that shows one.",
+    "",
+    "Denied even with approval:",
+    "",
+    "- Force-push in any form.",
+    "- Remote and cloud deletes: `gcloud ... delete`, `bq rm`, `heroku ... destroy`, `gh repo delete`, `gh release delete`, `git push --delete`.",
+    "- Removing secret files or anything under `~/Code/slash-eureka`.",
     ""
-  ]
+  ],
+  "audit_log": "~/.local/state/mac-ops/deny-audit.jsonl"
 }

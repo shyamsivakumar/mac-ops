@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import re
@@ -72,10 +73,13 @@ class InstallTest(FakeHome):
         settings = load(self.settings_path)
         self.assertEqual(settings["env"], {"A": "1"})
         self.assertEqual(settings["permissions"]["allow"], ["WebSearch"])
-        self.assertEqual(
-            settings["permissions"]["deny"],
-            list(dict.fromkeys(install_deny_rules.claude_deny(SPEC, self.home))),
-        )
+        rules = install_deny_rules.claude_rules(SPEC, self.home)
+        self.assertEqual(settings["permissions"]["deny"], rules["deny"])
+        self.assertEqual(settings["permissions"]["ask"], rules["ask"])
+        self.assertIn("Read(~/Code/slash-eureka/**)", rules["ask"])
+        self.assertIn("Edit(**/.env)", rules["deny"])
+        self.assertIn("Bash(git push origin main:*)", rules["ask"])
+        self.assertFalse(set(rules["deny"]) & set(rules["ask"]))
         self.assertTrue(self.installer.hook_target(SPEC).is_file())
         blocks = settings["hooks"]["PreToolUse"]
         self.assertEqual(len(blocks), 1)
@@ -101,10 +105,12 @@ class InstallTest(FakeHome):
         status = self.installer.status(SPEC)
         self.assertTrue(status["installed"])
         self.assertEqual(status["claude_deny_missing"], [])
+        self.assertEqual(status["claude_ask_missing"], [])
+        self.assertEqual(status["claude_ask_still_denied"], [])
         self.assertTrue(all(v == "installed" for v in status["pi_guards"].values()))
         self.installer.uninstall(SPEC)
         settings = load(self.settings_path)
-        self.assertEqual(settings["permissions"], {"allow": ["WebSearch"], "deny": []})
+        self.assertEqual(settings["permissions"], {"allow": ["WebSearch"], "deny": [], "ask": []})
         self.assertEqual(settings["hooks"]["PreToolUse"], [])
         self.assertFalse(self.installer.hook_target(SPEC).exists())
         self.assertFalse(any(g.exists() for g in self.installer.guard_targets(SPEC)))
@@ -115,16 +121,17 @@ class InstallTest(FakeHome):
         self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
 
     def test_uninstall_restores_what_install_replaced(self):
-        kept = install_deny_rules.claude_deny(SPEC, self.home)[0]
+        rules = install_deny_rules.claude_rules(SPEC, self.home)
+        kept, moved = rules["deny"][0], rules["ask"][0]
         settings = load(self.settings_path)
-        settings["permissions"]["deny"] = [kept]
+        settings["permissions"]["deny"] = [kept, moved]
         self.settings_path.write_text(json.dumps(settings))
         hook = self.installer.hook_target(SPEC)
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_text("# user hook\n")
         self.installer.install(SPEC)
         self.installer.uninstall(SPEC)
-        self.assertEqual(load(self.settings_path)["permissions"]["deny"], [kept])
+        self.assertEqual(load(self.settings_path)["permissions"]["deny"], [kept, moved])
         self.assertEqual(hook.read_text(), "# user hook\n")
 
     def test_an_unmanaged_guard_is_refused_and_nothing_changes(self):
@@ -213,19 +220,27 @@ class InstallTest(FakeHome):
 
 
 class ListTest(unittest.TestCase):
-    def test_claude_list_only_denies_and_covers_token_files(self):
-        entries = install_deny_rules.claude_deny(SPEC, Path("/Users/t"))
+    def test_claude_list_splits_ask_and_deny_and_covers_token_files(self):
+        rules = install_deny_rules.claude_rules(SPEC, Path("/Users/t"))
+        entries = rules["deny"] + rules["ask"]
         self.assertTrue(all(e.startswith(("Read(", "Edit(", "Bash(")) for e in entries))
-        for tool in ("Read", "Edit"):
-            self.assertIn(f"{tool}(**/*token*.json)", entries)
-            self.assertIn(f"{tool}(//Users/t/.ssh/**)", entries)
-        self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", entries)
-        self.assertIn("Bash(git push --force-if-includes:*)", entries)
+        self.assertIn("Read(**/*token*.json)", rules["ask"])
+        self.assertIn("Edit(**/*token*.json)", rules["deny"])
+        self.assertIn("Read(//Users/t/.ssh/**)", rules["ask"])
+        self.assertIn("Edit(//Users/t/.ssh/**)", rules["deny"])
+        self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", rules["ask"])
+        self.assertIn("Bash(git push --force-if-includes:*)", rules["deny"])
 
     def test_hook_constants_match_the_list(self):
         self.assertEqual(hook_module.PROTECTED, set(SPEC["push_protected"]))
         for flag in SPEC["push_force_flags"]:
-            self.assertTrue(hook_module.push_reason(["origin", "t3/x", flag]), flag)
+            families = [f for f, _ in hook_module.push_findings(["origin", "t3/x", flag])]
+            self.assertIn("force_push", families, flag)
+        self.assertEqual(hook_module.SECRET_FILE_RE, SPEC["secret_file_re"])
+        self.assertEqual(
+            hook_module.FAMILY_MODES,
+            {name: family["mode"] for name, family in SPEC["families"].items()},
+        )
 
     def test_secret_regexes_classify_paths_and_commands(self):
         secret = re.compile(SPEC["secret_file_re"])
@@ -270,6 +285,26 @@ class ListTest(unittest.TestCase):
             self.assertFalse(combined.search(command), command)
 
 
+HARD_PUSHES = [
+    "git push --force origin t3/x",
+    "git push -f upstream t3/x",
+    "git push --force-with-lease other t3/x",
+    "git push --force-with-lease=t3/x other t3/x",
+    "git push --force-if-includes origin t3/x",
+    "git push origin t3/x --force",
+    "git push origin +t3/x",
+    "git push -fu origin t3/x",
+    "git push origin :main",
+    "git push origin --delete main",
+]
+ASK_PUSHES = [
+    "git push origin main",
+    "git push -u origin main",
+    "git push origin HEAD:main",
+    "git push origin feature:master",
+    "heavy git push origin main",
+    "bash -c 'git push origin main'",
+]
 PR_TEXT = "Rule: no git push origin main, no git push --force."
 DENIED_PUSHES = [
     "git push",
@@ -367,8 +402,17 @@ NOT_MERGES = [
 
 
 class HookTest(unittest.TestCase):
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp(prefix="deny-hook-test-", dir=TMP))
+        self.extra_env = {}
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
     def run_hook(self, payload, role=None):
-        env = {k: v for k, v in os.environ.items() if k != "MAC_OPS_ROLE"}
+        env = {k: v for k, v in os.environ.items() if k not in ("MAC_OPS_ROLE", "CLAUDE_PROJECT_DIR")}
+        env["HOME"] = str(self.home)
+        env.update(self.extra_env)
         if role is not None:
             env["MAC_OPS_ROLE"] = role
         proc = subprocess.run(
@@ -387,17 +431,21 @@ class HookTest(unittest.TestCase):
             else None
         )
 
-    def decided(self, command, role=None):
+    def decided(self, command, role=None, **extra):
         return self.run_hook(
-            {"tool_name": "Bash", "tool_input": {"command": command}}, role
+            {"tool_name": "Bash", "tool_input": {"command": command}, **extra}, role
         )
 
     def test_pushes_are_decided_from_the_command_destinations(self):
         for command in DENIED_PUSHES:
             decision = self.decided(command)
-            self.assertEqual(
-                (decision or {}).get("permissionDecision"), "deny", command
+            self.assertIn(
+                (decision or {}).get("permissionDecision"), ("ask", "deny"), command
             )
+        for command in HARD_PUSHES:
+            self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
+        for command in ASK_PUSHES:
+            self.assertEqual(self.decided(command)["permissionDecision"], "ask", command)
         for command in ALLOWED_COMMANDS:
             self.assertIsNone(self.decided(command), command)
 
@@ -414,26 +462,89 @@ class HookTest(unittest.TestCase):
                 command,
             )
 
-    def test_every_merge_command_is_denied_for_every_role(self):
+    def test_every_merge_command_asks_for_every_role(self):
         for role in (None, "gate", "builder"):
             for command in MERGES:
                 decision = self.decided(command, role)
-                self.assertEqual((decision or {}).get("permissionDecision"), "deny", command)
+                self.assertEqual((decision or {}).get("permissionDecision"), "ask", command)
             for command in NOT_MERGES:
                 self.assertIsNone(self.decided(command, role), command)
 
-    def test_a_command_in_or_moving_into_the_ascend_tree_is_denied(self):
-        ascend = Path.home() / "Code/slash-eureka/x"
+    def test_ask_families_become_deny_without_a_known_prompt_mode(self):
+        for mode in ("bypassPermissions", "dontAsk", "somethingNew"):
+            decision = self.decided("gh pr merge 1", permission_mode=mode)
+            self.assertEqual(decision["permissionDecision"], "deny", mode)
+        for mode in ("default", "auto", "acceptEdits", "plan"):
+            decision = self.decided("gh pr merge 1", permission_mode=mode)
+            self.assertEqual(decision["permissionDecision"], "ask", mode)
+            self.assertIn("command: gh pr merge 1", decision["permissionDecisionReason"])
+
+    def test_hard_denies_win_and_cloud_secret_reads_ask(self):
+        hard = [
+            "gcloud compute instances delete vm1", "bq rm -t d.t", "heroku apps:destroy -a x",
+            "gh repo delete a/b", "gh release delete v1", "git push --delete origin t3/x",
+            "git push -d origin t3/x", "git push origin :t3/x", "git push origin main --force",
+            "gh api -X DELETE repos/a/b", "gh api --method=DELETE repos/a/b",
+            "curl -X DELETE https://x.test/a", "curl --request DELETE https://x.test/a",
+            "http DELETE https://x.test/a", "rm app/.env", "unlink ~/.ssh/id_rsa",
+            "find ~/Code/slash-eureka -delete", "rmdir ~/Code/slash-eureka/x",
+        ]
+        for command in hard:
+            self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
+        for command in (
+            "gcloud secrets versions access latest --secret=x",
+            "gcloud run services describe s --format='value(payload)'",
+            "heroku config -a x", "heroku config:get KEY -a x",
+        ):
+            self.assertEqual(self.decided(command)["permissionDecision"], "ask", command)
+        for command in (
+            "gcloud run deploy s", "bq query 'select 1'", "bq ls", "heroku logs -a x",
+            "heroku config:set A=1 -a x", "rm -rf build", "curl https://x.test/a",
+            "gh api repos/a/b", "ls ~/.ssh",
+        ):
+            self.assertIsNone(self.decided(command), command)
+
+    def test_an_ascend_session_skips_the_ascend_check_only(self):
+        ascend = str(self.home / "Code/slash-eureka")
+        (self.home / "Code/slash-eureka").mkdir(parents=True)
+        self.extra_env = {"CLAUDE_PROJECT_DIR": ascend}
+        self.assertIsNone(self.decided("echo hi", cwd=ascend))
+        self.assertIsNone(self.decided("git status", cwd=ascend))
+        self.assertEqual(self.decided("cat .env", cwd=ascend)["permissionDecision"], "ask")
+        self.assertEqual(self.decided("gh pr merge 1", cwd=ascend)["permissionDecision"], "ask")
+
+    def test_the_audit_log_redacts_secrets_and_the_guard_errors_closed(self):
+        self.decided("cat app/.env " + "x" * 400, session_id="s1")
+        log = self.home / ".local/state/mac-ops/deny-audit.jsonl"
+        line = json.loads(log.read_text().splitlines()[0])
+        self.assertEqual(
+            (line["runtime"], line["session_id"], line["decision"], line["family"]),
+            ("claude", "s1", "ask", "secret_files"),
+        )
+        self.assertIn("[secret]", line["command"])
+        self.assertLessEqual(len(line["command"]), 200)
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr view 1"}})
+        audit_path = str(self.home / "unused-audit.jsonl")
+        with mock.patch.object(hook_module, "AUDIT_PATH", audit_path), mock.patch.object(
+            hook_module, "decide", side_effect=RuntimeError("boom")
+        ):
+            with mock.patch("sys.stdin", new=io.StringIO(payload)):
+                with mock.patch("builtins.print") as shown:
+                    hook_module.main()
+        self.assertIn("guard error", shown.call_args[0][0])
+
+    def test_a_command_in_or_moving_into_the_ascend_tree_asks(self):
+        ascend = self.home / "Code/slash-eureka/x"
 
         def at(command, cwd):
             payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
             return self.run_hook(payload)
 
-        self.assertEqual(at("cat README.md", ascend)["permissionDecision"], "deny")
+        self.assertEqual(at("cat README.md", ascend)["permissionDecision"], "ask")
         self.assertIsNone(at("cat README.md", ROOT))
         for command in ("cd ~/Code/slash-eureka/x && ls", "cd $HOME/Code/slash-eureka && ls", "cd ../slash-eureka/x && ls"):
-            cwd = Path.home() / "Code/mac-ops"
-            self.assertEqual(at(command, cwd)["permissionDecision"], "deny", command)
+            cwd = self.home / "Code/mac-ops"
+            self.assertEqual(at(command, cwd)["permissionDecision"], "ask", command)
         self.assertIsNone(at("cd src && ls", ROOT))
 
     def test_other_tools_and_missing_input_are_ignored(self):
@@ -454,7 +565,13 @@ const out = [];
 for (const item of events) {
   for (const key of Object.keys(process.env)) if (!(key in baseEnv)) delete process.env[key];
   Object.assign(process.env, baseEnv, item.env || {});
-  const decision = await handler(item.event, { cwd: item.cwd });
+  const ctx = {
+    cwd: item.cwd,
+    mode: item.mode || "print",
+    ui: { confirm: async () => item.confirm === true },
+    sessionManager: { getSessionId: () => "s1" },
+  };
+  const decision = await handler(item.event, ctx);
   out.push(decision ? decision.reason : null);
 }
 console.log(JSON.stringify(out));
