@@ -1447,6 +1447,15 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
     return unstick(repo, ledger, excl)
 
 
+def unstick_brief_path():
+    """The unstick brief: the copy installed beside this module, else the
+    coordinator runtime copy on a machine that has not reinstalled yet."""
+    beside = Path(__file__).with_name("unstick-brief.md")
+    if beside.is_file():
+        return beside
+    return Path("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md")
+
+
 def unstick(repo, ledger, excl=frozenset()):
     issues = SNAPSHOT["repos"][repo]["issues"]
     referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
@@ -1507,7 +1516,7 @@ def unstick(repo, ledger, excl=frozenset()):
     unsticker = model_list.first_available("build")
     if unsticker is None:
         return "unstick waits, every builder is blocked"
-    msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
+    msg = open(unstick_brief_path()).read().replace("{repo}", repo).replace("{list}", lst)
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]

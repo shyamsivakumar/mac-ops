@@ -2840,7 +2840,7 @@ def stall():
     from unittest.mock import mock_open
     import datetime as dt
     started = {f"ticket:{repo}#9:a1": "old"}
-    cooling = {f"cont:old": [dt.datetime.now(dt.timezone.utc).isoformat(), "receipt"]}
+    cooling = {"cont:old": [dt.datetime.now(dt.timezone.utc).isoformat(), "receipt"]}
     with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
          patch.object(lane, "t3", return_value={}), \
          patch("builtins.open", mock_open(read_data=json.dumps(started))):
@@ -2860,6 +2860,16 @@ def stall():
          patch.object(lane, "t3", return_value={}), \
          patch("builtins.open", mock_open(read_data="{}")):
         exact(lane.unstick(repo, {}), "nothing ready")
+
+    # The brief the thread receives tells it to re-read the ticket's open
+    # pull requests before closing, so a pull request opened after the
+    # snapshot is not missed.
+    brief = next(path for path in (ROOT / "unstick-brief.md",
+                                   ROOT.parent / "bin" / "unstick-brief.md")
+                 if path.is_file()).read_text()
+    exact("re-read its open pull requests" in brief, True)
+    exact("{repo}" in brief, True)
+    exact("{list}" in brief, True)
 
 
 def alarm_mute_on_one_board():
