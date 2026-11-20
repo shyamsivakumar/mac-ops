@@ -4,9 +4,12 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
+from datetime import datetime as local_datetime, timedelta
+from zoneinfo import ZoneInfo
 
 for _dir in (Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent / "bin"):
     if (_dir / "models.py").is_file() and str(_dir) not in sys.path:
@@ -34,6 +37,11 @@ import prompt_paths
 LANE_CALLER = "lane_driver"
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
+SCORECARD = "/Users/shyamsivakumar/.local/bin/scorecard"
+SCORECARD_DIR = os.environ.get("SCORECARD_DIR", "/Users/shyamsivakumar/Code/coordinator/scorecard")
+SCORECARD_LOG = "/Users/shyamsivakumar/Library/Logs/coordinator/scorecard.log"
+SCORECARD_MAX_SECONDS = 600
+SCORECARD_TRIES = 3
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
@@ -2307,6 +2315,47 @@ def save_ledger(ledger):
         raise
 
 
+def scorecard_running(pid):
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    return "scorecard" in result.stdout
+
+
+def daily_scorecard(ledger):
+    now = local_datetime.now(ZoneInfo("America/Los_Angeles"))
+    if (now.hour, now.minute) < (0, 10):
+        return
+    day = str(now.date() - timedelta(days=1))
+    state = ledger.get(f"scorecard:{day}") or {"tries": 0, "done": False, "pid": None, "started": None}
+    ledger[f"scorecard:{day}"] = state
+    if state["done"]:
+        return
+    if os.path.exists(os.path.join(SCORECARD_DIR, f"{day}.json")):
+        state.update(done=True, pid=None)
+        print(f"SCORECARD {day} written")
+        return
+    if state["pid"]:
+        if scorecard_running(state["pid"]):
+            if time.time() - state["started"] > SCORECARD_MAX_SECONDS:
+                os.kill(state["pid"], signal.SIGTERM)
+                print(f"SCORECARD {day} try {state['tries']} killed after {SCORECARD_MAX_SECONDS}s")
+                state["pid"] = None
+            return
+        print(f"SCORECARD {day} try {state['tries']} ended without a report, see {SCORECARD_LOG}")
+        state["pid"] = None
+    if state["tries"] >= SCORECARD_TRIES:
+        return
+    state["tries"] += 1
+    try:
+        with open(SCORECARD_LOG, "a") as log:
+            process = subprocess.Popen([SCORECARD, "--date", day], stdout=log, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+    except OSError as exc:
+        print(f"SCORECARD {day} try {state['tries']} not started: {exc}")
+        return
+    state.update(pid=process.pid, started=time.time())
+    print(f"SCORECARD {day} try {state['tries']} started as pid {process.pid}")
+
+
 def main():
     global CFG
     STALL_EVENTS.clear()
@@ -2322,6 +2371,7 @@ def main():
             stale = reconcile_prompt_items(SNAPSHOT)
             if stale:
                 print(f"BOARD removed {stale} settled merge ask(s)")
+            daily_scorecard(ledger)
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
         if ledger.get("_item_failures", 0):
