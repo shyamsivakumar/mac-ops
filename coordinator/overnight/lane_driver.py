@@ -112,6 +112,7 @@ def read_json(cmd, fresh=False):
 
 PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles"
 PASS_PRS = {}
+PASS_WORKTREES = set()
 
 
 def open_prs(repo):
@@ -558,6 +559,22 @@ def root_workspace(thread):
     return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
 
 
+def reusable_worktree(thread, pr):
+    """Say whether a send may reuse the worktree of an idle thread.
+
+    The worktree must be on the head branch of the pull request, never on
+    a herdr branch, and no other send of this pass may hold it.
+    """
+    path = thread["worktreePath"]
+    if pr is None or path in PASS_WORKTREES:
+        return False
+    try:
+        branch = run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=60).strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return branch == pr["headRefName"] and not branch.startswith("herdr/")
+
+
 def branch_on_origin(repo, branch):
     """Say whether a branch is on origin, so a worktree can start there.
 
@@ -627,7 +644,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute == "model is not first available" and not root_workspace(thread):
+        if reroute == "model is not first available" and not root_workspace(thread) and reusable_worktree(thread, pr):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
@@ -654,6 +671,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         raise RuntimeError(f"Empty dispatch receipt for {lkey}")
     out = receipt.splitlines()[-1]
     ledger[lkey] = out
+    if workspace and workspace["type"] == "existing_worktree":
+        PASS_WORKTREES.add(workspace["worktreePath"])
     if lkey.startswith("fix:"):
         queued_item = re.search(r"#(\d+)", out)
         journal.emit("fix_sent", "lane", thread=thread_id if sendable else None,
@@ -2341,6 +2360,7 @@ def run_pass(ledger):
     global SNAPSHOT, STALL_STATE
     ledger.pop("_item_failures", None)
     PASS_PRS.clear()
+    PASS_WORKTREES.clear()
     watchdog()
     drift_ff(ledger)
     SNAPSHOT = board_snapshot(ledger)
