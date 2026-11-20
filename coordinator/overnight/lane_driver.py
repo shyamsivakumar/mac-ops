@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -37,7 +38,9 @@ LANE_CALLER = "lane_driver"
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 SCORECARD = "/Users/shyamsivakumar/.local/bin/scorecard"
-SCORECARD_TIMEOUT = 120
+SCORECARD_DIR = os.environ.get("SCORECARD_DIR", "/Users/shyamsivakumar/Code/coordinator/scorecard")
+SCORECARD_LOG = "/Users/shyamsivakumar/Library/Logs/coordinator/scorecard.log"
+SCORECARD_MAX_SECONDS = 600
 SCORECARD_TRIES = 3
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
@@ -2291,24 +2294,45 @@ def save_ledger(ledger):
         raise
 
 
+def scorecard_running(pid):
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    return "scorecard" in result.stdout
+
+
 def daily_scorecard(ledger):
     now = local_datetime.now(ZoneInfo("America/Los_Angeles"))
     if (now.hour, now.minute) < (0, 10):
         return
     day = str(now.date() - timedelta(days=1))
-    state = ledger.get(f"scorecard:{day}") or {"tries": 0, "done": False}
-    if state["done"] or state["tries"] >= SCORECARD_TRIES:
+    state = ledger.get(f"scorecard:{day}") or {"tries": 0, "done": False, "pid": None, "started": None}
+    ledger[f"scorecard:{day}"] = state
+    if state["done"]:
+        return
+    if os.path.exists(os.path.join(SCORECARD_DIR, f"{day}.json")):
+        state.update(done=True, pid=None)
+        print(f"SCORECARD {day} written")
+        return
+    if state["pid"]:
+        if scorecard_running(state["pid"]):
+            if time.time() - state["started"] > SCORECARD_MAX_SECONDS:
+                os.kill(state["pid"], signal.SIGTERM)
+                print(f"SCORECARD {day} try {state['tries']} killed after {SCORECARD_MAX_SECONDS}s")
+                state["pid"] = None
+            return
+        print(f"SCORECARD {day} try {state['tries']} ended without a report, see {SCORECARD_LOG}")
+        state["pid"] = None
+    if state["tries"] >= SCORECARD_TRIES:
         return
     state["tries"] += 1
     try:
-        result = subprocess.run([SCORECARD, "--date", day], capture_output=True, text=True,
-                                timeout=SCORECARD_TIMEOUT)
-        failure = None if result.returncode == 0 else f"exit {result.returncode}: {result.stderr.strip()[-200:]}"
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        failure = str(exc)
-    state["done"] = failure is None
-    ledger[f"scorecard:{day}"] = state
-    print(f"SCORECARD {day} " + ("written" if failure is None else f"try {state['tries']} failed: {failure}"))
+        with open(SCORECARD_LOG, "a") as log:
+            process = subprocess.Popen([SCORECARD, "--date", day], stdout=log, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+    except OSError as exc:
+        print(f"SCORECARD {day} try {state['tries']} not started: {exc}")
+        return
+    state.update(pid=process.pid, started=time.time())
+    print(f"SCORECARD {day} try {state['tries']} started as pid {process.pid}")
 
 
 def main():
