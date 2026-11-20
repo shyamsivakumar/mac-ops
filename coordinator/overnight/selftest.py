@@ -3807,30 +3807,42 @@ def key_mint():
         # larger of the two sources, not one past the record alone.
         listed.insert(0, {"number": 8, "title": "MO-8 · listed"})
         exact(open_ticket("ticket 4")["key"], "MO-9")
-        # A create GitHub refused frees its key again, so the next open takes
-        # the same number instead of leaving a gap.
-        failure[0] = "error"
-        exact(refused("ticket 5"), (1, "gh failed (error): fixture"))
+        # A failure that establishes rejection frees the key again, so the
+        # next open takes the same number instead of leaving a gap.
+        failure[0] = "rate_limit"
+        exact(refused("ticket 5"), (1, "gh failed (rate_limit): fixture"))
         failure[0] = None
         exact(open_ticket("ticket 5")["key"], "MO-10")
+        # A generic error does not establish rejection: `gh` can fail locally
+        # after GitHub has made the issue, so the key stays pending and the
+        # next open refuses instead of minting it again.
+        failure[0] = "error"
+        exact(refused("ticket 6"), (1, "gh failed (error): fixture"))
+        failure[0] = None
+        exact(json.loads((Path(directory) / record).read_text())["pending"], 11)
+        exact(refused("ticket 6")[0], 2)
+        # The recovery the refusal names: a human checks the repo, then clears
+        # `pending`.
+        state = json.loads((Path(directory) / record).read_text())
+        (Path(directory) / record).write_text(json.dumps({**state, "pending": None}))
         # A new prefix starts at one instead of carrying the old sequence
         # over, and switching back finds the old sequence again.
         config["repos"][repo]["key"] = "NEW"
-        exact(open_ticket("ticket 6")["key"], "NEW-1")
+        exact(open_ticket("ticket 7")["key"], "NEW-1")
         config["repos"][repo]["key"] = "MO"
-        exact(open_ticket("ticket 7")["key"], "MO-11")
+        exact(open_ticket("ticket 8")["key"], "MO-12")
         # A create whose answer was lost leaves the key pending, and the next
         # open refuses instead of handing the key out again.
         (Path(directory) / record).write_text(json.dumps(
-            {"number": 11, "unconfirmed": [11], "pending": 11}))
-        code, message = refused("ticket 8")
+            {"number": 12, "unconfirmed": [12], "pending": 12}))
+        code, message = refused("ticket 9")
         exact(code, 2)
-        exact(message.startswith("refused: the last open of fixture/repo did not finish, so MO-11 may exist"), True)
+        exact(message.startswith("refused: the last open of fixture/repo did not finish, so MO-12 may exist"), True)
         # A record that cannot be read is a refusal, not a reset to zero.
         (Path(directory) / record).write_text("{")
-        exact(refused("ticket 9")[0], 2)
-        (Path(directory) / record).write_text(json.dumps({"number": "four"}))
         exact(refused("ticket 10")[0], 2)
+        (Path(directory) / record).write_text(json.dumps({"number": "four"}))
+        exact(refused("ticket 11")[0], 2)
         # The record is what makes it work: without it the stale list mints
         # the same key again, so the eval would pass on a broken mint.
         (Path(directory) / record).unlink()

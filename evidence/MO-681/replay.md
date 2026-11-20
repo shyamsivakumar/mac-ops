@@ -67,11 +67,14 @@ class FakeGitHub:
             if w == "-H" and i + 1 < len(words) and words[i + 1].lower().startswith("if-none-match:"):
                 sent = words[i + 1].split(":", 1)[1].strip()
         self.requests.append({"if_none_match": sent, "include": "--include" in words})
+        if "--include" not in words:
+            # A plain read gets the body alone, as `gh api` prints it.
+            return subprocess.CompletedProcess(argv, 0, self.body, "")
         if sent and sent == self.etag:
             return subprocess.CompletedProcess(argv, 0, "HTTP/2.0 304 Not Modified\netag: %s\n\n" % self.etag, "")
         return subprocess.CompletedProcess(argv, 0, "HTTP/2.0 200 OK\netag: %s\n\n%s" % (self.etag, self.body), "")
 
-def world(name, lagging):
+def world(name, lagging, conditional=True):
     gw = load()
     tmp = tempfile.mkdtemp(prefix="mo681-")
     os.environ["COORDINATOR_GH_CACHE"] = "1"
@@ -84,6 +87,9 @@ def world(name, lagging):
     after = json.dumps([{"number": 2, "title": "MO-2 · two"}, {"number": 1, "title": "MO-1 · one"}])
     github = FakeGitHub(before, '"e1"')
     gw._RUNNER = lambda: github
+    if not conditional:
+        # The same read with the conditional path turned off.
+        gw.conditional = lambda argv: False
     argv = ["gh", "api", "repos/o/r/issues?state=all&per_page=100&page=1"]
     first = gw.run(argv, fresh=True)
     github.create(before if lagging else after, '"e1"' if lagging else '"e2"')
@@ -96,7 +102,8 @@ def world(name, lagging):
             "requests": github.requests,
             "usage": [json.loads(l) for l in open(os.environ["COORDINATOR_GH_USAGE_LOG"])]}
 
-print(json.dumps([world("lagging", True), world("current", False)], indent=1))
+print(json.dumps([world("lagging", True), world("current", False),
+                  world("lagging, no conditional path", True, conditional=False)], indent=1))
 ```
 
 ## What the replay found
@@ -105,16 +112,18 @@ print(json.dumps([world("lagging", True), world("current", False)], indent=1))
 | --- | --- | --- | --- | --- |
 | lagging | `MO-1 · one` | `MO-1 · one` | no `If-None-Match`, then `If-None-Match: "e1"` | paid, then `0 / 304`, then `0 / hit` |
 | current | `MO-1 · one` | `MO-2 · two`, `MO-1 · one` | no `If-None-Match`, then `If-None-Match: "e1"` | paid, then paid, then `0 / hit` |
+| lagging, no conditional path | `MO-1 · one` | `MO-1 · one` | no `If-None-Match` on either read | paid, then paid, then `0 / hit` |
 
 What the replay settles, and what it does not:
 
 - It settles that `fresh=True` skips the short-TTL cache: in the current world
   the second read is a paid call, not a `hit`.
-- It settles that the conditional path is the only way a `fresh` read can
-  return an older body, and that it does so only on a 304, by returning the
-  body it stored with that ETag. That body is exactly what GitHub said was
-  current, so the gateway cannot return a page newer than the ETag GitHub
-  publishes, and it adds no staleness of its own.
+- It settles that the conditional path is not what makes a `fresh` read stale.
+  With the conditional path turned off, a lagging list still answers with the
+  old body, and the read is a paid call with no `If-None-Match` at all. The
+  conditional path only saves the core call when GitHub says the page is
+  unchanged, and it then returns the body it stored with that ETag, which is
+  exactly what GitHub said was current.
 - It does **not** settle which response GitHub sent during the six opens on
   2026-11-19. The fake chooses whether the body and the ETag advance, so the
   lagging world is a model of GitHub's eventual consistency, not a recording
@@ -139,9 +148,11 @@ The mint goes one past `max(listed keys, number)`. An explicit key is refused
 when the list or `unconfirmed` already holds it. The record is written before
 the create and cleared after it, so a create that lands and then loses its
 answer leaves the key pending and the next open refuses until a human checks
-the repo. A create GitHub refused puts the record back, so the key is free
-again and no number is skipped. The prefix is part of the file name, so a new
-prefix starts at one and switching back finds the old sequence.
+the repo. Only a failure that establishes rejection (`auth`, `budget`,
+`rate_limit`) puts the record back and frees the key; a generic `error` does
+not, because `gh` can fail locally after GitHub has already made the issue.
+The prefix is part of the file name, so a new prefix starts at one and
+switching back finds the old sequence.
 
 The new `key-mint` case in `coordinator/overnight/selftest.py` replays the
 worst lag: the fake GitHub's list never catches up, so every read is the same
