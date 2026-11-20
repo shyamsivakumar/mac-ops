@@ -597,6 +597,23 @@ class HookTest(unittest.TestCase):
         self.assertNotIn("x.test", logged)
         programs = [json.loads(x)["program"] for x in logged.splitlines()[1:]]
         self.assertEqual(programs, ["curl", "curl", "git", "echo", "cat"])
+        quoted = [
+            ('KEY="secret value here" curl -X DELETE https://x.test/a', "curl"),
+            ('KEY="line one\nsecret line two" gh pr merge 1', "gh"),
+            ("env A='x y secret' gh pr merge 1", "gh"),
+            ("KEY=secret\\ value\\ here gh pr merge 1", "gh"),
+            ("'odd prog name' x && gh pr merge 1", "unknown"),
+            ("/tmp/" + "p" * 50 + " && gh pr merge 1", "unknown"),
+        ]
+        for command, _ in quoted:
+            self.decided(command)
+        logged = log.read_text()
+        self.assertNotIn("secret", logged.replace("secret_files", ""))
+        self.assertNotIn("odd prog", logged)
+        self.assertEqual(
+            [json.loads(x)["program"] for x in logged.splitlines()[-len(quoted):]],
+            [expected for _, expected in quoted],
+        )
         edit = {
             "file_path": str(self.home / "Code/slash-eureka/a.py"),
             "old_string": "old-secret-text",
