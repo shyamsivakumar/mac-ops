@@ -1,0 +1,29 @@
+MO PR review and merge · #480 7f3b81c6a15bf3d134c04fb02a20639b454d7b98 · round 1 of 3
+Review bar. Every critical or major names the clause it breaks.
+- C1 secret leak, C2 data loss, C3 wrong trade or exit: critical. A critical blocks in any round and anywhere in the code, but only with a concrete trigger and evidence.
+- M1 a bug at file:line that is likely in this fleet's real use or hard to undo (a merge or push that should not happen, a lane or queue that stays stuck). Also major: M2 a runtime change outside the ticket, M3 a weakened unrelated test, M4 circular proof, M5 a workflow file.
+- Minor: everything else, such as a case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce. Minors never fail a PR; list them under "Left for later".
+List every critical and major, not only the first.
+Write each critical or major as a block (a critical or major with no block does not count):
+FINDING F<n>
+severity: critical|major
+where: file:line
+bar: <the bar clause it breaks, such as M1>
+text: the full finding
+trigger: who or what triggers it, how often, and your evidence
+fixed when: a test the builder can run or read to show it is fixed
+Number new findings from F1. Minors go under "Left for later", with no block.
+After 3 rounds without PASS the PR is re-cut into smaller PRs or brought to Shyam: open findings go to the round-cap decision, and there is no 4th review.
+Task: https://github.com/shyamsivakumar/mac-ops/pull/480. Read the PR description and the diff only: `git fetch origin && git diff origin/main...7f3b81c6a15bf3d134c04fb02a20639b454d7b98`. Do not switch branches or rerun the suite.
+Confirm the exact PR-body line `Builder check: PASS 7f3b81c6a15bf3d134c04fb02a20639b454d7b98`.
+Proof file: this pull request carries none at `None`. Say so in one line; a missing proof file alone does not block.
+Merge bar, over any stricter proof wording in the ticket. Three outcomes, each on its own line:
+- CHECK: PASS only if the repo check passed on this head, or on an ancestor whose later commits touch only proof files, and the PR head is still this head; else FAIL.
+- PROVIDES: the ticket's claims.
+- Findings: the count of open critical or major findings.
+VERDICT: FAIL if and only if CHECK fails, PROVIDES fails, or a critical or major is open; otherwise PASS. Proof the ticket asks for beyond the repo check (a suite run, live or device receipts, acceptance artifacts) never fails a PR alone: list each missing item as a minor under "Left for later" and post the list as a PR comment before merging. Say in one line which bar you applied.
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator.
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+End with these lines in order: `PROVIDES: PASS 7f3b81c6a15bf3d134c04fb02a20639b454d7b98` or `PROVIDES: FAIL 7f3b81c6a15bf3d134c04fb02a20639b454d7b98`, `CHECK: PASS 7f3b81c6a15bf3d134c04fb02a20639b454d7b98` or `CHECK: FAIL 7f3b81c6a15bf3d134c04fb02a20639b454d7b98`, `Open critical or major findings: none` or `Open critical or major findings: <n>`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. No ticket is associated with this PR; close no issue. Verify each Provides claim on head 7f3b81c6a15bf3d134c04fb02a20639b454d7b98 (none: pass). `PROVIDES: FAIL 7f3b81c6a15bf3d134c04fb02a20639b454d7b98` forces `VERDICT: FAIL`; a PASS reply without the PROVIDES line is read as no verdict.
+Never call emp. Never print secrets.

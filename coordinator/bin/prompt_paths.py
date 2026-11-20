@@ -20,6 +20,7 @@ PROMPT_FILE_NAMES = (
     "agent-rules.md",
     "answer_format.py",
     "gate_bar.py",
+    "gate_findings.py",
     "gate_policy.py",
     "playbook.md",
     "code-reviewer.md",

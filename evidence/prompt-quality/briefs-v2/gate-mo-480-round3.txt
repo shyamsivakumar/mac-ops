@@ -1,0 +1,31 @@
+MO PR review and merge · #480 c29c593649d61819e1cbbe1c01302377efefa1cf · round 3 of 3
+Review bar. Every critical or major names the clause it breaks.
+- C1 secret leak, C2 data loss, C3 wrong trade or exit: critical. A critical blocks in any round and anywhere in the code, but only with a concrete trigger and evidence.
+- M1 a bug at file:line that is likely in this fleet's real use or hard to undo (a merge or push that should not happen, a lane or queue that stays stuck). Also major: M2 a runtime change outside the ticket, M3 a weakened unrelated test, M4 circular proof, M5 a workflow file.
+- Minor: everything else, such as a case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce. Minors never fail a PR; list them under "Left for later".
+Previous reviewed head 83236ec147a31991a861fd473d9c236c7102948e, this head c29c593649d61819e1cbbe1c01302377efefa1cf. Round diff: `git diff 83236ec147a31991a861fd473d9c236c7102948e..c29c593649d61819e1cbbe1c01302377efefa1cf`. If `git merge-base --is-ancestor 83236ec147a31991a861fd473d9c236c7102948e c29c593649d61819e1cbbe1c01302377efefa1cf` fails the branch was rebased: say so and use `git range-diff origin/main..83236ec147a31991a861fd473d9c236c7102948e origin/main..c29c593649d61819e1cbbe1c01302377efefa1cf`. New blockers come only from the round diff; the full PR diff is context. A major blocks only when it is an open prior finding, sits in lines changed since the previous reviewed head, or is a regression the repair caused (state the causal path). Every other new finding is minor.
+Open findings from earlier rounds. Answer each with `F<n> fixed: <evidence>` or `F<n> open: <evidence>`:
+F3 major at coordinator/overnight/lane_driver.py:741: Major — `coordinator/overnight/lane_driver.py:741`: The terminating-signal regex accepts only an integer. Descriptive launchctl output such as `last terminating signal = Killed: 9` becomes `signal=0`. With no exit code and a fresh log, the fallback suppresses the alarm despite termination evidence. Parse both formats and cover the descriptive format in the regression fixture.
+Write each critical or major as a block (a critical or major with no block does not count):
+FINDING F<n>
+severity: critical|major
+where: file:line
+bar: <the bar clause it breaks, such as M1>
+text: the full finding
+trigger: who or what triggers it, how often, and your evidence
+fixed when: a test the builder can run or read to show it is fixed
+Number new findings from F4. Minors go under "Left for later", with no block.
+After 3 rounds without PASS the PR is re-cut into smaller PRs or brought to Shyam: open findings go to the round-cap decision, and there is no 4th review. This is the last round.
+Task: https://github.com/shyamsivakumar/mac-ops/pull/480. Context only, not a source of new blockers: `git fetch origin && git diff origin/main...c29c593649d61819e1cbbe1c01302377efefa1cf`. Do not switch branches or rerun the suite.
+Confirm the exact PR-body line `Builder check: PASS c29c593649d61819e1cbbe1c01302377efefa1cf`.
+Proof file: this pull request carries none at `None`. Say so in one line; a missing proof file alone does not block.
+Merge bar, over any stricter proof wording in the ticket. Three outcomes, each on its own line:
+- CHECK: PASS only if the repo check passed on this head, or on an ancestor whose later commits touch only proof files, and the PR head is still this head; else FAIL.
+- PROVIDES: the ticket's claims.
+- Findings: the count of open critical or major findings.
+VERDICT: FAIL if and only if CHECK fails, PROVIDES fails, or a critical or major is open; otherwise PASS. Proof the ticket asks for beyond the repo check (a suite run, live or device receipts, acceptance artifacts) never fails a PR alone: list each missing item as a minor under "Left for later" and post the list as a PR comment before merging. Say in one line which bar you applied.
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator.
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+End with these lines in order: `PROVIDES: PASS c29c593649d61819e1cbbe1c01302377efefa1cf` or `PROVIDES: FAIL c29c593649d61819e1cbbe1c01302377efefa1cf`, `CHECK: PASS c29c593649d61819e1cbbe1c01302377efefa1cf` or `CHECK: FAIL c29c593649d61819e1cbbe1c01302377efefa1cf`, `Open critical or major findings: none` or `Open critical or major findings: <n>`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. No ticket is associated with this PR; close no issue. Verify each Provides claim on head c29c593649d61819e1cbbe1c01302377efefa1cf (none: pass). `PROVIDES: FAIL c29c593649d61819e1cbbe1c01302377efefa1cf` forces `VERDICT: FAIL`; a PASS reply without the PROVIDES line is read as no verdict.
+Never call emp. Never print secrets.

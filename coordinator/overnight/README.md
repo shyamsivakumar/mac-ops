@@ -832,7 +832,7 @@ from that row. A renamed file counts
 under both names, so moving prompt text out of `prompts/` still holds the
 pull request. The list covers
 `AGENT-RULES.md`,
-`answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
+`answer_format.py`, `gate_bar.py`, `gate_findings.py`, `gate_policy.py`, `playbook.md`,
 `code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
 `prompts/` directory.
 

@@ -1,51 +1,48 @@
-# Prompt quality runs
+# Prompt quality runs (v2, after the GPT and DeepSeek critiques)
 
-Branch `prompt-quality`, drafted 2026-11-20. No PR. Full briefs are in `evidence/prompt-quality/briefs/`.
+Branch `prompt-quality`. No PR. `briefs/` holds the v1 prints and is superseded; the v2 prints are in `briefs-v2/`.
 
-## Word counts (round 1, instructions only, proof file body excluded)
+## What the briefs are built from
 
-The proof file body is data the builder wrote, so it is left out. Totals include it.
+Real gate history of mac-ops #480 (3 FAIL heads, then PASS), read from `prompt-study/gates.json`, with the real full shas:
+`7f3b81c6...`, `83236ec1...`, `c29c5936...`. The replies are in the old format (no finding blocks), so they go through the legacy parser. No real gate has produced the new block format yet, so the new-format ledger example is synthetic and labelled that way.
 
-| Brief | Old instructions | New instructions | Change | Old total | New total |
-| --- | --- | --- | --- | --- | --- |
-| mac-ops #687 gate | 844 | 589 | -30.2% | 1035 | 780 |
-| strategy-replay-workbench #1552 gate | 844 | 589 | -30.2% | 2104 | 1849 |
+Files in `briefs-v2/`:
 
-Simulated later rounds (prior findings read from a real earlier gate thread, ledger and receipts in a temp dir):
-
-| Brief | Instruction words |
+| File | What it shows |
 | --- | --- |
-| mac-ops #687, round 2, 2 prior findings | 710 |
-| SRW #1552, round 3, 2 prior findings plus the open-findings instruction | 762 |
+| `gate-mo-480-round1.txt`, `-round2.txt`, `-round3.txt` | mac-ops: round 1, round 2 (2 prior findings in full, full shas, round diff), round 3 |
+| `gate-srw-1244-round1.txt`, `-round2-synthetic-head.txt` | SRW: the trading block is present; round 2 uses a made-up current head because #1244 has one real head |
+| `ledger-mo-480-from-real-old-format-replies.json` | ledger written from two real old-format FAIL replies (F1 and F2 superseded when the next legacy reply re-listed the open ones, F3 open) |
+| `ledger-srw-1244-from-real-old-format-reply.json` | same for SRW |
+| `ledger-synthetic-new-format-two-rounds.json` | synthetic new-format replies: blocks, answers `F1 fixed`, `F2 open`, a new F3 |
+| `ledger-reply-without-ids-or-findings.json` | a FAIL reply with no blocks and no findings: ledger records `unparsed` (last 1500 chars) and the next brief shows those lines |
+| `fix-checklist-mo-480.txt` | the checklist the lane puts in the fix message, from the round 3 reply |
 
-Build brief, mac-ops #674: 942 words before, 1102 after (+160 words: the short bar and one line on what the gate checks).
+## Word counts, round 1, no proof file, same inputs in both trees
 
-## Commands
+| Repo | Old brief | New brief | Change |
+| --- | --- | --- | --- |
+| mac-ops | 811 | 609 | -25% |
+| SRW | 811 | 725 | -11% (the trading block is back for SRW only) |
 
-Read-only. Old briefs come from `git archive origin/main coordinator` into a temp dir.
+The 30% cut of v1 is gone: the finding block format, the clause ids, the three outcomes and the round-diff rules add about 150 words. Round 2 with two prior findings in full: 794 words (mac-ops). Round 3: 769.
 
-```
-python3 coordinator/bin/ticket gate shyamsivakumar/mac-ops#687 --print-brief
-python3 coordinator/bin/ticket gate shyamsivakumar/strategy-replay-workbench#1552 --print-brief
-COORDQ_DIR=<tmp> COORDQ_LANE_LEDGER=<tmp>/ledger.json python3 coordinator/bin/ticket gate <ref> --print-brief
-```
+## Changes this round
 
-The round 2 and 3 runs are simulated: the temp ledger says one (mac-ops) or two (SRW) failed reviews, and the temp `dispatch-receipts.json` points at a real past FAIL gate thread of another PR (mac-ops #480, SRW #1244), read with `t3_thread_read`. PR #687 and #1552 have no failed gates of their own.
+- New `coordinator/bin/gate_findings.py`: block parser, legacy parser, per-PR ledger at `<COORDQ_DIR>/findings/<owner>_<repo>#<pr>.json` (flock plus atomic replace), brief section and fix checklist. Added to `prompt_paths.py` and the two docs that list it.
+- `gate_policy.round_context` reads the previous head's gate reply once, records it, and returns the open findings in full. `ticket gate` and `coordq gatekeep` both call it. The lane records the failed reply (not in dry runs) and puts the same checklist in the fix message.
+- Bar clauses C1 to C3, M1 to M5. A critical blocks in any round with a trigger and evidence. Round 2 and later: a major blocks only as an open prior ID, in the round diff, or a repair regression with its causal path.
+- Round diff is `git diff <prev>..<head>` with full shas; a rebase check and `git range-diff` are named; the `origin/main...` diff is labelled context only on round 2 and later.
+- Outcomes: CHECK, PROVIDES, open findings line, VERDICT FAIL if and only if one fails. Missing extra proof is a minor.
+- Round cap sentence in every round. Prompt-PR hold (`PROMPT_NO_MERGE`) is unchanged in `gate_policy.py`.
+- Trading and blast-radius text only for `TRADING_REPOS` (SRW).
+- Existing tests edited to follow the moved text: `tests/test_gate_bar_convergence.py`, and selftest case (f). No new test files.
 
-Build brief: `ticket start <ref> --print-brief` crashes with `KeyError: 'reviewerAlias'` on every ticket tried (#708, #674, #604, #514, #685), in the old tree and the new one, because each was refused and the refusal path builds no reviewer alias. The build briefs were printed by calling `assemble_brief` on the parsed #674 ticket in both trees. That bug is old and not touched here.
+## Not touched
 
-## Key excerpts
-
-Round 2 block (new):
-
-```
-Previous reviewed head: <prev>; review `git diff <prev>...<head>`. A major must be an unresolved prior critical or major, or sit in lines changed since that head; a new edge case in unchanged code is minor. Say for each prior finding whether it is fixed or open; an open one blocks.
-Prior critical and major findings:
-- Major — `coordinator/overnight/lane_driver.py:724–725`: ...
-```
-
-Round 3 adds the open-findings instruction (`gate_policy.OPEN_FINDINGS_INSTRUCTION`) and "With no PASS the PR is re-cut into smaller PRs or goes to Shyam: no 4th review."
+`coordinator/config/agents/code-reviewer.md` carries its own copy of the severity bar, so the bar still lives in two places. Its pinned phrases still pass. It should read `REVIEW_BAR` or be rewritten in a follow-up.
 
 ## Checks
 
-See `check-proof.md` (the mac-ops fast check, which runs the unittest suite and the overnight selftest) once it is committed. The fast check ran through `heavy` with a temp `COORDQ_DIR`.
+See `check-proof.md`.

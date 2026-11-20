@@ -1,0 +1,13 @@
+{
+ "repo": "o/none",
+ "pr": 2,
+ "next": 1,
+ "findings": {},
+ "reviews": {
+  "cccccccccccccccccccccccccccccccccccccccc": {
+   "round": 1,
+   "legacy": false,
+   "unparsed": "Nothing parseable here, just prose about the PR.\nCHECK: FAIL cccccccccccccccccccccccccccccccccccccccc\nVERDICT: FAIL"
+  }
+ }
+}

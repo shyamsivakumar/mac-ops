@@ -1,0 +1,54 @@
+{
+ "repo": "o/new",
+ "pr": 1,
+ "next": 4,
+ "findings": {
+  "F1": {
+   "opened": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "id": "F1",
+   "severity": "major",
+   "where": "coordinator/overnight/lane_driver.py:734",
+   "bar": "M1",
+   "text": "A missing numeric exit status defaults to success, so a crashed job reads as healthy.",
+   "trigger": "any launchctl job that dies on a signal; every time it happens; the alarm is suppressed. Evidence: `last terminating signal` has no `last exit code` line.",
+   "fixed_when": "a job with a terminating signal and no exit code reports unhealthy in the selftest fixture.",
+   "status": "fixed",
+   "evidence": "the fixture now reports unhealthy."
+  },
+  "F2": {
+   "opened": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "id": "F2",
+   "severity": "critical",
+   "where": "coordinator/bin/ticket:99",
+   "bar": "C1",
+   "text": "The brief prints the token.",
+   "trigger": "every run; the log keeps it. Evidence: line 99 echoes the env var.",
+   "fixed_when": "the token is never printed.",
+   "status": "open",
+   "evidence": "line 99 still prints it."
+  },
+  "F3": {
+   "opened": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "id": "F3",
+   "severity": "major",
+   "where": "a.py:3",
+   "bar": "M1",
+   "text": "regression the repair caused in the caller",
+   "trigger": "every call; evidence in the diff",
+   "fixed_when": "caller test passes",
+   "status": "open"
+  }
+ },
+ "reviews": {
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+   "round": 1,
+   "legacy": false,
+   "unparsed": null
+  },
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+   "round": 2,
+   "legacy": false,
+   "unparsed": null
+  }
+ }
+}

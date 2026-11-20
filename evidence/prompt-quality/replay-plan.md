@@ -21,7 +21,7 @@ For each frozen head write `replay/<repo>-<pr>-<head8>/` with:
 - `meta.json`: repo, pr, issue, head, base sha (`gh api repos/<repo>/pulls/<pr> --jq .base.sha`, read only), the ticket body, the PR body, the recorded outcome and the verdict history.
 - `diff.patch`: `git diff <base sha>...<head>` from a local clone, so a replay does not depend on the PR staying open.
 - `proof.md`: `git show <head>:evidence/<KEY>-<issue>/check-proof.md` when the PR carries one.
-- `round.json`: the `round_context` the live lane would have had. Round and previous head come from the order of heads. Prior findings come from `gate_policy.prior_findings(<text of the previous head's reply>)`. Pool A and the first head of a pool C PR are round 1.
+- `round.json`: the `round_context` the live lane would have had. Round and previous head come from the order of heads. Open findings come from `gate_findings.record(...)` over the previous heads' replies into a temp ledger (old-format replies parse by the legacy rule). Pool A and the first head of a pool C PR are round 1.
 
 Freezing reads GitHub (`gh api` and `git fetch`) and writes only local files.
 
@@ -55,7 +55,7 @@ Can this run through coordq without touching GitHub? Partly.
 ## 3. Score against hand-labelled findings
 
 1. Before any replay, a person labels every critical and major in the recorded FAIL reply of each frozen head: `real bug` (a defect a person can reproduce or read off the diff), `on-bar edge` (real but rare, the bar calls it minor) or `off-bar` (not a bug, out of scope, or already fixed). Pool B heads must carry at least one `real bug` label. Store the labels in `labels.json` keyed by `<repo>#<pr>:<head8>:<finding id>`.
-2. Reduce each replay reply to its findings with `prior_findings(reply)` and map each finding to a label by file and line plus a short title match. A finding with no match goes to the labeller as a new item, blind to which arm wrote it.
+2. Reduce each replay reply to its findings with `gate_findings.parse_blocks(reply)` (new arm) or `parse_legacy(reply)` (old arm) and map each finding to a label by file and line plus a short title match. A finding with no match goes to the labeller as a new item, blind to which arm wrote it.
 3. Per head and arm, count: real bugs found, real bugs missed, majors raised that are `on-bar edge` or `off-bar` (these are the off-bar majors), verdict.
 
 ## 4. Pass criterion
@@ -72,3 +72,10 @@ A fail on the second criterion blocks the merge of the prompt change even when t
 
 - Pool C by round: the share of round 2 and round 3 majors that sit in lines changed since the previous head. The new brief should push this toward 100%.
 - Verdict flips from FAIL to PASS on pool B and pool C against the recorded outcome, listed one by one for a person to read.
+
+## 6. Ledger-specific checks (added with the findings ledger)
+
+- Resolved findings stay closed: in pool C replays, a finding the previous round answered `fixed` is never open again unless the reviewer re-raises it with new evidence.
+- Seeded repair regression: for 3 pool A heads, add a defect to the diff of the next round in an unchanged caller, with a causal path. The new brief must block it (regression clause); an unseeded new edge case in unchanged code must stay minor.
+- Seeded critical: one head with a secret printed in unchanged code must block in round 2 (critical blocks in any round).
+- Block format compliance: share of critical or major findings in new-arm replies that parse as `FINDING` blocks with all six fields. Target 90% or more.

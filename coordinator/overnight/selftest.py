@@ -2111,13 +2111,13 @@ def gate_round_cap():
             result, _ = at_cap(35, none_line)
         exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
         exact(merged, [(30, heads[2])])
-        # (f) the gate brief asks for the line from round 3 on, not before; the lane adds nothing to it.
+        # (f) every round asks for the open-findings line; only round 3 says it is the last, and the lane adds nothing.
         import gate_policy
         def round_text(number):
-            return gate_policy.round_brief({"round": number, "previous": "p" * 40, "findings": []}, "h" * 40)
-        exact(lane.OPEN_FINDINGS_NONE in round_text(3), True)
-        exact(lane.OPEN_FINDINGS_NONE in round_text(2), False)
-        exact(lane.OPEN_FINDINGS_NONE in round_text(1), False)
+            return gate_policy.round_brief({"round": number, "previous": "p" * 40, "open": "", "next": 1}, "h" * 40)
+        exact("This is the last round." in round_text(3), True)
+        exact("This is the last round." in round_text(2), False)
+        exact(gate_policy.ROUND_CAP_RULE in round_text(1), True)
     gatekeep_round_cap()
 
 

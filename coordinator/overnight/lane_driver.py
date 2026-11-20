@@ -30,7 +30,8 @@ import close_check
 import gate_policy
 import journal
 from gate_bar import REVIEW_BAR
-from gate_policy import LANE_REPOS, MERGE_REPOS, OPEN_FINDINGS_NONE, complete_pass, merge_mode, prior_findings
+from gate_policy import LANE_REPOS, MERGE_REPOS, OPEN_FINDINGS_NONE, complete_pass, merge_mode
+import gate_findings
 import prompt_paths
 
 # The lane driver loads inside the overnight command, so it names itself on
@@ -1518,8 +1519,9 @@ def act_on_pr(repo, number, ledger):
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
-        findings = prior_findings(reply)
-        checklist = ("Findings to fix:\n" + "\n".join(f"- [ ] {finding}" for finding in findings) + "\n\n") if findings else ""
+        open_items = gate_findings.checklist(gate_findings.record(
+            repo, number, head, failed_reviews(repo, number, ledger)[0], reply, write=not DRY))
+        checklist = f"Open findings to fix, with the gate's ids:\n{open_items}\n\n" if open_items else ""
         msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. {REVIEW_BAR}\n\n"
                f"Fix every critical and major finding, "
                f"{check_step(repo, proof_path)}, push, set "

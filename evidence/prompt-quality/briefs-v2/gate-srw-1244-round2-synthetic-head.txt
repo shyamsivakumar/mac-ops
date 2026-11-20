@@ -1,0 +1,33 @@
+SRW PR review and merge · #1244 ffffffffffffffffffffffffffffffffffffffff · round 2 of 3
+Review bar. Every critical or major names the clause it breaks.
+- C1 secret leak, C2 data loss, C3 wrong trade or exit: critical. A critical blocks in any round and anywhere in the code, but only with a concrete trigger and evidence.
+- M1 a bug at file:line that is likely in this fleet's real use or hard to undo (a merge or push that should not happen, a lane or queue that stays stuck). Also major: M2 a runtime change outside the ticket, M3 a weakened unrelated test, M4 circular proof, M5 a workflow file.
+- Minor: everything else, such as a case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce. Minors never fail a PR; list them under "Left for later".
+Previous reviewed head 0ef0ea304c0de404829c95bfa850d53808fbd084, this head ffffffffffffffffffffffffffffffffffffffff. Round diff: `git diff 0ef0ea304c0de404829c95bfa850d53808fbd084..ffffffffffffffffffffffffffffffffffffffff`. If `git merge-base --is-ancestor 0ef0ea304c0de404829c95bfa850d53808fbd084 ffffffffffffffffffffffffffffffffffffffff` fails the branch was rebased: say so and use `git range-diff origin/main..0ef0ea304c0de404829c95bfa850d53808fbd084 origin/main..ffffffffffffffffffffffffffffffffffffffff`. New blockers come only from the round diff; the full PR diff is context. A major blocks only when it is an open prior finding, sits in lines changed since the previous reviewed head, or is a regression the repair caused (state the causal path). Every other new finding is minor.
+Open findings from earlier rounds. Answer each with `F<n> fixed: <evidence>` or `F<n> open: <evidence>`:
+F1 major at strategy_trial_ledger.js:197: Major strategy_trial_ledger.js:197: Every append now invokes `flock`, but the local Mac has no executable on PATH, confirmed by `command -v flock` and the builder’s report. Local ledger writes therefore fail with `ENOENT`. Provide a supported locking implementation or provision the required dependency. - Minor, Left for later: The stale-lock recovery and live-lock refusal proofs remain unverified.
+Write each critical or major as a block (a critical or major with no block does not count):
+FINDING F<n>
+severity: critical|major
+where: file:line
+bar: <the bar clause it breaks, such as M1>
+text: the full finding
+trigger: who or what triggers it, how often, and your evidence
+fixed when: a test the builder can run or read to show it is fixed
+Number new findings from F2. Minors go under "Left for later", with no block.
+After 3 rounds without PASS the PR is re-cut into smaller PRs or brought to Shyam: open findings go to the round-cap decision, and there is no 4th review.
+Task: https://github.com/shyamsivakumar/strategy-replay-workbench/pull/1244. Context only, not a source of new blockers: `git fetch origin && git diff origin/main...ffffffffffffffffffffffffffffffffffffffff`. Do not switch branches or rerun the suite.
+Confirm the exact PR-body line `Builder check: PASS ffffffffffffffffffffffffffffffffffffffff`.
+Proof file: this pull request carries none at `None`. Say so in one line; a missing proof file alone does not block.
+Merge bar, over any stricter proof wording in the ticket. Three outcomes, each on its own line:
+- CHECK: PASS only if the repo check passed on this head, or on an ancestor whose later commits touch only proof files, and the PR head is still this head; else FAIL.
+- PROVIDES: the ticket's claims.
+- Findings: the count of open critical or major findings.
+VERDICT: FAIL if and only if CHECK fails, PROVIDES fails, or a critical or major is open; otherwise PASS. Proof the ticket asks for beyond the repo check (a suite run, live or device receipts, acceptance artifacts) never fails a PR alone: list each missing item as a minor under "Left for later" and post the list as a PR comment before merging. Say in one line which bar you applied.
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator.
+Trading repo. A diff that changes stop logic, exit logic or trade execution (order placement, fills, sizing, booking of executed trades) needs every proof the ticket asks for, and missing proof is major.
+Blast radius: for a change that can stop, skip or delay an order or an exit, say what happens to EVERY open trade, unrelated trades included, if the new check fails or throws. A check that fails closed for all trades over one record is major even if the ticket asks for it; flag the ticket. Proofs on exit and order paths that use only clean fixtures are a major gap: real data may hold old id formats, test trades or partial records.
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+End with these lines in order: `PROVIDES: PASS ffffffffffffffffffffffffffffffffffffffff` or `PROVIDES: FAIL ffffffffffffffffffffffffffffffffffffffff`, `CHECK: PASS ffffffffffffffffffffffffffffffffffffffff` or `CHECK: FAIL ffffffffffffffffffffffffffffffffffffffff`, `Open critical or major findings: none` or `Open critical or major findings: <n>`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. No ticket is associated with this PR; close no issue. Verify each Provides claim on head ffffffffffffffffffffffffffffffffffffffff (none: pass). `PROVIDES: FAIL ffffffffffffffffffffffffffffffffffffffff` forces `VERDICT: FAIL`; a PASS reply without the PROVIDES line is read as no verdict.
+Never call emp. Never print secrets.

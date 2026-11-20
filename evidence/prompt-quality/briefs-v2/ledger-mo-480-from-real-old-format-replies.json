@@ -1,0 +1,46 @@
+{
+ "repo": "shyamsivakumar/mac-ops",
+ "pr": 480,
+ "next": 4,
+ "findings": {
+  "F1": {
+   "opened": "7f3b81c6a15bf3d134c04fb02a20639b454d7b98",
+   "severity": "major",
+   "where": "coordinator/overnight/lane_driver.py:724",
+   "text": "Major \u2014 `coordinator/overnight/lane_driver.py:724\u2013725`: Every nonzero `launchctl` result means \u201cstopped,\u201d including permission, domain, or IPC query failures. This can falsely alarm for a healthy job. Only service-not-found should mean unloaded; other query failures should use the unavailable-signal fallback.",
+   "legacy": true,
+   "id": "F1",
+   "status": "superseded"
+  },
+  "F2": {
+   "opened": "7f3b81c6a15bf3d134c04fb02a20639b454d7b98",
+   "severity": "major",
+   "where": "coordinator/overnight/lane_driver.py:734",
+   "text": "Major \u2014 `coordinator/overnight/lane_driver.py:734`: Missing numeric exit status defaults to success. A job reporting `last terminating signal` rather than `last exit code` is therefore treated as healthy after a crash, suppressing a real alarm. Handle signal termination and preserve unknown status.",
+   "legacy": true,
+   "id": "F2",
+   "status": "superseded"
+  },
+  "F3": {
+   "opened": "83236ec147a31991a861fd473d9c236c7102948e",
+   "severity": "major",
+   "where": "coordinator/overnight/lane_driver.py:741",
+   "text": "Major \u2014 `coordinator/overnight/lane_driver.py:741`: The terminating-signal regex accepts only an integer. Descriptive launchctl output such as `last terminating signal = Killed: 9` becomes `signal=0`. With no exit code and a fresh log, the fallback suppresses the alarm despite termination evidence. Parse both formats and cover the descriptive format in the regression fixture.",
+   "legacy": true,
+   "id": "F3",
+   "status": "open"
+  }
+ },
+ "reviews": {
+  "7f3b81c6a15bf3d134c04fb02a20639b454d7b98": {
+   "round": 1,
+   "legacy": true,
+   "unparsed": null
+  },
+  "83236ec147a31991a861fd473d9c236c7102948e": {
+   "round": 2,
+   "legacy": true,
+   "unparsed": null
+  }
+ }
+}

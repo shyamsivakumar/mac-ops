@@ -51,7 +51,7 @@ closes nothing either.
 A prompt change never auto-merges (Shyam, 2026-11-17). Before the brief is
 built, `ticket gate` reads the paths the pull request changed and compares
 them with the list in `coordinator/bin/prompt_paths.py`: `AGENT-RULES.md`,
-`answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
+`answer_format.py`, `gate_bar.py`, `gate_findings.py`, `gate_policy.py`, `playbook.md`,
 `code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
 `prompts/` directory.
 

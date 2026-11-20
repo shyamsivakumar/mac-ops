@@ -1,0 +1,23 @@
+{
+ "repo": "shyamsivakumar/strategy-replay-workbench",
+ "pr": 1244,
+ "next": 2,
+ "findings": {
+  "F1": {
+   "opened": "0ef0ea304c0de404829c95bfa850d53808fbd084",
+   "severity": "major",
+   "where": "strategy_trial_ledger.js:197",
+   "text": "Major strategy_trial_ledger.js:197: Every append now invokes `flock`, but the local Mac has no executable on PATH, confirmed by `command -v flock` and the builder\u2019s report. Local ledger writes therefore fail with `ENOENT`. Provide a supported locking implementation or provision the required dependency. - Minor, Left for later: The stale-lock recovery and live-lock refusal proofs remain unverified.",
+   "legacy": true,
+   "id": "F1",
+   "status": "open"
+  }
+ },
+ "reviews": {
+  "0ef0ea304c0de404829c95bfa850d53808fbd084": {
+   "round": 1,
+   "legacy": true,
+   "unparsed": null
+  }
+ }
+}
