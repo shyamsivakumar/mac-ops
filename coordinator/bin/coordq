@@ -209,6 +209,11 @@ def gate_thread_to_judge(queue, key, receipts):
     return thread_id
 
 
+def lane_gated(receipts, key):
+    """True when the lane launched a gate for the head, so the head has a recorded gate attempt gatekeep adopts."""
+    return any(k.startswith(key + ":") and k.endswith(":lane") for k in receipts)
+
+
 def read_dead_gate(queue, key):
     """The recorded gate of a head and its thread read, or None when the head
     has no gate thread to judge. Read before any lock is taken."""
@@ -1897,11 +1902,9 @@ def gate_candidates(config, rounds=None):
                        "reason": "at the gate round cap"}
                 continue
             gated_key = f"gate:{repo}#{number}:{head}"
-            if gated_key in queue.get("gatedHeads", {}):
+            if gated_key in queue.get("gatedHeads", {}) or lane_gated(receipts, gated_key):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
                     continue
-            elif any(k.startswith(gated_key + ":") and k.endswith(":lane") for k in receipts):
-                continue
             body = pr.get("body") or ""
             refs = re.findall(r"\bRefs #(\d+)\b", body)
             for issue in dict.fromkeys(refs):
@@ -2037,7 +2040,8 @@ def cmd_gatekeep(a):
             if key in attempted:
                 continue
             observed = load()
-            dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) else None
+            adopted = lane_gated(load_receipts(), key)
+            dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
             if dead is not None and not a.dry_run:
                 block_quota_provider(thread_selection(dead[1]), dead[1], key)
             with model_list.blocked_lock(), Lock(True):
@@ -2048,11 +2052,11 @@ def cmd_gatekeep(a):
                 state = gate_state(heads.get(key))
                 retries = 0
                 retry_of = None
-                if key in heads:
+                if key in heads or adopted:
                     # A head whose retries ran out is left alone until its
                     # head changes, so a reviewer that cannot run is not
                     # relaunched on every run.
-                    if dead is None or state != gate_state(observed["gatedHeads"][key]):
+                    if dead is None or state != gate_state(observed["gatedHeads"].get(key)):
                         continue
                     thread_id, data = dead
                     if load_receipts().get(key) != thread_id:

@@ -180,13 +180,43 @@ class FirstRetryTest(RetryLimitBase):
         self.assertNotIn("regating", out)
         self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 0)
 
-    def test_a_head_the_lane_already_gated_is_not_queued(self):
+    def lane_receipts(self):
         receipts = {RECEIPT["requestId"]: "builder-1", self.key: "gate-1",
                     f"{self.key}:gate:main:lane": "gate-1"}
         coordq.load_receipts = lambda: receipts
+
+    def test_a_lane_gate_that_died_is_regated_once(self):
+        self.lane_receipts()
+        self.write_queue()
+        out, _ = self.run_gatekeep()
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(len(self.gate_items()), 1)
+        state = self.read_queue()["gatedHeads"][self.key]
+        self.assertEqual((state["retries"], state["retryOf"]), (1, "gate-1"))
+
+    def test_a_lane_gate_with_a_verdict_is_not_queued(self):
+        self.lane_receipts()
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": "completed"},
+                           "items": [{"type": "assistant_message", "text": "VERDICT: PASS"}]}))
         self.write_queue()
         self.run_gatekeep()
         self.assertEqual(self.gate_items(), [])
+
+    def test_a_running_lane_gate_is_not_queued(self):
+        self.lane_receipts()
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps({"thread": {"status": "running"}, "items": []}))
+        self.write_queue()
+        self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_lane_gate_with_no_reviewer_left_is_given_up(self):
+        self.lane_receipts()
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_LAST_GATE))
+        self.write_queue()
+        self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
 
     def test_a_gate_with_a_verdict_is_not_retried(self):
         coordq.call = lambda tool, args, rules=None: (

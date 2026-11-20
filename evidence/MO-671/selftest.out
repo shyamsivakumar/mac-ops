@@ -1,5 +1,9 @@
-heavy: queued role=ordinary position=1
-heavy: waiting (first swap sample; normal wait, a few seconds)
+heavy: queued role=ordinary position=4
+heavy: waiting (capacity-unavailable)
+heavy: waiting (capacity-unavailable)
+heavy: waiting (queue-order)
+heavy: waiting (queue-order)
+heavy: waiting (global-slots-busy)
 alarms: the mute state could not be read: the mute state is not readable: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
 alarms: the mute state could not be read or locked: the mute state is not readable: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
 PASS send-integrity
