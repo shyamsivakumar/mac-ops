@@ -13,6 +13,7 @@ from gate_bar import GATE_BAR
 import prompt_paths
 from tick_health import tick_alarm
 import gh_gateway
+import journal
 
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
@@ -109,6 +110,29 @@ def path(name):
 def die(message):
     print(message, file=sys.stderr)
     sys.exit(1)
+
+
+def refuse_start(message, args, tool):
+    journal.emit("refused", "coordq", thread=args.get("threadId"), tool=tool, reason=message,
+                 **journal.parse_request_id(args.get("clientRequestId")))
+    die(message)
+
+
+def journal_item(event, item, **fields):
+    args = item.get("args") or {}
+    row = {"item": item["id"], "thread": args.get("threadId"), "tool": item.get("tool"),
+           **journal.parse_request_id(args.get("clientRequestId")), **fields}
+    journal.emit(event, "coordq", **row)
+
+
+def note_slots(queue, live_count):
+    triple = [live_count, len(queue["reserved"]), cap()]
+    if queue.get("journalSlots") == triple:
+        return
+    queue["journalSlots"] = triple
+    save(queue)
+    journal.emit("slots", "coordq", live=triple[0], reserved=triple[1], cap=triple[2],
+                 over_cap=triple[0] + triple[1] > triple[2])
 
 
 def log(message):
@@ -619,6 +643,8 @@ def reconcile_reservations(queue, active, statuses=None, snapshot=None):
             log(f"EXPIRED reservation #{key} after {int(RESERVATION_TIMEOUT)}s")
         elif finished:
             log(f"released reservation #{key}: thread {thread} is {known[thread]}")
+            journal.emit("thread_ended", "coordq", item=int(key.split(":")[0]), thread=thread,
+                         status=known[thread])
         reserved.pop(key)
         threads.pop(key, None)
         released += 1
@@ -645,6 +671,7 @@ def drain():
                 queue.setdefault("failed", []).append(item)
                 release_action_key(queue, item)
                 log(f"DROPPED #{item['id']} after {item['attempts']} attempts: {item.get('last_error', 'unknown error')}")
+                journal_item("dropped", item, tries=item["attempts"], error=item.get("last_error"))
                 continue
             tool = undispatchable_tool(item)
             if tool is None:
@@ -653,6 +680,7 @@ def drain():
             dropped.add(item["id"])
             release_action_key(queue, item)
             log(f"REFUSED #{item['id']}: {tool_refusal(tool)}")
+            journal_item("refused", item, reason=tool_refusal(tool))
         if dropped:
             queue["items"] = [i for i in queue["items"] if i["id"] not in dropped]
             save(queue)
@@ -669,6 +697,7 @@ def drain():
         reconcile_reservations(queue, active, statuses)
         if prune_messages(queue, active):
             save(queue)
+        note_slots(queue, max(n, len(active)))
         if not ready:
             return
         n = max(n, len(active))
@@ -776,6 +805,8 @@ def drain():
             save(queue)
             log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})"
                 + (f" key {item['actionKey']}" if item.get("actionKey") else ""))
+            journal_item("launched", item, thread=started_thread(queue, item, reservation) or None,
+                         live=n, reserved=len(queue["reserved"]), cap=cap())
         else:
             queue["reserved"].pop(reservation, None)
             queue["reservedThreads"].pop(reservation, None)
@@ -795,6 +826,7 @@ def drain():
                     item["attempts"] = MAX_ATTEMPTS
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
+            journal_item("launch_failed", item, tries=item["attempts"], error=out[:200])
 
 
 def action_key_record(queue, key):
@@ -865,7 +897,7 @@ def cmd_start(a):
     args = json.loads(a.args)
     tool = a.tool or tool_for(args)
     if tool not in DISPATCHABLE_TOOLS:
-        die(f"refused: {tool_refusal(tool)}")
+        refuse_start(f"refused: {tool_refusal(tool)}", args, tool)
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
@@ -873,14 +905,14 @@ def cmd_start(a):
         requested = args
         args, refusal = with_model(args)
         if refusal:
-            die(refusal)
+            refuse_start(refusal, requested, tool)
         if not requested.get("modelSelection"):
             args = requested
         if wants_rules(args, task_type):
             try:
                 read_rules()
             except RuntimeError as e:
-                die(f"refused: {e}")
+                refuse_start(f"refused: {e}", args, tool)
     # The thread list is read before the writer lock is taken: a slow t3 call
     # under it would hold every other start for its length. The started-message
     # records it speaks for are snapshotted first, because a record added since
@@ -895,9 +927,9 @@ def cmd_start(a):
             if record is not None:
                 where = (f"as coordq #{record['id']}" if record.get("id") is not None
                          else "with an unreadable queue item")
-                die(f"refused: the action key {key} is already "
-                    f"{action_key_state(queue, record.get('id'), record.get('state'))} "
-                    f"{where}")
+                refuse_start(f"refused: the action key {key} is already "
+                             f"{action_key_state(queue, record.get('id'), record.get('state'))} "
+                             f"{where}", args, tool)
         explicit = a.title or args.get("title") or ""
         item = {"id": queue["next"], "tool": tool, "args": args,
                 "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
@@ -922,10 +954,13 @@ def cmd_start(a):
         if request_id.startswith("gate:"):
             heads = queue.setdefault("gatedHeads", {})
             if request_id in heads:
-                die(f"refused: a gate for this head is already recorded as "
-                    f"{gate_label(gate_state(heads[request_id]))}")
+                refuse_start(f"refused: a gate for this head is already recorded as "
+                             f"{gate_label(gate_state(heads[request_id]))}", args, tool)
             heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
         save(queue)
+        journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool,
+                     taskType=args.get("taskType"), modelSelection=args.get("modelSelection"),
+                     **journal.parse_request_id(request_id))
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
             print(f"queued #{item['id']}")
@@ -1925,6 +1960,8 @@ def cmd_gatekeep(a):
                 if retry_of:
                     heads[key]["retryOf"] = retry_of
                 save(queue)
+                journal.emit("gate_queued", "gatekeep", item=item["id"],
+                             reviewer=args["modelSelection"]["model"], **journal.parse_request_id(key))
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
