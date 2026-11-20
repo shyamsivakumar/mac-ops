@@ -80,6 +80,8 @@ def drift_alarm():
 
 
 def tick_alarm():
+    if os.environ.get("COORDINATOR_TEST_ISOLATION_DIR"):
+        return stale_log_alarm()
     listing = ""
     try:
         listing = subprocess.run(
