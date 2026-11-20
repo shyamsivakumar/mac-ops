@@ -165,7 +165,7 @@ def start_routing():
     labels_cfg = {"labels": {"stage": ["todo"], "type": ["standard"], "priority": ["1"]}}
     exact(ticket.label_problems(labels_cfg, {"stage": ["todo"], "type": ["standard"],
                                              "priority": ["1"], "builder": ["kimi"], "reviewer": []}), [])
-    morph = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
+    morph = {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}
     for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["cursor", "sol"])]:
         blocked = set(morph)
         for expected_id in walk:
@@ -3430,7 +3430,7 @@ def router_build():
         exact(resolved["modelSelection"], {"instanceId": "router", "model": expected})
     # A payload that still names a direct `pi` Morph model is mapped, not refused.
     for task_type, model, expected in [("standard", "morph/morph-dsv41flash", "task/standard"),
-                                       ("rca", "morph/morph-kimik31", "task/rca"),
+                                       ("rca", "morph/morph-dsv41flash-1017", "task/rca"),
                                        ("fix", "morph/morph-dsv41flash", "task/standard")]:
         resolved, refusal = queue.with_model({"taskType": task_type,
                                               "modelSelection": {"instanceId": "pi", "model": model}})
@@ -3452,11 +3452,11 @@ def router_build():
     # The router entry is blocked only when every Morph identity it covers is.
     router = lane.model_list.router_entry("build")
     exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash"}), False)
-    exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash", "pi:morph-kimik31"}), True)
+    exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}), True)
     exact(lane.model_list.selection_identities({"instanceId": "router", "model": "task/standard"}),
-          {"pi:morph-dsv41flash", "pi:morph-kimik31"})
+          {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"})
     # The installer still builds the hard route Kimi first.
-    exact(lane.model_list.pi_routes("hard"), ["morph/morph-kimik31", "morph/morph-dsv41flash"])
+    exact(lane.model_list.pi_routes("hard"), ["morph/morph-dsv41flash", "morph/morph-dsv41flash-1017"])
     # A review launch still refuses a builder model.
     _, refusal = queue.with_model({"taskType": "review",
                                    "modelSelection": {"instanceId": "pi", "model": "morph/morph-dsv41flash"}})
@@ -3472,7 +3472,7 @@ def router_blocked():
     """
     import lane_driver as lane
     queue = load_coordq()
-    both = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
+    both = {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}
     for list_name, task_type in [("build", "standard"), ("build", "rca"), ("fix", "fix")]:
         exact(lane.model_list.first_available(list_name, None, both, task_type)["id"], "cursor")
     # One blocked Morph model leaves the router in place.
