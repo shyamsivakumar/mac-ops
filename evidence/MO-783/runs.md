@@ -12,29 +12,31 @@ KeyError: 'scope_files'
 ['coordinator/bin/coordq']
 ```
 
-## ticket start --dry-run with stubbed gh (temp COORDQ_DIR, COORD_JOURNAL_DIR, HOME)
-Ticket 101 is stage:started and names coordinator/bin/scorecard. Ticket 102 shares it; ticket 103 does not.
+## ticket start with stubbed gh (temp COORDQ_DIR, COORD_JOURNAL_DIR, HOME)
+Ticket 101 is stage:started and names coordinator/bin/scorecard. Each run has its own empty journal dir. The refused real start stops before any comment, label or coordq call; the stub answers no write.
 ```
-$ ticket start #102 --dry-run (101 started)
+$ ticket start #102 --dry-run (101 started): refused, journal unchanged
 refused: overlaps #101 on coordinator/bin/scorecard
-exit 2
-$ ticket start #103 --dry-run (101 started)
+exit 2; journal rows:        0
+$ ticket start #102 (101 started, not a dry run): refused, one start_deferred row
+refused: overlaps #101 on coordinator/bin/scorecard
+exit 2; journal rows:        1
+{"v":1,"ts":1795213247.1746602,"event":"start_deferred","actnull,"item":null,"attempt":null,"kind":null,"data":{"overlaps":[{"ref":101,"path":"coordinator/bin/scorecard"}]}}
+$ ticket start #103 --dry-run (disjoint): passes
 checks passed
 intent comment:
-Starting MO-103 attempt 1. Builder: terra, reviewer: opus-api.
-
-exit 0
-$ ticket start #102 --dry-run (nothing started)
+exit 0; journal rows:        0
+$ ticket start #102 --dry-run (nothing started): passes
 checks passed
 intent comment:
-Starting MO-102 attempt 1. Builder: terra, reviewer: opus-api.
-
-exit 0
-$ ticket start #102 --dry-run (101 started), base code
-checks passed intent comment: 
-```
-
-Journal row written by the refused start:
-```
-{"v":1,"ts":1795213033.843449,"event":"start_deferred","actor":"ticket","repo":"shyamsivakumar/mac-ops","ticket":102,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"overlaps":[{"ref":101,"path":"coordinator/bin/scorecard"}]}}
+exit 0; journal rows:        0
+Retry of 101 itself, open PR #110 "Refs #101" changes the same file: passes
+$ ticket start #101 --dry-run (attempt 2)
+checks passed
+intent comment:
+exit 0; journal rows:        0
+Same PR but it refers to #999: refused
+$ ticket start #101 --dry-run
+refused: overlaps #110 on coordinator/bin/scorecard
+exit 2; journal rows:        0
 ```
