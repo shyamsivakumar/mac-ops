@@ -3742,7 +3742,59 @@ def router_blocked():
     exact(resolved["modelSelection"], {"instanceId": "cursor", "model": "default"})
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked}
+def key_mint():
+    """Three back-to-back opens against a list that never catches up.
+
+    GitHub's issue list can lag a create by a few seconds, so the list read
+    after a create can be missing the issue just made. The key is minted
+    from the list and from the last key the repo gave out, so the replay
+    below keeps the list stale on purpose: three opens must still give
+    three distinct keys.
+    """
+    ticket = load_ticket()
+    from types import SimpleNamespace
+    repo = "fixture/repo"
+    config = {"repos": {repo: {"key": "MO"}},
+              "labels": {"stage": ["backlog"], "priority": [1], "type": ["standard"]}}
+    listed = [{"number": 1, "title": "MO-1 · first"}]
+    created = []
+
+    def gh(args, stdin=None, fresh=False, optional=False):
+        if args[:2] == ["issue", "create"]:
+            created.append(args[args.index("--title") + 1])
+            return f"https://github.com/{repo}/issues/{len(created) + 1}"
+        if args[:1] == ["api"]:
+            # The list never catches up: every read is the same page.
+            return json.dumps(listed)
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    def open_ticket(title):
+        args = SimpleNamespace(repo=repo, title=title, body="", body_file=None,
+                               label="", require_key=False, dry_run=False)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            ticket.cmd_open(args)
+        return json.loads(output.getvalue())
+
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(ticket, "CACHE_DIR", directory), \
+         patch.object(ticket, "load_config", return_value=config), \
+         patch.object(ticket, "gh", side_effect=gh), \
+         patch.object(ticket, "builder_ids", return_value=[]), \
+         patch.object(ticket, "reviewer_ids", return_value=[]):
+        exact([open_ticket(f"ticket {n}")["key"] for n in (1, 2, 3)],
+              ["MO-2", "MO-3", "MO-4"])
+        exact(created, ["MO-2 · ticket 1", "MO-3 · ticket 2", "MO-4 · ticket 3"])
+        # The record sits beside the open lock, so the next open reads it.
+        exact(json.loads((Path(directory) / "last-key-fixture_repo.json").read_text()),
+              {"key": "MO-4", "number": 4})
+        # The record is what makes it work: without it the stale list mints
+        # the same key again, so the eval would pass on a broken mint.
+        with patch.object(ticket, "read_last_key", return_value=0):
+            exact([open_ticket(f"again {n}")["key"] for n in (1, 2, 3)],
+                  ["MO-2", "MO-2", "MO-2"])
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint}
 
 
 def main():
