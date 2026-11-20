@@ -3188,6 +3188,14 @@ def stall():
     exact("Two outcomes end the work on an issue at once" in brief, True)
     exact("The lookup is incomplete (the command fails, or the list reaches the limit)" in brief, True)
     exact("report it and leave the issue alone" in brief, True)
+
+    # Brief text lives in lane_briefs.py, which the prompt hold knows by
+    # path, so a change to it is held even though lane_driver.py is code.
+    # Replay of #626: its brief change now lands in lane_briefs.py.
+    exact(lane.prompt_paths.prompt_scan(["coordinator/bin/lane_briefs.py"]), lane.prompt_paths.HOLD)
+    exact(lane.prompt_paths.prompt_scan(["coordinator/overnight/lane_driver.py"]), lane.prompt_paths.CLEAR)
+    exact("re-read its open pull requests" in Path(lane.__file__).read_text(), False)
+    exact("last review round" in Path(lane.__file__).read_text(), False)
     exact("skipped: matching PR #<n>" in brief, True)
     exact("skipped: incomplete PR lookup" in brief, True)
     exact("Every confirmed orphan must end closed" in brief, True)
