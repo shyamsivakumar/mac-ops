@@ -97,6 +97,7 @@ SECRET_FORMAT_RE = r"(?i)payload|secret|password|token|private_key|\bkey\b"
 DELETE_TOOLS = {"curl", "http", "https"}
 GUARDED_TEXT_RE = r"\b(?:gh|git|gcloud|bq|heroku|curl|http|rm|rmdir|unlink|trash|find)\b|slash-eureka|\.env|\.ssh|auth\.json"
 COMMAND_SHOWN = 300
+PROGRAM_RE = re.compile(r"[A-Za-z0-9_.+-]{1,40}")
 PATH_KEYS = ("file_path", "notebook_path", "path")
 PATH_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob"}
 AUDIT_PATH = "~/.local/state/mac-ops/deny-audit.jsonl"
@@ -530,8 +531,9 @@ def redact_path(path):
 def program(command):
     """The program name of the first command. Nothing after it is kept: arguments can hold credentials."""
     for words in real_commands(command):
-        return os.path.basename(words[0])
-    return ""
+        name = os.path.basename(words[0])
+        return name if PROGRAM_RE.fullmatch(name) else "unknown"
+    return "unknown"
 
 
 def audit(outcome, command, payload, tool_name):
@@ -564,6 +566,9 @@ def main():
     tool_name = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
+        return 0
+    if tool_name == "ProgramName":
+        print(program(str(tool_input.get("command") or "")))
         return 0
     if tool_name != "Bash" and tool_name not in PATH_TOOLS:
         return 0

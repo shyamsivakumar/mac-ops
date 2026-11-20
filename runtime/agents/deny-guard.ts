@@ -61,8 +61,10 @@ function finding(family, reason, logged = false) {
 }
 
 function programOf(command) {
-  const word = command.trim().split(/\s+/).find((token) => !/^[A-Za-z_]\w*=/.test(token));
-  return word ? path.basename(word) : "";
+  const payload = JSON.stringify({ tool_name: "ProgramName", tool_input: { command } });
+  const proc = spawnSync("python3", [SPEC.hook_path], { input: payload, encoding: "utf8", timeout: 10000 });
+  const name = proc.error || proc.status !== 0 ? "" : path.basename(proc.stdout.trim());
+  return /^[A-Za-z0-9_.+-]{1,40}$/.test(name) ? name : "unknown";
 }
 
 function audit(decision, family, tool, text, sessionId) {
