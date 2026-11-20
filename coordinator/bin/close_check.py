@@ -3,8 +3,11 @@
 Four items, each answered from the merged pull request and its ticket:
 
 1. scope: every changed file is inside the ticket's stated scope.
-2. proof file: the pull request carries a proof file (MO-1065).
-3. checks: every check the proof file lists is `passed`.
+2. proof file: the pull request carries its repo's own check evidence. In
+   mac-ops that is a proof file (MO-1065), in strategy-replay-workbench a
+   `success` `srw/agent-check` status on the head, elsewhere a
+   `Builder check: PASS <head sha>` line in the pull request body.
+3. checks: every check the mac-ops proof file lists is `passed`.
 4. cost note: when the MO-1068 cost report exists, the pull request body
    carries a cost note.
 
@@ -30,6 +33,9 @@ import proof_file
 
 GH_TIMEOUT = 60
 PROOF_NAME = proof_file.PROOF_NAME
+MAC_OPS_REPO = "shyamsivakumar/mac-ops"
+SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
+SRW_CHECK_CONTEXT = "srw/agent-check"
 COST_REPORT = "evidence/MO-1068/cost-report.md"
 # A cost note carries a value: "Cost:" on its own is a label without a
 # note, so it waives nothing.
@@ -389,6 +395,32 @@ def item_proof(state, path, detail=""):
             "detail": f"the proof file at {path} could not be read, so the checks are unproven"}
 
 
+def latest_status(statuses, context):
+    """The newest status of one context: GitHub lists the newest first."""
+    for status in statuses:
+        if status.get("context") == context:
+            return status
+    return None
+
+
+def item_agent_check(repo, head, pr_body, statuses):
+    if repo == SRW_REPO:
+        status = latest_status(statuses, SRW_CHECK_CONTEXT)
+        state = status.get("state") if status else "missing"
+        return {"item": "proof file", "status": PASS if state == "success" else FAIL, "required": True,
+                "detail": f"{SRW_CHECK_CONTEXT} is {state} on {head}"}
+    line = f"Builder check: PASS {head}"
+    found = any(row.strip() == line for row in (pr_body or "").splitlines())
+    return {"item": "proof file", "status": PASS if found else FAIL, "required": True,
+            "detail": (f"the pull request body has the line `{line}`" if found else
+                       f"the pull request body has no line `{line}`")}
+
+
+def item_checks_skipped(repo):
+    return {"item": "checks", "status": SKIPPED, "required": False,
+            "detail": f"the proof table is read for {MAC_OPS_REPO} only; {repo} has no proof table"}
+
+
 # A Markdown cell holds a pipe that is written as \|, so a row is split on
 # the pipes that are not escaped, and the escape is read back as a pipe.
 PIPE_SPLIT = re.compile(r"(?<!\\)\|")
@@ -507,13 +539,19 @@ def item_cost(body, report_state, detail=""):
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail="", scope_files=None, scope_error=""):
-    """The four items, in the order the checklist reads them."""
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail="", scope_files=None, scope_error="", repo_items=None):
+    """The four items, in the order the checklist reads them.
+
+    Outside mac-ops, repo_items is the (proof, checks) pair that replaces
+    the two items read from the proof file.
+    """
+    proof_item, checks_item = repo_items or (item_proof(proof_state, proof_path, proof_detail),
+                                             item_checks(proof_state, proof_text))
     return [
         item_scope(body, files if scope_files is None else scope_files,
                    evidence_dir(proof_path), scope_error),
-        item_proof(proof_state, proof_path, proof_detail),
-        item_checks(proof_state, proof_text),
+        proof_item,
+        checks_item,
         item_cost(pr_body, report_state, report_detail),
     ]
 
@@ -633,13 +671,18 @@ def issue_of(body):
     return int(match.group(1)) if match else None
 
 
-def run_check(repo, pr, issue=None, reader=None):
+def fetch_statuses(repo, head):
+    return gh_json(["api", f"repos/{repo}/commits/{head}/statuses?per_page=100"])
+
+
+def run_check(repo, pr, issue=None, reader=None, status_reader=None):
     """Run the checklist on a merged pull request.
 
     A reader reads one file at a ref and returns the state and the text
     of it, the way `proof_file.fetch` does. The close step reads through
     GitHub; the replay reads through the local checkout, so it runs
-    without the API.
+    without the API. A status_reader does the same for the commit
+    statuses of a head, and defaults to the API.
     """
     """Run the checklist on a merged pull request."""
     pull = gh_json(["pr", "view", str(pr), "-R", repo, "--json",
@@ -654,17 +697,23 @@ def run_check(repo, pr, issue=None, reader=None):
         body = ticket.get("body") or ""
         title = ticket.get("title") or title
     proof_path = proof_file.path_for(ticket_key(title), number)
-    if reader is None:
-        state, text = proof_file.fetch(repo, proof_path, merge)
+    repo_items = None
+    state, text, proof_detail = proof_file.MISSING, None, ""
+    if repo == MAC_OPS_REPO:
+        if reader is None:
+            state, text = proof_file.fetch(repo, proof_path, merge)
+        else:
+            state, text = reader(proof_path, merge)
     else:
-        state, text = reader(proof_path, merge)
+        head = pull["headRefOid"]
+        statuses = (status_reader or fetch_statuses)(repo, head) if repo == SRW_REPO else []
+        repo_items = (item_agent_check(repo, head, pull.get("body"), statuses),
+                      item_checks_skipped(repo))
     if state == proof_file.FOUND and not changed_proof(files, proof_path):
         # The file is on the base branch: it is an earlier run's proof.
         state, text = proof_file.MISSING, None
         proof_detail = (f"the proof file at {proof_path} is not part of this change: the pull "
                         "request does not change it, so it is an earlier run's proof")
-    else:
-        proof_detail = ""
     if reader is None:
         report, report_detail = report_state(repo, merge)
     else:
@@ -672,7 +721,7 @@ def run_check(repo, pr, issue=None, reader=None):
         report = {"found": "exists", "missing": "absent"}.get(found, "unknown")
         report_detail = ""
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
-                      report_detail, proof_detail, scope_files, files_error)
+                      report_detail, proof_detail, scope_files, files_error, repo_items)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 
