@@ -60,12 +60,9 @@ function finding(family, reason, logged = false) {
   return { family, reason, logged, mode: MODES[family] === "ask" ? "ask" : "deny" };
 }
 
-function redact(text) {
-  let out = text;
-  for (const pattern of SPEC.secret_value_res) {
-    out = out.replace(new RegExp(pattern, "gi"), (_match, group) => (typeof group === "string" ? group : "") + "[redacted]");
-  }
-  return out.split(" ").map((token) => (SECRET_PATH_RE.test(token) ? "[secret]" : token)).join(" ");
+function programOf(command) {
+  const word = command.trim().split(/\s+/).find((token) => !/^[A-Za-z_]\w*=/.test(token));
+  return word ? path.basename(word) : "";
 }
 
 function audit(decision, family, tool, text, sessionId) {
@@ -77,7 +74,8 @@ function audit(decision, family, tool, text, sessionId) {
     family,
     decision,
   };
-  line[BASH_TOOLS.has(tool) ? "command" : "target"] = redact(text).slice(0, 200);
+  if (BASH_TOOLS.has(tool)) line.program = programOf(text);
+  else line.target = (SECRET_PATH_RE.test(text) ? "[secret]" : text).slice(0, 200);
   try {
     fs.mkdirSync(path.dirname(SPEC.audit_log), { recursive: true });
     fs.appendFileSync(SPEC.audit_log, JSON.stringify(line) + "\n");

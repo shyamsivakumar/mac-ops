@@ -14,14 +14,6 @@
     "~/Code/slash-eureka"
   ],
   "secret_file_re": "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)",
-  "secret_value_res": [
-    "AKIA[0-9A-Z]{16}",
-    "\\b(?:ghp|gho|ghs|github_pat)_[A-Za-z0-9_]{20,}",
-    "\\bsk-[A-Za-z0-9_-]{16,}",
-    "\\bxox[abprs]-[A-Za-z0-9-]{10,}",
-    "(\\bbearer\\s+)\\S+",
-    "((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)\\w*\\s*[=:]\\s*)\\S+"
-  ],
   "secret_globs": [
     "**/.env",
     "**/.env.*",
