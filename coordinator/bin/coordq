@@ -1144,7 +1144,7 @@ def stale_started(rows, occupied, pr_refs):
     return stale
 
 
-def lane_candidates(rows, occupied, pr_refs=None):
+def lane_candidates(rows, occupied, pr_refs=None, build_here=()):
     """The stage:todo tickets the refill may start, in board order.
 
     A repo is busy when a live lane thread works it, or when an open,
@@ -1170,11 +1170,17 @@ def lane_candidates(rows, occupied, pr_refs=None):
         if row["number"] in pr_refs.get(repo, ()):
             busy.add(repo)
     selected = []
+    skipped = {}
     for row in sorted(rows, key=order):
         repo = row["repository"]["nameWithOwner"]
-        if repo not in busy and stage_todo(row):
+        if repo in build_here:
+            skipped[repo] = skipped.get(repo, 0) + stage_todo(row)
+        elif repo not in busy and stage_todo(row):
             selected.append(row)
             busy.add(repo)
+    for repo, count in skipped.items():
+        if count:
+            log(f"refill: skipped {count} build-here tickets in {repo}")
     return selected
 
 
@@ -1198,7 +1204,8 @@ def board_candidates():
         pr_refs[repo] = open_pr_refs(repo)
     for row in stale_started(rows, occupied, pr_refs):
         log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
-    return lane_candidates(rows, occupied, pr_refs)
+    build_here = {repo for repo, entry in cfg["repos"].items() if entry.get("build") == "here"}
+    return lane_candidates(rows, occupied, pr_refs, build_here)
 
 
 def ticket_start(repo, number, dry_run):
