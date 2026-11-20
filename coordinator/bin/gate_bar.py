@@ -16,6 +16,7 @@ Say in one line which bar you applied and why.
 Severity bar (Shyam, 2026-11-19). This applies to every gate:
 - A finding is critical or major only when it is likely to happen in this fleet's real use, or would cause harm that is hard to undo: data loss, a merge or push that should not happen, a lane or queue that stays stuck, a secret leak, a wrong trade or exit. State in one sentence how it happens in practice: who or what triggers it, and how often.
 - A case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce is minor. Minors never fail a PR. List them under 'Left for later'; the Coordinator turns them into a follow-up issue.
+- A proof or check that fails the same way on origin/main is pre-existing: note it as minor, not the PR's finding. One that fails only on this PR's head, or fails differently, is the PR's finding. Compare against origin/main before calling a proof failure major.
 - If every remaining finding is minor, the verdict is PASS.
 
 Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies to every gate:
