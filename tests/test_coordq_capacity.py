@@ -367,6 +367,27 @@ class QueueCrashSafetyTests(unittest.TestCase):
         env = patch.dict(os.environ, {"COORD_JOURNAL_DIR": self.tmp.name + "/j"})
         env.start()
         self.addCleanup(env.stop)
+        self.q.DECISIONS_PATH = self.tmp.name + "/decisions.json"
+        Path(self.q.DECISIONS_PATH).write_text(json.dumps({"items": []}))
+
+    def test_a_corrupt_queue_with_no_prev_stops_dispatch_and_returns_empty(self):
+        Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')
+        self.assertEqual(self.q.load(), {"next": 1, "items": []})
+        self.assertTrue(Path(self.tmp.name, "dispatch.stopped").exists())
+        journal = "".join(
+            p.read_text() for p in Path(self.tmp.name, "j").iterdir())
+        self.assertIn("queue.json invalid and no queue.json.prev", journal)
+
+    def test_a_fallback_raises_one_board_item_once(self):
+        Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')
+        Path(self.tmp.name, "queue.json.prev").write_text('{"next":5,"items":[]}')
+        self.q.load()
+        self.q.load()
+        board = json.loads(Path(self.q.DECISIONS_PATH).read_text())
+        items = [e for e in board["items"]
+                 if isinstance(e, dict) and e.get("id") == "factory-dispatch-stopped"]
+        self.assertEqual(len(items), 1)
+        self.assertIn("rm dispatch.stopped", items[0]["why"])
 
     def test_a_truncated_queue_falls_back_and_stops_dispatch(self):
         Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')

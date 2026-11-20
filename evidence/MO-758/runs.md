@@ -30,3 +30,13 @@ OK
 ```
 
 The ticket proof command ran as written.
+
+## Review fixes: the two new cases on the previous code, then the branch
+```
+Ran 5 tests in 0.179s
+
+FAILED (failures=1, errors=1)
+Ran 5 tests in 0.114s
+
+OK
+```
