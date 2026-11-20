@@ -21,12 +21,17 @@ stale-telemetry
 None
 ```
 
-## Retry then degraded path (slow fake clock, fake runner)
+## Retry then degraded path (fake clock, fake runner)
 
 ```
 no last good: StaleSampleError host telemetry sample was stale on arrival
 whole: False 2.86
 degraded: True pressure 4 load_per_core 4.0 free 50.0
+last good older than 15s: StaleSampleError
 ```
 
-Pressure level 4 is re-read from sysctl in the degraded sample, so critical pressure still blocks.
+Pressure 4 is re-read from sysctl in the degraded sample, so critical pressure still blocks. The cached whole sample is used only while it is at most 15 seconds old (`SAMPLE_MAX_AGE_LOADED`); older than that, `sample_host` raises, so frozen memory fields are never older than the loaded age rule.
+
+## Slot limit
+
+heavy.py never raises the slot limit. `_effective_slot_limit` only reads `heavy_slots` from the capacity file and takes the minimum with cores and memory. The file is written by `board_governor.py` (lines 797 to 846), which is out of scope for this ticket and is where a `not sample.degraded` gate on growth belongs. A fake-clock slot-growth case cannot be run from heavy.py, so none is claimed here.

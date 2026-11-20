@@ -38,7 +38,6 @@ PAUSE_HEADROOM_FRACTION = 0.125
 SAMPLE_INTERVAL = 2.0
 SAMPLE_MAX_AGE = 4.5
 SAMPLE_MAX_AGE_LOADED = 15.0
-DEGRADED_BASE_MAX_AGE = 60.0
 NATIVE_TIMEOUT = 2.5
 MAX_WAIT_SECONDS = 45 * 60
 CRITICAL_LOAD_PER_CORE = 2.0
@@ -337,7 +336,7 @@ def sample_host(
         return sample
     if (
         _LAST_GOOD_SAMPLE is None
-        or clock() - _LAST_GOOD_SAMPLE.captured_monotonic > DEGRADED_BASE_MAX_AGE
+        or clock() - _LAST_GOOD_SAMPLE.captured_monotonic > SAMPLE_MAX_AGE_LOADED
     ):
         raise StaleSampleError("host telemetry sample was stale on arrival")
     return replace(
