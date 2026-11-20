@@ -59,6 +59,21 @@ The live `openai-api:gpt-6.2-astra` entry carries `until`
 the new reader no longer blocks it. Before the change `expiry` returned
 infinity for that entry and astra-api was skipped on every gate.
 
+## Before and after on the live file
+
+`models.py first review standard` reads the live block file. The old module is
+`git show origin/main:coordinator/bin/models.py` loaded from a temp file, so
+neither run writes the live file.
+
+```
+old blocked: ['anthropic-api:claude-opus-5-5', 'glm:glm-5.3', 'minimax:MiniMax-M3.1-Flash', 'minimax:minimax/MiniMax-M3.1-Flash', 'openai-api:gpt-6.2-astra']
+old first review: astra-sub
+new blocked: ['anthropic-api:claude-opus-5-5']
+new first review: astra-api
+```
+
+The first review entry is astra-api again, which is the point of the ticket.
+
 The two `minimax` keys and `glm:glm-5.3` name models no list carries, so the
 reader prunes them. `anthropic-api:claude-opus-5-5` is a manual block on a
 listed model and stays blocked.
