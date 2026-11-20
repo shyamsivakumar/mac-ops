@@ -10,6 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .collect import collect_and_store
+from .cost_report import DEFAULT_PI_ROOT, build_report, render
 from .eval_day import write_day_report
 from .store import day_key, posthog_api_key
 
@@ -79,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     daily.add_argument("--no-export", action="store_true")
     daily.add_argument("--baseline-day", default=None)
 
+    cost = sub.add_parser("cost", help="Agent cost per pull request for a local day")
+    cost.add_argument("--day", help="Local calendar day YYYY-MM-DD (default: today)")
+    cost.add_argument("--pi-root", type=Path, default=DEFAULT_PI_ROOT)
+    cost.add_argument("--repo", help="Only pull requests of this owner/name")
+
     sub.add_parser("status", help="Show store paths and PostHog key presence")
 
     args = parser.parse_args(argv)
@@ -105,6 +111,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         result["day"] = day
         print(json.dumps(result, indent=2))
+        return 0
+
+    if args.cmd == "cost":
+        day = args.day or day_key()
+        sys.stdout.write(render(build_report(day, args.pi_root, args.repo)))
         return 0
 
     if args.cmd == "eval":
