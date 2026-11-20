@@ -1,0 +1,221 @@
+SRW-1417 review and merge · #1552 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c
+Type: review gate · finish in 4 minutes. Task: https://github.com/shyamsivakumar/strategy-replay-workbench/issues/1417
+Read the ticket and diff only: `git fetch origin && git diff origin/main...20f8c3f3c6b226a0b20e91b2392fc92920d18b2c`. Check out nothing. Do NOT rerun the suite.
+Confirm srw/agent-check success on 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c using gh api repos/shyamsivakumar/strategy-replay-workbench/commits/20f8c3f3c6b226a0b20e91b2392fc92920d18b2c/statuses.
+Proof file `evidence/SRW-1417/check-proof.md` at this head:
+
+```
+# SRW-1417 check proof
+
+Ticket: #1417 (`P25 · Bot 2 full exits with MARKET fallback`). This build
+supersedes PR #1490, which was re-cut fresh from `origin/main` at `bbcb7bd9`.
+
+The capability ships **off**: `trading.exit_market_fallback` is `false` in
+`bot2/tv_rules.json`. Activation waits for P54 (#1464). This receipt covers the
+build and merge gate only and does not activate the capability.
+
+## Checked head
+
+The code head is the commit this file is committed with. The original build ran
+`heavy scripts/check.sh` from a clean checkout of its own commit. The merge head
+that carries `origin/main` is gated by the Mac check publisher's
+`srw/agent-check` status on the exact PR head, not by a local `scripts/check.sh`
+run; the PR body carries the resulting `Builder check: PASS <full sha>` line.
+
+## Merge refresh
+
+This head merges `origin/main` (26 commits, through `8828db36`) into the P25
+build. One file conflicted, `bot2/trade_machine.js`, in the protective-exit
+writer. The resolution keeps `origin/main`'s SRW-1381 writer, which retries the
+intent write once and then holds the sell and rolls the attempt back, because it
+is strictly stronger than the P25 branch of that statement: P25 held the sell
+only with the capability on, and SRW-1381 holds it for every exit. Every other
+P25 hunk applied unchanged. All 13 `bot2/*.proof.cjs` proofs pass on the merge
+head, including the 27-scenario `srw1290_exit_market_fallback` proof.
+
+## Waived
+
+Device, handset and live-service testing is waived (Shyam 2026-11-14). No
+device or live case was run, and none is reported as failed. Paper-service
+acceptance is the separate P54 (#1464) activation gate.
+
+## What happens to each open trade
+
+- Capability off (default): behaviour is identical to `origin/main`. Open plans,
+  pending attempts, client order ids and cumulative fills are read and written as
+  before.
+- Capability on, trade with no exit yet: the next stop, time or manual full exit
+  sells at the positive fresh bid, reprices at most once, and falls back to MARKET
+  after at most 45 seconds. A missing, zero or stale bid sends MARKET at once.
+- Capability on, trade with a resting exit limit: the limit keeps its saved start
+  time. Once the fallback is due, the limit is reconciled (cancel, then re-read
+  fills) before one MARKET for the proven residual.
+- Strict 1DTE deadline: a passed deadline sends MARKET without reading a quote.
+- Unknown prior sell: reconciled by deterministic client order id before any
+  replacement; a competing sell blocks that trade's submission only.
+
+## Durable intent
+
+With the capability on, a failed ledger write holds the protective sell and the
+next tick retries the same deterministic client order id
+(`durable-intent-before-send`). `origin/main` now holds the sell on a persistent
+write failure for every exit, capability or not (SRW-1381), so the default path
+is main's: `bot2/srw924_failed_save_exit.proof.cjs` requires that no order leaves
+without a durable intent and proves restart recovery without a second sell.
+
+## Commands and results
+
+Run on this host, Node `v22.23.1`, one command at a time.
+
+| check | command | result |
+| --- | --- | --- |
+| 1 | `node bot2/srw1290_exit_market_fallback.proof.cjs` | passed (27) |
+| 2 | `node bot2/srw1233_closed_replay.proof.cjs` | passed |
+| 3 | `node bot2/srw755_restart_ownership.proof.cjs` | passed |
+| 4 | `node bot2/srw755_saved_only_recovery.proof.cjs` | passed |
+| 5 | `node bot2/srw783_exit_unfilled.proof.cjs` | passed |
+| 6 | `node bot2/srw792_partial_exit.proof.cjs` | passed |
+| 7 | `node bot2/srw924_failed_save_exit.proof.cjs` | passed |
+| 8 | `node bot2/trailing_crash.proof.cjs` | passed |
+| 9 | `node bot2/lane2_cancel_reassessment.proof.js` | passed |
+| 10 | `node bot2/lane2_failed_exit_latch.proof.cjs` | passed |
+| 11 | `node bot2/lane2_pending_exit.proof.cjs` | passed |
+| 12 | `node test_srw15_order_path_review.js` | passed |
+| 13 | `node test_srw1341_manual_exit_admission.js` | passed |
+| 14 | `node test_srw1222_sell_scan_class.js` | passed |
+| 15 | `node test_srw1309_sell_recovery_scope.js` | passed |
+| 16 | `node test_srw1322_exit_watchdog.js` | passed |
+| 17 | `node test_srw1323_exit_pass_health.js` | passed |
+| 18 | `node test_srw1245_manual_close_isolation.js` | passed |
+| 19 | `node test_srw259_spx_stop.js` | passed |
+| 20 | `node test_srw261_lifecycle.js` | passed |
+| 21 | `node scripts/srw1016_independent_stop_proof.cjs` | passed |
+| 22 | `node scripts/srw1088_lane2_replay.cjs` | passed |
+| 23 | `node scripts/srw1103_lane3_execution_proof.cjs` | passed |
+| 24 | `node scripts/srw1107_order_delivery_proof.cjs` | passed |
+| 25 | `node scripts/srw1108_integrated_stream_gate.cjs` | passed |
+| 26 | `node scripts/srw1135_proportional_recovery.cjs` | passed |
+| 27 | `node scripts/srw1332_positions_proof.cjs` | passed |
+| 28 | `node scripts/sol_daily_anchor_regression.cjs` | passed |
+| 29 | `node scripts/srw753_lane_adverse_proof.cjs` | passed |
+| 30 | `node scripts/srw755_cf5_main_parity.cjs` | passed |
+| 31 | `node scripts/srw755_fd13_main_parity.cjs` | passed |
+| 32 | `heavy node scripts/srw753_recovery_saved_exit_proof.cjs --heavy` | ok |
+
+Check 33 passed 101/101 (main also 101/101):
+`heavy timeout 900 node scripts/srw700_friday_spxw_service_proof.cjs`
+
+srw700 needs about eight minutes uninterrupted. One earlier run on this head
+under a paused `heavy` slot scored 100/101: the target sell landed at 16.5
+minutes, past the 15 minute window. The back-to-back rerun scored 101/101 on
+this head and on main, so that miss was scheduling delay.
+
+## Pre-existing failures on `origin/main`
+
+Per the coordinator's decision, these proofs are out of this ticket and are not
+edited. Each fails on clean `origin/main` (`bbcb7bd9`) with the same failing
+assertion, actual and expected value as on this head.
+
+- `scripts/srw753_stale_timer_proof.cjs --heavy`
+  - Main: fail, line 31 "foreign order blocks sale" `1 !== 0`
+  - Cause: asserts the foreign-order exit block that #739 (`8d16b95f`) removed
+    on purpose
+- `scripts/srw753_saved_growth_proof.cjs --heavy`
+  - Main: fail, line 40 `1 !== 0` (foreign holding)
+  - Cause: same #739 rule removal
+- `scripts/srw754_lock_proof.cjs`
+  - Main: fail, line 31 Promise identity
+  - Cause: `tick` became async in #1072 (`03cc550d`); coalescing still holds
+- `scripts/owned_lane2_exit_readiness_proof.cjs`
+  - Main: fail, line 105 health `503 !== 200`
+  - Cause: un-ticked machine is unhealthy since #1072 (`03cc550d`)
+- `scripts/srw755_lane2_no_hold_replay.cjs --heavy`
+  - Main: fail, capture path assertion / ENOENT
+  - Cause: needs the deleted private 2026-11-09 capture
+- `scripts/srw753_lane_parity.cjs`
+  - Main: fail, `production.json` ENOENT
+  - Cause: needs the deleted private capture
+- `scripts/srw753_migration_partial_proof.cjs --heavy`
+  - Main: fail, cannot find `../observability/trace_export.cjs`
+  - Cause: baseline copy predates modules `trade_machine` now requires
+- `scripts/srw753_lane_review_proof.cjs`
+  - Main: fail, line 126 `0 !== 1` (`unsupported_lane_rule`)
+  - Cause: lane fixture predates the #1014 (`832443ef`) lane rule check
+- `scripts/srw753_lane_health_proof.cjs`
+  - Main: fail, line 36 `unsupported_lane_rule`
+  - Cause: same #1014 fixture drift; not an exit path
+- `scripts/srw1101_lane_registry_proof.cjs`
+  - Main: fail, line 152 `409 !== 200`
+  - Cause: lane3 fixture predates SRW-1103 (`c7e58f81`); not an exit path
+- `scripts/srw754_daily_corruption_proof.cjs`
+  - Main: fail, line 49 daily record mutated
+  - Cause: flat booking writes into a corrupt daily since `b2b9335b` (#1017);
+    product follow-up, outside this ticket
+
+## Mutation checks
+
+Each new proof scenario was checked in #1490 by reverting its fix and confirming
+the scenario fails; the code is carried over unchanged. These results are from
+the pre-merge revision. The merge moved the `durable-intent-before-send`
+scenario's two injected write failures onto `origin/main`'s outer writer, which
+returns before `send()` runs, so on the merge head that scenario still proves a
+persistent failure holds the sell but no longer reaches the inner
+`exit_intent_not_durable` throw. The throw stays reachable when the outer write
+succeeds and the later save fails.
+
+- Fix: durable intent before send
+  - Reverted: `else save(true)`
+  - Fails: `durable-intent-before-send`
+- Fix: due exit does not await the assessment
+  - Reverted: `await assessment`
+  - Fails: `due-exit-not-delayed-by-assessment`
+- Fix: runtime recovery reason forces MARKET
+  - Reverted: drop the reason check
+  - Fails: `runtime-recovery-market`
+- Fix: stale bid or fallback during the re-read
+  - Reverted: drop the recheck
+  - Fails: `stale-after-read`, `fallback-during-read`
+- Fix: market-only latch
+  - Reverted: drop `exit_market_only`
+  - Fails: `market-only-durable`
+- Fix: due row out of the assessment batch
+  - Reverted: drop the filter
+  - Fails: `due-closeout-no-assessment-wait`
+```
+
+Read it before the diff. Every check it lists must be `passed`; a `failed` or `not run` check is a finding. It names the commit it checked: confirm that commit is this head or an ancestor of it, and that the diff between them only adds the proof file.
+Re-read prior gate findings and say whether each is resolved.
+Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
+Merge bar (Shyam, 2026-11-16). This overrides any stricter proof wording in the ticket.
+
+PASS when all of these hold:
+- The diff is correct: no bug you can point to at file:line.
+- The diff is scoped to the ticket: no runtime change outside it, no weakened unrelated test, no workflow file, no secret.
+- The repo check passed on this exact head (the status or the `Builder check: PASS <head>` line).
+
+Missing proof does not block. If the ticket asks for evidence the builder could not produce (a complete suite run, live or device receipts, acceptance artifacts), list each missing item as a minor finding headed "Left for later" and post that list as a PR comment before merging. Do not FAIL for missing proof alone.
+
+Exception, full proof bar kept: if the diff changes stop logic, exit logic, or trade execution (order placement, fills, sizing, booking of executed trades), every proof the ticket asks for is required, and missing proof is a major finding.
+
+Say in one line which bar you applied and why.
+
+Severity bar (Shyam, 2026-11-19). This applies to every gate:
+- A finding is critical or major only when it is likely to happen in this fleet's real use, or would cause harm that is hard to undo: data loss, a merge or push that should not happen, a lane or queue that stays stuck, a secret leak, a wrong trade or exit. State in one sentence how it happens in practice: who or what triggers it, and how often.
+- A case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce is minor. Minors never fail a PR. List them under 'Left for later'; the Coordinator turns them into a follow-up issue.
+- If every remaining finding is minor, the verdict is PASS.
+
+Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies to every gate:
+- Round 1 must list every critical and major found, not just the first.
+- Round 2 and later: raise only findings in lines changed since the previous reviewed head, plus any earlier critical or major still open. Anything else you notice is a minor under 'Left for later'.
+- Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.
+- After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; no 4th review as is.
+
+Failure blast radius (Shyam, 2026-11-18, after a sell-recovery check blocked every Bot 1 exit for 1.5 days):
+- For any change that can stop, skip or delay an order or an exit, state what happens to EVERY open trade when the new check fails or throws, and to trades unrelated to the bad input. A check that fails closed for all trades because of one record is a major finding, even if the ticket asks for it; flag the ticket instead.
+- Ask whether real production data could contain inputs the tests do not (old id formats, test trades, partial records). If the PR's proofs only use clean fixtures, list that as a major gap for exit and order paths.
+
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator.
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+Reconfirm the PR head is 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c; otherwise CHECK: FAIL. End `CHECK: PASS 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c` or `CHECK: FAIL 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. Verify every Provides claim from the ticket on head 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c. A ticket with no Provides section has no claims, so it passes this check trivially. Include the exact line `PROVIDES: PASS 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c` before the final CHECK and VERDICT lines whenever every claim holds, and `PROVIDES: FAIL 20f8c3f3c6b226a0b20e91b2392fc92920d18b2c` with `VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.
+Never call emp. Never print secrets.

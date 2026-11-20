@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
-from gate_bar import GATE_BAR
-from gate_policy import complete_pass
+from gate_bar import BUILDER_GATE_NOTE, GATE_BAR, REVIEW_BAR
+from gate_policy import complete_pass, round_context
 import gh_gateway
 import journal
 import prompt_paths
@@ -14,6 +14,7 @@ import prompt_paths
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
 COORDQ = os.environ.get("TICKET_COORDQ", "coordq")
 QUEUE_DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+LANE_LEDGER = os.environ.get("COORDQ_LANE_LEDGER", os.path.expanduser("~/Code/coordinator/loop/lanes-ledger.json"))
 CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
 # The board cache outlives the minute a board poller waits, so a poller
 # that reads the board every minute is served by the cache for most of its
@@ -1363,7 +1364,7 @@ def assemble_brief(cfg, t, request_id, issue):
     head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
     if not filled:
         head.append(f"Run id: `{request_id}`")
-    parts = ["\n".join(head), ANSWER_FORMAT, body]
+    parts = ["\n".join(head), ANSWER_FORMAT, f"{REVIEW_BAR}\n{BUILDER_GATE_NOTE}", body]
     decisions = coordinator_decisions(issue)
     if decisions:
         parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))
@@ -1687,13 +1688,37 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False, round_info=None):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
                             fast_forward_main=False, ascend_override=ascend,
                             proof=proof, proof_path=proof_path, proof_state=proof_state,
-                            prompt=prompt)
+                            prompt=prompt, round_info=round_info)
+
+
+def lane_ledger():
+    try:
+        with open(LANE_LEDGER) as handle:
+            ledger = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return ledger if isinstance(ledger, dict) else {}
+
+
+def gate_round(repo, number, head):
+    """The review round of a head, from the lane's ledger and the earlier gate thread."""
+    def read_thread(thread_id):
+        try:
+            return t3_call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
+        except Refuse:
+            return {}
+    try:
+        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as handle:
+            receipts = json.load(handle)
+    except (OSError, ValueError):
+        receipts = {}
+    return round_context(repo, number, head, lane_ledger(), receipts, read_thread)
 
 
 def pull_changed_count(repo, number):
@@ -1790,7 +1815,8 @@ def cmd_gate(a):
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt_hold(repo, number, pull.get("changedFiles"),
-                                              base, head))
+                                              base, head),
+                           round_info=gate_round(repo, number, head))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},

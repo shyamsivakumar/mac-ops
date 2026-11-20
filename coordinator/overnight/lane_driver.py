@@ -29,7 +29,8 @@ import gh_gateway
 import close_check
 import gate_policy
 import journal
-from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
+from gate_bar import REVIEW_BAR
+from gate_policy import LANE_REPOS, MERGE_REPOS, OPEN_FINDINGS_NONE, complete_pass, merge_mode, prior_findings
 import prompt_paths
 
 # The lane driver loads inside the overnight command, so it names itself on
@@ -753,13 +754,6 @@ def record_failed_review(repo, number, head, ledger):
     if count >= GATE_ROUND_CAP:
         journal_event("round_cap", repo, number, head, reviews=count)
     return count
-
-
-OPEN_FINDINGS_NONE = "Open critical or major findings: none"
-OPEN_FINDINGS_INSTRUCTION = (
-    "This is the last review round. The second-to-last line of your report must be exactly "
-    f"`{OPEN_FINDINGS_NONE}` or `Open critical or major findings: <n>` (the count of critical "
-    "and major findings still open), after your CHECK line and followed by the final VERDICT line.")
 
 
 def no_open_findings(reply, head):
@@ -1524,10 +1518,15 @@ def act_on_pr(repo, number, ledger):
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
-        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, "
+        findings = prior_findings(reply)
+        checklist = ("Findings to fix:\n" + "\n".join(f"- [ ] {finding}" for finding in findings) + "\n\n") if findings else ""
+        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. {REVIEW_BAR}\n\n"
+               f"Fix every critical and major finding, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
-               + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
+               + checklist
+               + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n")
+               + "Reviewer reply:\n" + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     if gate_rounds_used(repo, number, ledger):
         # The pull request has used the three reviews the rule gives it.
@@ -1548,8 +1547,6 @@ def act_on_pr(repo, number, ledger):
     brief = run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
     if head not in brief:
         return f"#{number}: no gate brief ({brief[-120:]})"
-    if failed_reviews(repo, number, ledger)[0] >= GATE_ROUND_CAP - 1:
-        brief += f"\n{OPEN_FINDINGS_INSTRUCTION}\n"
     key = CFG[repo]["key"]
     args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"gate:{repo}#{number}:{head}:{tag}:{base}:lane",

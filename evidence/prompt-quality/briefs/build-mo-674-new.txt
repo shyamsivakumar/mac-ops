@@ -1,0 +1,85 @@
+Ticket: https://github.com/shyamsivakumar/mac-ops/issues/674
+Reviewer for the gate: astra
+Run id: `ticket:shyamsivakumar/mac-ops#674:a1`
+
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+
+Review bar:
+- Critical: a secret leak, data loss, or a wrong trade or exit.
+- Major: a bug at file:line that is likely in this fleet's real use or hard to undo (a merge or push that should not happen, a lane or queue that stays stuck); say who or what triggers it and how often. Also major: a runtime change outside the ticket, a weakened unrelated test, circular proof, a workflow file.
+- Minor: everything else, such as a case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce. Minors never fail a PR; list them under "Left for later". Only minors left means PASS.
+The gate reads your PR against this bar. It checks the repo check result on your exact final head (the `Builder check: PASS <full sha>` line, or `srw/agent-check` in strategy-replay-workbench), the proof file, and that every changed line traces to the ticket.
+
+## Goal and why
+
+Since #670 (MO-1112) only gatekeep launches gates, and gatekeep's gate brief never asks the reviewer for the open-findings line. The lane's brief adds `OPEN_FINDINGS_INSTRUCTION` (`coordinator/overnight/lane_driver.py:691`) from round 3 on, asking the reviewer to end with `Open critical or major findings: none` when that is true. Gatekeep's brief (`build_gate_brief` in `coordinator/bin/gate_policy.py`) never had it. So the round-3 FAIL merge rule (#626) works only if a reviewer writes the line unprompted; otherwise the PR goes to the rounds decision for Shyam.
+
+Fix: `build_gate_brief` adds the instruction when the PR has 2 or more earlier failed gate rounds. Gatekeep counts those from its own records (FAIL verdicts on earlier heads of the same PR), the same count the lane used. Move `OPEN_FINDINGS_INSTRUCTION` to `gate_policy.py` so one copy exists, and restore check (f) of `gate-round-cap` in `selftest.py` against gatekeep's brief.
+
+## Context
+
+- `coordinator/bin/gate_policy.py` `build_gate_brief` builds the whole gate message. It holds no queue or ledger state, so the count of earlier failed rounds has to be passed in by the caller.
+- `coordinator/bin/coordq` `gate_args` (around line 1590) is the one place gatekeep calls `build_gate_brief`. Gatekeep keeps each head's gate record under `gatedHeads` (see `has_verdict`, around line 150); a FAIL verdict on an earlier head of the same PR is one failed round.
+- `coordinator/overnight/lane_driver.py:691` defines `OPEN_FINDINGS_INSTRUCTION`, and line 1331 appends it to the lane's brief when `failed_reviews(...)[0] >= GATE_ROUND_CAP - 1` (`GATE_ROUND_CAP` is 3 at line 49). Once the brief carries the instruction itself, the append at 1331 is a duplicate and goes.
+- `coordinator/overnight/selftest.py` line 822 notes that the round-cap case is asserted in the `gate-round-cap` eval; check (f) there was dropped when only gatekeep started launching gates and is restored here.
+
+## Scope and non-goals
+
+In:
+- `coordinator/bin/gate_policy.py`: own `OPEN_FINDINGS_INSTRUCTION` (and `OPEN_FINDINGS_NONE` if the lane's `no_open_findings` needs it); `build_gate_brief` adds the instruction when the PR has 2 or more earlier failed rounds.
+- `coordinator/bin/coordq`: gatekeep counts the earlier FAIL verdicts of the same PR from its own records and passes the count into the brief.
+- `coordinator/overnight/lane_driver.py`: import the instruction from `gate_policy` and drop its own copy and the append at line 1331.
+- `coordinator/overnight/selftest.py`: restore check (f) of `gate-round-cap` against gatekeep's brief.
+- `evidence/MO-674/check-proof.md`: the check proof for the final head.
+
+Out:
+- No change to `GATE_ROUND_CAP`, the round counting the lane does for its own decisions, or the merge rule of #626.
+- No new config key, no new file, no new flag.
+
+## Design fit
+
+Lane spec: one brief for every gate (`gate_args` says so). The instruction belongs in the shared brief builder so gatekeep and the lane send the same text, and `gate_policy.py` is already where the PROVIDES ask lives. A count passed into `build_gate_brief` keeps `gate_policy.py` free of queue state.
+
+Requires: `origin/main` at `6d35521a` or later. #675 must merge first: both tickets change the brief code in `build_gate_brief`.
+Provides: a gate brief that names the open-findings line from round 3 on, for gatekeep as well as the lane, with one copy of the instruction text.
+
+## Blocked by
+
+#675 (both tickets change `build_gate_brief` in `coordinator/bin/gate_policy.py`, so #674 is blocked by #675 and rebases on it).
+
+## Acceptance and proof
+
+1. `python3 coordinator/overnight/overnight selftest` passes, with check (f) of `gate-round-cap` restored and asserting against gatekeep's brief: a brief for a PR with 0 or 1 earlier failed rounds has no open-findings instruction, and a brief for a PR with 2 earlier failed rounds has it exactly once.
+2. `grep -rn "OPEN_FINDINGS_INSTRUCTION =" coordinator` finds one definition, in `gate_policy.py`.
+3. `python3 scripts/mac_ops_fast_check.py` passes on the final head, and `evidence/MO-674/check-proof.md` names that head and lists every check as passed, failed or not run with the command that ran it.
+Builder check line: `Builder check: PASS <full sha>` on its own line in the PR body, for the exact head.
+
+Device, handset and live-service testing is waived (Shyam 2026-11-14: "no testing is needed lets just finish backlog building everything"). No new test files: the proof is new cases in the existing `coordinator/overnight/selftest.py` or an existing `tests/` module, plus the existing suites still passing.
+
+## CI
+
+No workflows and no GitHub Actions, ever (repo rule). The local check is `python3 scripts/mac_ops_fast_check.py`, and it writes `evidence/MO-674/check-proof.md`, which is committed with the change.
+
+## Must not cause
+
+- No second copy of the instruction text, and no brief that carries it twice.
+- No instruction in a brief for a PR with fewer than 2 earlier failed rounds.
+- No change to the lane's round counts or to when a PR goes to the rounds decision.
+- No weakening of an existing test to make the check pass.
+
+## Data/secrets and stop conditions
+
+No secrets, no `.env`, no token printing. Stop and report if the earlier-round count cannot be read from gatekeep's own records without a new GitHub call, or if the check fails for a reason outside this diff.
+
+## Rollback
+
+Revert the merge commit. Gatekeep goes back to briefs with no open-findings instruction, and the lane keeps its own copy.
+
+## Gate
+
+The PR is held for Shyam's merge: `coordinator/bin/gate_policy.py` is a prompt path, so no gate or lane merges it. Astra gate on the PR head still runs and reports the verdict; Shyam merges a passing PR himself.
+
+## Finish
+
+Report the PR number, the merged head sha, and the check line. Close #674 when the PR merges.
+

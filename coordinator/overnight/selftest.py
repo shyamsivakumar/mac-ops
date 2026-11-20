@@ -2111,14 +2111,13 @@ def gate_round_cap():
             result, _ = at_cap(35, none_line)
         exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
         exact(merged, [(30, heads[2])])
-        # (f) the brief asks for the line from round 3 on, not at round 1.
-        def brief_for(ledger):
-            with patch.object(lane, "start", lambda args, prio, led, lkey: briefs.append(args["message"]) or "started"):
-                act(36, heads[3], ledger, verdict=("absent", None, ""))
-            return briefs[-1]
-        two_rounds = {f"fix:{repo}#36:{heads[0]}": "sent", f"fix:{repo}#36:{heads[1]}": "sent"}
-        exact(lane.OPEN_FINDINGS_NONE in brief_for(two_rounds), True)
-        exact(lane.OPEN_FINDINGS_NONE in brief_for({}), False)
+        # (f) the gate brief asks for the line from round 3 on, not before; the lane adds nothing to it.
+        import gate_policy
+        def round_text(number):
+            return gate_policy.round_brief({"round": number, "previous": "p" * 40, "findings": []}, "h" * 40)
+        exact(lane.OPEN_FINDINGS_NONE in round_text(3), True)
+        exact(lane.OPEN_FINDINGS_NONE in round_text(2), False)
+        exact(lane.OPEN_FINDINGS_NONE in round_text(1), False)
     gatekeep_round_cap()
 
 

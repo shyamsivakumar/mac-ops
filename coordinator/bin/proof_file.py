@@ -76,10 +76,9 @@ def section(state, text, path):
     """The brief lines that carry the proof file to the reviewer."""
     if state == FOUND:
         return (f"Proof file `{path}` at this head:\n\n```\n{(text or '').strip()}\n```\n\n"
-                "Read it before the diff. Every check it lists must be `passed`; a `failed` or "
-                "`not run` check is a finding. It names the commit it checked: confirm that "
-                "commit is this head or an ancestor of it, and that the diff between them only "
-                "adds the proof file.")
+                "Every check it lists must be `passed`; `failed` or "
+                "`not run` is a finding. Confirm the commit it names is this head or an ancestor "
+                "of it, and that the diff between them only adds the proof file.")
     if state == UNREADABLE:
         return (f"Proof file `{path}` could not be read ({text}). That is a failed read, not a "
                 "confirmed absence: say so in one line, and treat the checks as unproven.")

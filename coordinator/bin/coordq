@@ -1785,7 +1785,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
 DEFER = object()
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main"):
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main", round_info=None):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -1795,7 +1795,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     from gate_policy import build_gate_brief
     message = build_gate_brief(settings, repo, issue, number, head, publisher, base=base,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
-                               prompt=prompt)
+                               prompt=prompt, round_info=round_info)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
@@ -1828,6 +1828,19 @@ def lane_ledger():
     except (OSError, ValueError):
         return {}
     return ledger if isinstance(ledger, dict) else {}
+
+
+def gate_round(repo, number, head, rounds, receipts):
+    """The review round of a head, from the lane's ledger and the earlier gate thread."""
+    from gate_policy import round_context
+
+    def read_thread(thread_id):
+        code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
+        try:
+            return {} if code else json.loads(out)
+        except ValueError:
+            return {}
+    return round_context(repo, number, head, rounds or {}, receipts, read_thread)
 
 
 def gate_rounds_used(repo, number, ledger):
@@ -1980,10 +1993,11 @@ def gate_candidates(config, rounds=None):
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
-                                         base=(pr.get("base") or {}).get("ref") or "main")}
+                                         base=(pr.get("base") or {}).get("ref") or "main",
+                                         round_info=gate_round(repo, number, head, rounds, receipts))}
                 break
             else:
-                found = gate_request(repo, pr, settings, config, receipts, login)
+                found = gate_request(repo, pr, settings, config, receipts, login, rounds=rounds)
                 if found is DEFER:
                     print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
                           file=sys.stderr)
@@ -2185,9 +2199,8 @@ def cmd_fix(a):
         data = json.loads(out)
     except ValueError:
         die("refused: the gate thread could not be read")
-    texts = [i.get("text") or "" for i in (data.get("items") or [])
-             if i.get("type") == "assistant_message"]
-    report = texts[-1] if texts else ""
+    from gate_policy import reply_of
+    report = reply_of(data)
     if not report.rstrip().endswith("VERDICT: FAIL"):
         die(f"refused: the gate of {repo}#{number} did not end VERDICT: FAIL")
     issue = 0
@@ -2252,7 +2265,7 @@ def check_names_head(body, head, publisher, checks):
 
 
 def gate_request(repo, pr, settings, config, receipts, login, optional=True,
-                 fresh=False):
+                 fresh=False, rounds=None):
     """Return the gate request of one open pull request, or None.
 
     The backstop gates a head the queue's own gatekeeper left alone. The
@@ -2284,7 +2297,8 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
                                prompt=prompt == prompt_paths.HOLD,
-                               base=(pr.get("base") or {}).get("ref") or "main"), builder_models(thread, runs)
+                               base=(pr.get("base") or {}).get("ref") or "main",
+                               round_info=gate_round(repo, number, head, rounds, receipts)), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
                        optional=optional, fresh=fresh)
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
@@ -2303,7 +2317,8 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
     return key, gate_args(settings, repo, None, number, head, publisher, model,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt == prompt_paths.HOLD,
-                           base=(pr.get("base") or {}).get("ref") or "main"), []
+                           base=(pr.get("base") or {}).get("ref") or "main",
+                           round_info=gate_round(repo, number, head, rounds, receipts)), []
 
 
 def parse_ref(ref):
@@ -2357,7 +2372,7 @@ def cmd_gate(a):
     login = gh_gateway.cached_login(DIR, read_login)
     # An explicit gate is a required read: the floor applies to polling.
     found = gate_request(repo, pr, settings, config, load_receipts(), login,
-                         optional=False, fresh=True)
+                         optional=False, fresh=True, rounds=lane_ledger())
     if found is DEFER:
         die(f"refused: the changed files of {repo}#{number} could not be read, and a gate "
             "that cannot read them might order a merge of prompt text. Retry the gate.")

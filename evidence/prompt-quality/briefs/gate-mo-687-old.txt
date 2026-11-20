@@ -1,0 +1,65 @@
+MO-685 review and merge · #687 a48bd00cbecb6ca18650e77821f704c9c1a2f295
+Type: review gate · finish in 4 minutes. Task: https://github.com/shyamsivakumar/mac-ops/issues/685
+Read the ticket and diff only: `git fetch origin && git diff origin/main...a48bd00cbecb6ca18650e77821f704c9c1a2f295`. Check out nothing. Do NOT rerun the suite.
+Confirm the exact PR-body line `Builder check: PASS a48bd00cbecb6ca18650e77821f704c9c1a2f295`.
+Proof file `evidence/MO-685/check-proof.md` at this head:
+
+```
+# Check proof
+
+Command: `python3 scripts/mac_ops_fast_check.py`
+Checked commit: `2af1b6e40a8a0d1ff5e36c0e0827c81d10d3f916`
+Working tree clean when the checks ran: yes
+Run result: passed
+
+| Check | Command | Result | Detail |
+| --- | --- | --- | --- |
+| lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
+| overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
+| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
+| mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-gct2zjm7 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-gct2zjm7/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| heavy help | `python3 heavy.py --help` | passed |  |
+
+A result is `passed`, `failed` or `not run`. A failed check stopped the run,
+so every check after it is `not run`. A tool that is not on this machine
+is recorded as `not run` too, and leaves the run incomplete: the run is
+then not a pass.
+```
+
+Read it before the diff. Every check it lists must be `passed`; a `failed` or `not run` check is a finding. It names the commit it checked: confirm that commit is this head or an ancestor of it, and that the diff between them only adds the proof file.
+Re-read prior gate findings and say whether each is resolved.
+Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
+Merge bar (Shyam, 2026-11-16). This overrides any stricter proof wording in the ticket.
+
+PASS when all of these hold:
+- The diff is correct: no bug you can point to at file:line.
+- The diff is scoped to the ticket: no runtime change outside it, no weakened unrelated test, no workflow file, no secret.
+- The repo check passed on this exact head (the status or the `Builder check: PASS <head>` line).
+
+Missing proof does not block. If the ticket asks for evidence the builder could not produce (a complete suite run, live or device receipts, acceptance artifacts), list each missing item as a minor finding headed "Left for later" and post that list as a PR comment before merging. Do not FAIL for missing proof alone.
+
+Exception, full proof bar kept: if the diff changes stop logic, exit logic, or trade execution (order placement, fills, sizing, booking of executed trades), every proof the ticket asks for is required, and missing proof is a major finding.
+
+Say in one line which bar you applied and why.
+
+Severity bar (Shyam, 2026-11-19). This applies to every gate:
+- A finding is critical or major only when it is likely to happen in this fleet's real use, or would cause harm that is hard to undo: data loss, a merge or push that should not happen, a lane or queue that stays stuck, a secret leak, a wrong trade or exit. State in one sentence how it happens in practice: who or what triggers it, and how often.
+- A case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce is minor. Minors never fail a PR. List them under 'Left for later'; the Coordinator turns them into a follow-up issue.
+- If every remaining finding is minor, the verdict is PASS.
+
+Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies to every gate:
+- Round 1 must list every critical and major found, not just the first.
+- Round 2 and later: raise only findings in lines changed since the previous reviewed head, plus any earlier critical or major still open. Anything else you notice is a minor under 'Left for later'.
+- Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.
+- After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; no 4th review as is.
+
+Failure blast radius (Shyam, 2026-11-18, after a sell-recovery check blocked every Bot 1 exit for 1.5 days):
+- For any change that can stop, skip or delay an order or an exit, state what happens to EVERY open trade when the new check fails or throws, and to trades unrelated to the bad input. A check that fails closed for all trades because of one record is a major finding, even if the ticket asks for it; flag the ticket instead.
+- Ask whether real production data could contain inputs the tests do not (old id formats, test trades, partial records). If the PR's proofs only use clean fixtures, list that as a major gap for exit and order paths.
+
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator.
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+Reconfirm the PR head is a48bd00cbecb6ca18650e77821f704c9c1a2f295; otherwise CHECK: FAIL. End `CHECK: PASS a48bd00cbecb6ca18650e77821f704c9c1a2f295` or `CHECK: FAIL a48bd00cbecb6ca18650e77821f704c9c1a2f295`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. Verify every Provides claim from the ticket on head a48bd00cbecb6ca18650e77821f704c9c1a2f295. A ticket with no Provides section has no claims, so it passes this check trivially. Include the exact line `PROVIDES: PASS a48bd00cbecb6ca18650e77821f704c9c1a2f295` before the final CHECK and VERDICT lines whenever every claim holds, and `PROVIDES: FAIL a48bd00cbecb6ca18650e77821f704c9c1a2f295` with `VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.
+Never call emp. Never print secrets.

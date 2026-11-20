@@ -1,0 +1,42 @@
+MO-685 review and merge · #687 a48bd00cbecb6ca18650e77821f704c9c1a2f295 · round 1 of 3
+Review bar:
+- Critical: a secret leak, data loss, or a wrong trade or exit.
+- Major: a bug at file:line that is likely in this fleet's real use or hard to undo (a merge or push that should not happen, a lane or queue that stays stuck); say who or what triggers it and how often. Also major: a runtime change outside the ticket, a weakened unrelated test, circular proof, a workflow file.
+- Minor: everything else, such as a case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce. Minors never fail a PR; list them under "Left for later". Only minors left means PASS.
+List every critical and major, not only the first.
+Task: https://github.com/shyamsivakumar/mac-ops/issues/685. Read the ticket and the diff only: `git fetch origin && git diff origin/main...a48bd00cbecb6ca18650e77821f704c9c1a2f295`. Do not switch branches or rerun the suite.
+CHECK means one thing: the repo check on this exact head. Confirm the exact PR-body line `Builder check: PASS a48bd00cbecb6ca18650e77821f704c9c1a2f295`.
+Proof file `evidence/MO-685/check-proof.md` at this head:
+
+```
+# Check proof
+
+Command: `python3 scripts/mac_ops_fast_check.py`
+Checked commit: `2af1b6e40a8a0d1ff5e36c0e0827c81d10d3f916`
+Working tree clean when the checks ran: yes
+Run result: passed
+
+| Check | Command | Result | Detail |
+| --- | --- | --- | --- |
+| lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
+| overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
+| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
+| mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-gct2zjm7 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-gct2zjm7/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| heavy help | `python3 heavy.py --help` | passed |  |
+
+A result is `passed`, `failed` or `not run`. A failed check stopped the run,
+so every check after it is `not run`. A tool that is not on this machine
+is recorded as `not run` too, and leaves the run incomplete: the run is
+then not a pass.
+```
+
+Every check it lists must be `passed`; `failed` or `not run` is a finding. Confirm the commit it names is this head or an ancestor of it, and that the diff between them only adds the proof file.
+One finding per line: tag, title, file:line.
+Merge bar, over any stricter proof wording in the ticket: PASS when no critical or major remains and the repo check passed on this exact head (the status or the `Builder check: PASS <head>` line). Missing proof alone never fails a PR: list each missing item the ticket asked for (a suite run, live or device receipts, acceptance artifacts) as a minor under "Left for later" and post the list as a PR comment before merging. Exception: a diff that changes stop logic, exit logic or trade execution (order placement, fills, sizing, booking of executed trades) needs every proof the ticket asks for, and missing proof is major. Say in one line which bar you applied.
+Blast radius: for a change that can stop, skip or delay an order or an exit, say what happens to EVERY open trade, unrelated trades included, if the new check fails or throws. A check that fails closed for all trades over one record is major even if the ticket asks for it; flag the ticket. Proofs on exit and order paths that use only clean fixtures are a major gap: real data may hold old id formats, test trades or partial records.
+When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator.
+When a turn ends by asking Shyam a question, put the question on one line, then 2 to 4 options as lines `1. <option>`, `2. <option>` and so on, and end with the line `(Recommended: <option text word for word>)`.
+Reconfirm the PR head is still a48bd00cbecb6ca18650e77821f704c9c1a2f295, else CHECK: FAIL. End `CHECK: PASS a48bd00cbecb6ca18650e77821f704c9c1a2f295` or `CHECK: FAIL a48bd00cbecb6ca18650e77821f704c9c1a2f295`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. Verify each Provides claim on head a48bd00cbecb6ca18650e77821f704c9c1a2f295 (none: pass). Before the final CHECK and VERDICT lines print `PROVIDES: PASS a48bd00cbecb6ca18650e77821f704c9c1a2f295`, or `PROVIDES: FAIL a48bd00cbecb6ca18650e77821f704c9c1a2f295` with `VERDICT: FAIL` when a claim fails; a PASS reply without the PROVIDES line is read as no verdict.
+Never call emp. Never print secrets.
