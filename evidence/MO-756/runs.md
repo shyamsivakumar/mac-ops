@@ -12,16 +12,18 @@ KeyError: 'escaped_merges'
 
 ## Real 7-day count, mac-ops, merges 2026-11-13 to 2026-11-20 (read-only gh, adapted from the proof command)
 
-Fix links come from merged PRs up to 2026-11-27; reopen events from the issue events API (one reopen, #378, matched no merge). Script ran escaped_merges on the real gh data.
+Rule: a fix PR that names the merged PR number (`Fixes #<pr>`, `Follow-up to #<pr>`) counts. A fix PR that names only the ticket counts only if that ticket was closed before the fix PR was created (closed tickets come from one extra issue search over the window plus 7 days). Reverts: none. Reopen events: one in the repo (#378, 2026-11-16), matched no merge.
 
-```
-merges 255 escaped 7
-fix shyamsivakumar/mac-ops#203 Read the board and open pull requests into overnight intake records (R
-fix shyamsivakumar/mac-ops#245 Overnight T3c: Intake orders the board (Refs #178)
-fix shyamsivakumar/mac-ops#256 MO-244 · coordq fix sends the findings for one head only once
-fix shyamsivakumar/mac-ops#262 MO-214 · Overnight T6: Evidence rule for done items
-fix shyamsivakumar/mac-ops#308 Reclaim a dispatch reservation whose launch finished before it was see
-fix shyamsivakumar/mac-ops#310 MO-267 · Cap gatekeep's re-gate of a dead head and back off between re
-fix shyamsivakumar/mac-ops#408 Keep lane passes running after item command failures
-old reverted []
-```
+Result: 7 escaped of 255 merges. Each of the 7 was checked by hand against the fix PR body.
+
+| Merge | Fix PR | Verdict | Reason |
+| --- | --- | --- | --- |
+| #203 intake records | #205 | counted | body says "Follow-up to #203"; merged 2026-11-13 16:55, fix merged 17:04 |
+| #245 T3c ordering | #288 | counted | body says "Follow-up to #245"; fixes blockers found in the review round |
+| #256 coordq fix findings | #259 | counted | body says "Follow-up to #256"; merged 4 minutes later with review fixes |
+| #262 T6 evidence rule | #263 | counted | body says "Follow-up to #262"; carries the T6 review fixes |
+| #308 dispatch reservation | #313 | counted | body says "Follow-up to #308"; reclaim rule corrected |
+| #310 gatekeep re-gate cap | #312 | counted | body says "Follow-up to #310"; one explicit gate per given-up head |
+| #408 lane passes | #409 | counted | body says "Follow-up to #408"; restores the item failure raise |
+
+Dropped by the new rule: none. All 7 name the PR number, so the ticket-only rule changed nothing today. Ticket-only matches that the old code counted were zero.
