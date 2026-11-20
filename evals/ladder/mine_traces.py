@@ -42,7 +42,7 @@ RULES = {
     ),
 }
 SECRET = re.compile(
-    r"(authorization:\s*\S+(\s+\S+)?|(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+|"
+    r"([a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s/]+@|authorization:\s*\S+(\s+\S+)?|(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+|"
     r"\b(ghp|gho|ghs|github_pat|sk|xox[bp])[-_][A-Za-z0-9_-]{8,}|\bBearer\s+\S+)",
     re.I,
 )
