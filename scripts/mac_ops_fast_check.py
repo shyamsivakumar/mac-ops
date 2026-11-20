@@ -31,6 +31,10 @@ SUFFIXLESS_PYTHON = (
     "coordinator/bin/scorecard",
     "coordinator/pi/bin/coord-tick",
 )
+LOADED_SCRIPTS = (
+    "coordinator/bin/coordq",
+    "coordinator/bin/ticket",
+)
 
 DEFAULT_PROOF = "evidence/check-proof.md"
 
@@ -375,6 +379,10 @@ def main():
     modules = {module_name(path): path for path in python_files}
     dependencies = {name: imports(path) for name, path in modules.items()}
     affected = {module_name(ROOT / name) for name in changes if name.endswith(".py")}
+    loaded = [Path(name).name for name in LOADED_SCRIPTS if name in changes]
+    affected |= {name for name, path in modules.items()
+                 if path.parent == ROOT / "tests"
+                 and any(f'"{script}"' in path.read_text() for script in loaded)}
     while True:
         new = affected | {name for name, deps in dependencies.items() if any(dep == changed or dep.startswith(changed + ".") for dep in deps for changed in affected)}
         if new == affected:

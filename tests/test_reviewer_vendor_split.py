@@ -1,6 +1,16 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 from tests.test_gatekeep_backstop_reviewer import load_coordq
+
+
+def setUpModule():
+    queue = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(queue.cleanup)
+    environment = patch.dict(os.environ, {"COORDQ_DIR": queue.name})
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
 
 
 def review_selection(q, entry_id):
