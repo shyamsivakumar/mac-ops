@@ -623,14 +623,16 @@ def main():
         return
     isolation = load_isolation()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+           **isolation.environment(),
            "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR")),
-           **isolation.environment()}
+           "COORDQ_DIR": tempfile.mkdtemp(prefix="check-queue-", dir=os.environ.get("TMPDIR"))}
     # The suites that prove the entry points install the isolation run under
     # this environment instead: it carries no fake `gh` on PATH and no temp
     # log path, so an entry point that lost its installer is not covered for
     # by this side.
     entry_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"]}
+                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"],
+                 "COORDQ_DIR": env["COORDQ_DIR"]}
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
     dirty = [line for line in git("status", "--porcelain", "--untracked-files=all").decode().splitlines()

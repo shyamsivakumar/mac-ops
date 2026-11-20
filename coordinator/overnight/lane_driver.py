@@ -45,8 +45,9 @@ SCORECARD_MAX_SECONDS = 600
 SCORECARD_TRIES = 3
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
-RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
-QUEUE = "/Users/shyamsivakumar/Code/coordinator/queue/queue.json"
+QUEUE_DIR = os.environ.get("COORDQ_DIR", "/Users/shyamsivakumar/Code/coordinator/queue")
+RECEIPTS = os.path.join(QUEUE_DIR, "dispatch-receipts.json")
+QUEUE = os.path.join(QUEUE_DIR, "queue.json")
 # The decisions board the lane raises one item on. The path comes from the
 # environment, so a test or a dry run writes its item to a scratch file
 # and never to the board Shyam reads.
