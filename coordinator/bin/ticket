@@ -433,17 +433,83 @@ def keys_in_use(rcfg, issues):
     return used
 
 
-def mint_key(rcfg, issues):
-    """The next free key for the repo: one past the repo's highest key.
+def mint_key(rcfg, issues, last=0):
+    """The next free key for the repo: one past the highest key it has given out.
 
     The key prefix comes from tickets.json and the number from the repo's
     own issues, so a minted key never collides with a ticket that exists.
+    The issue list can lag a create by a few seconds, so the number is also
+    read from the last key this repo gave out, which is written under the
+    open lock: a list that has not caught up cannot hand out a key twice.
     """
     used = keys_in_use(rcfg, issues)
-    number = max(used) + 1 if used else 1
+    number = max([last, *used]) + 1
     while number in used:
         number += 1
     return f"{rcfg['key']}-{number}"
+
+
+# A create that failed with one of these is known not to have made an issue,
+# so its key is free again. Every other failure may have landed, so the key
+# stays pending and the next open refuses until a human checks the repo. A
+# generic `error` is in that second group: `gh` can fail locally after GitHub
+# has already made the issue, so it does not establish a rejection.
+REJECTED_FAILURES = ("auth", "budget", "rate_limit")
+
+
+def last_key_path(repo, prefix):
+    """Where the keys this repo gave out under one prefix are kept.
+
+    The prefix is part of the name, so a repo whose key in tickets.json
+    changes starts the new prefix at one instead of carrying the old
+    sequence over, and switching back finds the old sequence again."""
+    return os.path.join(CACHE_DIR, f"last-key-{repo.replace('/', '_')}-{prefix}.json")
+
+
+def read_last_key(repo, prefix):
+    """The key state of this repo under this prefix.
+
+    A missing file is a repo that has not opened a ticket under this prefix
+    yet. A file that cannot be read, or that does not hold a valid state, is
+    a refusal: minting from the list alone is what gave two opens the same
+    key, so a record that cannot be trusted must not be read as zero."""
+    path = last_key_path(repo, prefix)
+    try:
+        with open(path) as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return {"number": 0, "unconfirmed": [], "pending": None}
+    except (OSError, ValueError) as e:
+        raise Refuse(f"the key record {path} cannot be read: {e}")
+    number = state.get("number") if isinstance(state, dict) else None
+    unconfirmed = state.get("unconfirmed", []) if isinstance(state, dict) else None
+    pending = state.get("pending") if isinstance(state, dict) else None
+    valid = (isinstance(number, int) and not isinstance(number, bool) and number >= 0
+             and isinstance(unconfirmed, list)
+             and all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in unconfirmed)
+             and (pending is None or (isinstance(pending, int) and not isinstance(pending, bool) and pending > 0)))
+    if not valid:
+        raise Refuse(f"the key record {path} is not a valid state")
+    return {"number": number, "unconfirmed": unconfirmed, "pending": pending}
+
+
+def write_last_key(repo, prefix, state, fatal=False):
+    """Write the key state of this repo under this prefix, atomically.
+
+    The write before a create is fatal: a create must never run without the
+    record that protects its key. A write after the create only warns, and
+    the pending key it leaves behind still stops the next open from reusing
+    the key."""
+    path = last_key_path(repo, prefix)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        if fatal:
+            raise Refuse(f"the key {prefix}-{state['pending']} could not be recorded before the create: {e}")
+        print(f"warning: the key state of {repo} was not recorded: {e}", file=sys.stderr)
 
 
 def with_open_lock(repo):
@@ -481,19 +547,32 @@ def cmd_open(a):
             body = handle.read()
     try:
         lock = with_open_lock(repo)
+        state = read_last_key(repo, rcfg["key"])
+        if state["pending"] is not None:
+            raise Refuse(f"the last open of {repo} did not finish, so {rcfg['key']}-{state['pending']} may exist: "
+                         f"check the repo, then clear `pending` in {last_key_path(repo, rcfg['key'])} "
+                         f"(lower `number` too if {rcfg['key']}-{state['pending']} does not exist)")
         issues = repo_issues(repo)
+        used = keys_in_use(rcfg, issues)
+        # A key this repo gave out that the list has not shown yet is still
+        # taken: the list can lag a create by a few seconds.
+        unconfirmed = [n for n in state["unconfirmed"] if n not in used]
         match = TITLE_KEY.match(title)
         if match:
             if match.group(1) != rcfg["key"]:
                 die(f"refused: key prefix {match.group(1)} does not match repo key {rcfg['key']}", 2)
             key = match.group(0)
-            clash = keys_in_use(rcfg, issues).get(int(match.group(2)))
+            number = int(match.group(2))
+            clash = used.get(number)
             if clash is not None:
                 die(f"refused: {key} is already used by issue #{clash}", 2)
+            if number in unconfirmed:
+                die(f"refused: {key} was given out by an earlier open and the issue list has not shown it yet", 2)
         else:
             if a.require_key:
                 die(f"refused: missing key in title (the title must start with {rcfg['key']}-<n>)", 2)
-            key = mint_key(rcfg, issues)
+            key = mint_key(rcfg, issues, state["number"])
+            number = int(TITLE_KEY.match(key).group(2))
             title = f"{key}{KEY_SEPARATOR}{title}"
         duplicate = next((i for i in issues if i["title"].strip() == title), None)
         if duplicate is not None:
@@ -501,10 +580,26 @@ def cmd_open(a):
         if a.dry_run:
             print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "dryRun": True}))
             return
+        # The key is recorded before the create, so a create that lands and
+        # then loses its answer is never handed out again: the record stays
+        # pending and the next open refuses until a human checks the repo.
+        after = {"number": max(state["number"], number),
+                 "unconfirmed": unconfirmed + ([number] if number not in used else []),
+                 "pending": number}
+        write_last_key(repo, rcfg["key"], after, fatal=True)
         args = ["issue", "create", "-R", repo, "--title", title, "--body", body]
         if labels:
             args += ["--label", ",".join(labels)]
-        url = gh(args).strip()
+        try:
+            url = gh(args).strip()
+        except GhError as e:
+            if e.kind in REJECTED_FAILURES:
+                # GitHub refused the create before it could make an issue, so
+                # the key is free again: the record goes back to what it was
+                # before this open.
+                write_last_key(repo, rcfg["key"], {**state, "unconfirmed": unconfirmed})
+            raise
+        write_last_key(repo, rcfg["key"], {**after, "pending": None})
     except Refuse as e:
         die(f"refused: {e}", 2)
     except GhError as e:
