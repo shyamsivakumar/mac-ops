@@ -1321,7 +1321,7 @@ def merged_without_gate_item(repo, number, head, issue, verdict):
 
 
 SETTLE_LOOKBACK_DAYS = 3
-SETTLE_PR_LIMIT = 100
+SETTLE_PR_LIMIT = 300
 
 
 def settle_merged_prs(repo, ledger):

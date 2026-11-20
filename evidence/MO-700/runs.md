@@ -100,3 +100,7 @@ shyamsivakumar/catalouge (1 merged PRs)
 First pass total after the fix: 1 `ticket close` attempt (mac-ops #682 for ticket #675, the checklist would pass), 1 board item (`lane-merged-unreviewed-MO-588` on the owner board `~/Code/coordinator/mac-ops-owner.json`, reason `none`: the gate reply on the merged head has no PROVIDES line), 0 items on `decisions.json`, 0 truncation lines (94 is under the cap of 100). The 15 PRs of 2026-11-19 sit in the "ticket already closed" row, because the tickets were closed by hand.
 
 The "why the 14 lack a PASS" breakdown in the forecast above is unchanged by the fixes: they change what the item says and when it is raised, not which gate verdict each head has.
+
+## Cap raised to 300
+
+A read-only `gh pr list --state merged --search merged:>=<7 days ago> --limit 300` on mac-ops returned 261 PRs, so gh pages past 100 and the new cap of 300 is honoured. mac-ops merges about 30 PRs a day, so the 3-day window holds about 100 to 130 and stays well under 300. The `SETTLE TRUNCATED` line fires at exactly 300.
