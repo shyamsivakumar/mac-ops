@@ -154,6 +154,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# The selftest runs the real code paths against fixtures, so it must not
+# reach GitHub or the live logs. The environment is set before the gateway
+# is imported, because the gateway reads its log paths at import time.
+if sys.argv[1:2] == ["selftest"]:
+    import gh_isolation
+
+    gh_isolation.install()
+
 from tick_health import tick_alarm
 
 import alarms
@@ -178,8 +187,11 @@ DEFAULT_DEADLINE = 540
 # use the whole tick and leave the tick nothing to report with.
 BOARD_DEADLINE = 240
 # Where a skipped call is written down. The stderr of a read reaches the
-# caller, which may be a model; this file reaches the next reader.
-SKIP_LOG = Path.home() / "Library/Logs/coordinator/skips.log"
+# caller, which may be a model; this file reaches the next reader. A test
+# run points it at a temp file, so a fixture skip never lands in the live
+# log.
+SKIP_LOG = Path(os.environ.get("COORDINATOR_SKIP_LOG",
+                               str(Path.home() / "Library/Logs/coordinator/skips.log")))
 PR_LIMIT = 100
 # The open issues of one repository, read for the marks a ticket body
 # carries. The board's tickets are a small part of that list.

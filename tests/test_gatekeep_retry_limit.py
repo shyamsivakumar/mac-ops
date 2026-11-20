@@ -278,8 +278,8 @@ class GateRetryOnceTest(RetryLimitBase):
         first = coordq.model_list.entries("review")[0]["selection"]
         real = coordq.gate_candidates
 
-        def blocking(config):
-            for event in real(config):
+        def blocking(config, rounds=None):
+            for event in real(config, rounds):
                 coordq.model_list.block_provider(first, time.time() + 600)
                 yield event
         coordq.gate_candidates = blocking
