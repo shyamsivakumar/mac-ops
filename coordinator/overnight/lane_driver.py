@@ -980,45 +980,42 @@ def ticket_closed(repo, number):
     return isinstance(state, dict) and state.get("state") == "CLOSED"
 
 
-def pull_ticket(repo, number):
-    """The ticket a merged pull request names, or None when it names none.
+def close_failed_ticket(item, key):
+    """The ticket a close-failed card names, or None when its title names none.
 
-    A close-failed card's id carries the pull request whose close failed, not
-    the ticket: the ticket is the one the pull request body references, in
-    the `Refs #<n>` form this repo requires. A body that cannot be read or
-    names no ticket answers None, and the card stays.
+    The card's id carries the pull request whose close failed, not the
+    ticket, and a pull request body can reference more than one ticket. The
+    title `close_failed_item` writes names the one ticket the close was for,
+    so that is the identity read here. A title that names none answers None
+    and the card stays.
     """
-    try:
-        pull = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
-                               "--json", "body"]))
-    except (subprocess.SubprocessError, RuntimeError, ValueError):
-        return None
-    body = pull.get("body") if isinstance(pull, dict) else None
-    if not isinstance(body, str):
-        return None
-    match = re.search(r"\bRefs\s+#(\d+)", body)
+    match = re.search(rf"closing {re.escape(key)}-(\d+) failed", str(item.get("title") or ""))
     return int(match.group(1)) if match else None
 
 
-def card_candidate(item_id, repos_by_key, repos_by_dashed, open_prs):
+def card_candidate(item, lane_by_key, all_by_key, repos_by_dashed, open_prs):
     """What one board card is about, or None when this cleanup does not own it.
 
     A prompt-merge or gate-rounds card names a pull request, so a pull
     request still in the open list settles the question without a read. A
     close-failed card names the pull request whose close failed and is
-    settled by the ticket that pull request references.
+    settled by the ticket its own title records. The close-failed lookup
+    covers every configured repository, because the merge pass that raises
+    those cards is not limited to the lane's repositories.
     """
+    item_id = str(item.get("id") or "")
     match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", item_id)
-    if match and match.group(1) in repos_by_key:
-        repo, number = repos_by_key[match.group(1)], int(match.group(2))
+    if match and match.group(1) in lane_by_key:
+        repo, number = lane_by_key[match.group(1)], int(match.group(2))
         return None if (repo, number) in open_prs else ("pull", repo, number)
     match = re.fullmatch(r"lane-gate-rounds-(.+)-(\d+)", item_id)
     if match and match.group(1) in repos_by_dashed:
         repo, number = repos_by_dashed[match.group(1)], int(match.group(2))
         return None if (repo, number) in open_prs else ("pull", repo, number)
     match = re.fullmatch(r"lane-close-failed-([A-Za-z0-9]+)-(\d+)", item_id)
-    if match and match.group(1) in repos_by_key:
-        return ("ticket", repos_by_key[match.group(1)], int(match.group(2)))
+    if match and match.group(1) in all_by_key:
+        ticket = close_failed_ticket(item, match.group(1))
+        return None if ticket is None else ("ticket", all_by_key[match.group(1)], ticket)
     return None
 
 
@@ -1045,13 +1042,14 @@ def reconcile_prompt_items(snapshot):
     items = {str(i.get("id")): i for b in boards if isinstance(b, dict)
              for i in b.get("items") or [] if isinstance(i, dict)}.values()
     repos_by_key = {CFG[repo]["key"]: repo for repo in CFG if repo in LANE_REPOS}
+    all_by_key = {CFG[repo]["key"]: repo for repo in CFG}
     repos_by_dashed = {repo.replace("/", "-"): repo for repo in CFG if repo in LANE_REPOS}
     open_prs = {(repo, pull["number"]) for repo, data in snapshot["repos"].items()
                 for pull in data["prs"]}
     removed = 0
     for item in items:
         item_id = str(item.get("id") or "")
-        candidate = card_candidate(item_id, repos_by_key, repos_by_dashed, open_prs)
+        candidate = card_candidate(item, repos_by_key, all_by_key, repos_by_dashed, open_prs)
         if candidate is None:
             continue
         if DRY:
@@ -1063,10 +1061,8 @@ def reconcile_prompt_items(snapshot):
         if kind == "pull":
             if not pull_settled(repo, number):
                 continue
-        else:
-            ticket = pull_ticket(repo, number)
-            if ticket is None or not ticket_closed(repo, ticket):
-                continue
+        elif not ticket_closed(repo, number):
+            continue
         if withdraw_decision(item_id) == "wrote":
             removed += 1
     return removed
