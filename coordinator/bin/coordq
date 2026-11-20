@@ -1892,18 +1892,21 @@ def unreadable_ticket_reason(error, issue, body, title):
     return reason
 
 
-SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/")
+SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
 OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
 RECUT_LINES = 300
 RECUT_FILES = 6
+RECUT_RULE = 2
 
 
 def counted_code_file(f):
     name = f["filename"]
+    base = name.rsplit("/", 1)[-1]
     if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
         return False
-    base = name.rsplit("/", 1)[-1]
+    if "fixtures" in name.split("/") or "proof" in base:
+        return False
     is_test = (base.startswith("test_") or base.endswith("_test.py")
                or "selftest" in name or "tests" in name.split("/"))
     if f.get("status") != "added" and is_test:
@@ -1981,7 +1984,7 @@ def gate_candidates(config, rounds=None):
                        "reason": "at the gate round cap"}
                 continue
             gated_key = retarget_key(f"gate:{repo}#{number}:{head}", pr, receipts)
-            if gated_key in queue.get("recutHeads", {}):
+            if queue.get("recutHeads", {}).get(gated_key, {}).get("rule", 0) >= RECUT_RULE:
                 continue
             if gated_key in queue.get("gatedHeads", {}) or lane_gated(receipts, gated_key):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
@@ -2135,7 +2138,7 @@ def cmd_gatekeep(a):
                     continue
                 with Lock(True):
                     queue = load()
-                    queue.setdefault("recutHeads", {})[key] = {"at": time.time()}
+                    queue.setdefault("recutHeads", {})[key] = {"at": time.time(), "rule": RECUT_RULE}
                     save(queue)
                 journal.emit("recut", "gatekeep", lines=event["lines"], files=event["files"],
                              **journal.parse_request_id(key))
