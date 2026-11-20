@@ -31,6 +31,7 @@ CAPACITY = STATE_DIR / "capacity.json"
 CAPACITY_STATE = STATE_DIR / "capacity-state.json"
 STATUS = STATE_DIR / "controller-status.json"
 HOST_HEADROOM_KEY = "min_headroom_bytes_by_host"
+FOREGROUND_BUILD_HOSTS_KEY = "foreground_build_hosts"
 MAX_HOST_HEADROOM_BYTES = 64 * 1024 ** 3
 AGENT_HEAVY_PAUSE_STATE = STATE_DIR / "agent-heavy-wait-pause.json"
 LOG = STATE_DIR / "controller.jsonl"
@@ -108,10 +109,11 @@ def config(path):
         values.setdefault("agent_heavy_wait_pause", False)
         values.setdefault("agent_restart", True)
         values.setdefault(HOST_HEADROOM_KEY, {})
+        values.setdefault(FOREGROUND_BUILD_HOSTS_KEY, [])
     if not isinstance(values, dict) or set(values) != set(defaults):
         raise ValueError("Config must contain exactly the documented reserve, signal, and sample-age fields")
     for key, value in values.items():
-        if key not in ("agent_heavy_wait_pause", "agent_restart", HOST_HEADROOM_KEY):
+        if key not in ("agent_heavy_wait_pause", "agent_restart", HOST_HEADROOM_KEY, FOREGROUND_BUILD_HOSTS_KEY):
             number(value, key)
     if type(values["agent_heavy_wait_pause"]) is not bool:
         raise ValueError("agent_heavy_wait_pause must be true or false")
@@ -145,6 +147,11 @@ def config(path):
         if key in normalized:
             raise ValueError("min_headroom_bytes_by_host names one host twice")
         normalized[key] = headroom
+    foreground = values[FOREGROUND_BUILD_HOSTS_KEY]
+    if not isinstance(foreground, list) or any(
+        not isinstance(name, str) or not name.strip() for name in foreground
+    ):
+        raise ValueError("foreground_build_hosts must list host names")
     return values
 
 
