@@ -24,6 +24,7 @@ Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies
 - Round 2 and later: raise only findings in lines changed since the previous reviewed head, plus any earlier critical or major still open. Anything else you notice is a minor under 'Left for later'.
 - Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.
 - After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; no 4th review as is.
+- Write every finding as `[severity] path:line text`, one per line, severity being critical, major or minor.
 
 Failure blast radius (Shyam, 2026-11-18, after a sell-recovery check blocked every Bot 1 exit for 1.5 days):
 - For any change that can stop, skip or delay an order or an exit, state what happens to EVERY open trade when the new check fails or throws, and to trades unrelated to the bad input. A check that fails closed for all trades because of one record is a major finding, even if the ticket asks for it; flag the ticket instead.
