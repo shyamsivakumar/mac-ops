@@ -79,6 +79,17 @@ STUCK_FILE = "gatekeep-stuck.txt"
 # A gate that dies without a verdict moves once to the next reviewer, and a
 # head whose moved gate dies too is given up until its head changes.
 GATE_RETRY_LIMIT = 1
+# The failed gate reviews one pull request gets before it goes to Shyam.
+# The lane owns this rule (lane_driver.GATE_ROUND_CAP) and counts the rounds
+# in its ledger; gatekeep reads that same ledger, so a pull request at the cap
+# is not gated again. The number is repeated here because the lane driver is
+# not on gatekeep's path in the installed layout.
+GATE_ROUND_CAP = 3
+# The lane's ledger, where the failed gate reviews of a pull request are
+# counted. The path comes from the environment, so a test reads a scratch
+# ledger and never the live one.
+LANE_LEDGER = os.environ.get(
+    "COORDQ_LANE_LEDGER", os.path.expanduser("~/Code/coordinator/loop/lanes-ledger.json"))
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
 # every action the queue has taken, with the item that took it and what
@@ -1648,6 +1659,42 @@ def gate_proof(settings, repo, issue, head):
     return state, text, path
 
 
+def lane_ledger():
+    """The lane's ledger, or {} when it cannot be read.
+
+    The ledger is the lane's own record of the failed gate reviews of a
+    pull request. A ledger that cannot be read is no reason to stop the
+    gate: the pull request is gated as before, and the lane still holds
+    the round cap on its own side.
+    """
+    try:
+        with open(LANE_LEDGER) as handle:
+            ledger = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return ledger if isinstance(ledger, dict) else {}
+
+
+def gate_rounds_used(repo, number, ledger):
+    """True when the lane's ledger says a pull request used its rounds.
+
+    The count is the lane's: the failed reviews it recorded for the pull
+    request, and the fix rounds it already sent, whichever is larger. A
+    pull request at or over the cap is re-cut into smaller pull requests
+    or taken over by Shyam, so gatekeep queues no gate for it.
+    """
+    state = ledger.get(f"rounds:{repo}#{number}")
+    if not isinstance(state, dict):
+        state = {}
+    try:
+        count = int(state.get("count", 0))
+    except (TypeError, ValueError):
+        count = 0
+    prefix = f"fix:{repo}#{number}:"
+    count = max(count, sum(1 for key in ledger if key.startswith(prefix)))
+    return count >= GATE_ROUND_CAP
+
+
 def gate_candidates(config):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -1661,6 +1708,7 @@ def gate_candidates(config):
     login = login_run.stdout.strip()
     receipts = load_receipts()
     queue = load()
+    rounds = lane_ledger()
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
@@ -1668,6 +1716,15 @@ def gate_candidates(config):
             if pr["draft"]:
                 continue
             head, number = pr["head"]["sha"], pr["number"]
+            # The lane's round count is read before anything else, so a
+            # pull request that used its reviews is skipped instead of
+            # gated again on every new head (SRW#1338 was gated ten times).
+            if gate_rounds_used(repo, number, rounds):
+                print(f"skip {repo}#{number}: at the gate round cap, no gate queued",
+                      file=sys.stderr)
+                yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                       "reason": "at the gate round cap"}
+                continue
             gated_key = f"gate:{repo}#{number}:{head}"
             if gated_key in queue.get("gatedHeads", {}) and gate_thread_to_judge(queue, gated_key, receipts) is None:
                 continue
