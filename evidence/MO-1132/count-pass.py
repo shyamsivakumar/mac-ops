@@ -1,4 +1,4 @@
-import json, os, sys, collections
+import json, os, collections
 from importlib.machinery import SourceFileLoader
 import importlib.util
 from unittest.mock import patch
