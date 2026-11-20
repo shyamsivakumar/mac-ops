@@ -79,6 +79,21 @@ Before is the installed ~/.claude/hooks/deny-merge-guard.py. After is the repo h
 | `curl -u user:pass -X DELETE https://x.test/a` | - | default | allow | deny |
 | `curl -X DELETE https://user:pass@x.test/a` | - | default | allow | deny |
 | `git push https://tok@github.com/a/b.git main` | - | default | deny | ask |
+| `rm ~/.ssh/id_* (cwd ~/work)` | - | default | allow | deny |
+| `rm ~/.ssh/* (cwd ~/work)` | - | default | allow | deny |
+| `rm ~/.ssh/nothing_* (cwd ~/work)` | - | default | allow | deny |
+| `rm *.pem (cwd ~/keys)` | - | default | allow | deny |
+| `rm .en? (cwd ~/keys)` | - | default | allow | deny |
+| `rm {a,x}.pem (cwd ~/keys)` | - | default | allow | deny |
+| `find ~/.ssh -name 'id_*' -delete (cwd ~/work)` | - | default | allow | deny |
+| `find . -name '*.log' -delete (cwd ~/keys)` | - | default | allow | deny |
+| `rm ~/Code/slash-eureka/*/x (cwd ~/work)` | - | default | allow | deny |
+| `git rm .env (cwd ~/keys)` | - | default | allow | deny |
+| `ls \| xargs rm x.pem (cwd ~/keys)` | - | default | allow | deny |
+| `rm build/*.o (cwd ~/work)` | - | default | allow | allow |
+| `rm *.log (cwd ~/work)` | - | default | allow | allow |
+| `find build -name '*.o' -delete (cwd ~/work)` | - | default | allow | allow |
+| `git rm a.log (cwd ~/work)` | - | default | allow | allow |
 | `rm app/.env` | - | default | allow | deny |
 | `rm -rf ~/Code/slash-eureka/x` | - | default | allow | deny |
 | `rmdir ~/Code/slash-eureka/x` | - | default | allow | deny |
@@ -111,16 +126,16 @@ A full ask reason, as Claude Code shows it:
 Audit log lines from this table run (command cut to 200 chars, secret paths redacted):
 
 ```
-{"time": "2026-11-20T21:08:43Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
-{"time": "2026-11-20T21:08:43Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "cloud_secret", "decision": "ask", "program": "gcloud"}
-{"time": "2026-11-20T21:08:44Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
-{"time": "2026-11-20T21:08:44Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
-{"time": "2026-11-20T21:08:44Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
+{"time": "2026-11-20T21:37:00Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T21:37:00Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "cloud_secret", "decision": "ask", "program": "gcloud"}
+{"time": "2026-11-20T21:37:00Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T21:37:00Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
+{"time": "2026-11-20T21:37:01Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
 ```
 
 ## Audit log redaction
 
-Temp HOME /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/audithome.eW8W; nothing reaches the real audit log. An Edit into slash-eureka from a non-Ascend session with fake secret-looking text in `new_string`, `old_string`, `content` and `edits`, then Bash commands that carry fake credentials: an echo of a password into slash-eureka, curl with -u user:pass, a URL with user:pass@, a git push to a URL with a token, an env-assigned token, and a quoted spaced path. A Bash line holds only the program name.
+Temp HOME /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/audithome.yOgC; nothing reaches the real audit log. An Edit into slash-eureka from a non-Ascend session with fake secret-looking text in `new_string`, `old_string`, `content` and `edits`, then Bash commands that carry fake credentials: an echo of a password into slash-eureka, curl with -u user:pass, a URL with user:pass@, a git push to a URL with a token, an env-assigned token, and a quoted spaced path. A Bash line holds only the program name.
 
 ```
 Edit  -> ask
@@ -141,18 +156,18 @@ Bash 'odd prog name' x && gh pr merge 1 -> ask
 Audit lines written:
 
 ```
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Edit", "family": "ascend", "decision": "ask", "target": "<home>/Code/slash-eureka/app.py"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "echo"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "push_protected", "decision": "ask", "program": "git"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "cat"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "protected_removal", "decision": "deny", "program": "rm"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
-{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "unknown"}
+{"time": "2026-11-20T21:37:07Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Edit", "family": "ascend", "decision": "ask", "target": "<home>/Code/slash-eureka/app.py"}
+{"time": "2026-11-20T21:37:07Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "echo"}
+{"time": "2026-11-20T21:37:07Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T21:37:07Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T21:37:07Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "push_protected", "decision": "ask", "program": "git"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "protected_removal", "decision": "deny", "program": "rm"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
+{"time": "2026-11-20T21:37:08Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "unknown"}
 ```
 
 Leak check over the whole audit file (each count must be 0):
@@ -206,6 +221,12 @@ The installed guard (from the installer run below) loaded in bun, tool_call hand
 | tui, confirm false: backslash-escaped env value, gh pr merge | tui | 1 | BLOCK | [merge] gh pr merge needs the owner's approval; merges belong to the l |
 | tui, confirm true: odd program name, gh pr merge | tui | 1 | RUN |  |
 | tui, confirm false: odd program name, gh pr merge | tui | 1 | BLOCK | [merge] gh pr merge needs the owner's approval; merges belong to the l |
+| tui, confirm true: rm <root>/.ssh/id_* (hard) | tui | 0 | BLOCK | [protected_removal] removing secret files or anything under ~/Code/sla |
+| tui, confirm true: rm *.pem in keys (hard) | tui | 0 | BLOCK | [protected_removal] removing secret files or anything under ~/Code/sla |
+| tui, confirm true: rm .en? in keys (hard) | tui | 0 | BLOCK | [protected_removal] removing secret files or anything under ~/Code/sla |
+| tui, confirm true: find . -name '*.log' -delete in keys (hard) | tui | 0 | BLOCK | [protected_removal] removing secret files or anything under ~/Code/sla |
+| tui: rm build/*.o in work (no prompt) | tui | 0 | RUN |  |
+| tui: rm *.log in work (no prompt) | tui | 0 | RUN |  |
 
 Audit lines the pi guard wrote for the quoted-assignment cases (temp root, program field only; the secret text never appears):
 
@@ -301,9 +322,9 @@ Status after install:
 ## Existing tests
 
 ```
-.............................
+..............................
 ----------------------------------------------------------------------
-Ran 29 tests in 14.232s
+Ran 30 tests in 10.902s
 
 OK
 ```
