@@ -8,6 +8,7 @@ from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 from gate_policy import complete_pass
 import gh_gateway
+import journal
 import prompt_paths
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
@@ -508,6 +509,7 @@ def cmd_open(a):
         die(f"refused: {e}", 2)
     except GhError as e:
         die(f"gh failed ({e.kind}): {e}")
+    journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(url.rsplit("/", 1)[1]), key=key, labels=labels)
     print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "url": url}))
 
 
@@ -1374,6 +1376,8 @@ def cmd_start(a):
         die(f"coordq start failed: {result.stderr.strip()}; intent attempt {attempt} is on the issue, stage label kept")
     output = result.stdout.strip()
     print(output)
+    journal.emit("ticket_started", "ticket", builder=t["builderAlias"], reviewer=t["reviewerAlias"],
+                 taskType=payload.get("taskType"), coordq=output, **journal.parse_request_id(request_id))
     receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "coordq": output}
     receipt_text = f"{t['key']} attempt {attempt}: coordq says \"{output}\".\n\n{machine_line(receipt)}"
     posted = False
@@ -1782,9 +1786,13 @@ def cmd_close(a):
             except (subprocess.TimeoutExpired, OSError) as exc:
                 comment += f"The send to the builder thread did not go through: {exc}\n"
         gh(["issue", "comment", str(number), "-R", repo, "--body", comment])
+        journal.emit("close_failed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,
+                     check=failed[0]["item"])
         raise Refuse("the close checklist failed; the ticket stays open")
     gh(["issue", "close", str(number), "-R", repo, "--comment",
         f"Provides verified by gate {a.gate_thread} on {a.head}; merged via #{a.pr} ({merge})."])
+    journal.emit("ticket_closed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,
+                 thread=a.gate_thread, merge=merge)
     print(f"closed {repo}#{number} via {merge}")
 
 
@@ -1809,6 +1817,7 @@ def cmd_abandon(a):
         die(f"refused: {e}", 2)
     except GhError as e:
         die(f"gh failed ({e.kind}): {e}")
+    journal.emit("ticket_abandoned", "ticket", repo=repo, ticket=n)
     print(f"closed {repo}#{n} as not planned")
     for thread in live_threads.values():
         t3_call("t3_thread_interrupt", {"threadId": thread["threadId"], "stop": True})
