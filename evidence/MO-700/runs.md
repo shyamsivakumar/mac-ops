@@ -73,3 +73,30 @@ First pass total: 1 close attempt (would pass), 1 board item, 0 items on `decisi
 - #656: gate PASS with a recorded base. This is the one the lane attempted.
 
 So no PR that a gate PASSed with a recorded base was read as unreviewed. The item text did say "no recorded gate PASS" for all of them, which was wrong for the PROVIDES and base cases. This change makes the item's reason name which case it is (`absent`, `none`, `FAIL`, `SPLIT` or `running`).
+
+## Forecast rerun on the fixed code (head de024f75), every PR merged in the last 3 days
+
+Same read-only setup as the forecast above. The settle path on this head runs the close checklist itself when a close fails, so the board item quotes the blocking items (fail, and skipped that is required), never a passing line. A PR whose gate thread is still running, queued, starting or preparing is skipped with no ledger mark. A search that returns exactly 100 PRs prints a `SETTLE TRUNCATED <repo>` line. A fast-forward failure after a successful close prints a line and leaves the ledger on `closed`. A `lane-merged-unreviewed-*` card names its ticket in the title, so the board cleanup withdraws it once that ticket is closed.
+
+Action per PR, by repository (the `ACT` rows are the only ones the pass touches):
+
+```
+window start 2026-11-17
+shyamsivakumar/mac-ops (94 merged PRs)
+   skip: ticket already closed 69 : 474,476,478,480,486,487,488,490,492,498,509,510,511,513,519,528,529,538,540,541,542,546,547,550,552,567,570,589,592,594,597,603,608,612,613,615,618,619,624,626,630,632,634,635,636,637,641,642,644,646,650,651,654,655,656,658,661,666,668,683,684,690,692,694,695,696,697,698,699
+   skip: no Refs line 22 : 481,483,484,485,512,515,516,518,522,523,563,564,569,571,572,573,574,578,586,587,606,691
+   ACT (ticket #507) 1 : 588
+   ACT (ticket #675) 1 : 682
+   skip: already settled in the ledger 1 : 686
+shyamsivakumar/strategy-replay-workbench (71 merged PRs)
+   skip: ticket already closed 70 : 1240,1244,1245,1247,1249,1250,1252,1253,1254,1256,1258,1259,1260,1262,1263,1265,1270,1271,1274,1275,1276,1277,1279,1281,1282,1290,1291,1293,1294,1295,1296,1300,1301,1302,1304,1306,1308,1309,1320,1324,1325,1326,1337,1338,1340,1347,1348,1350,1356,1357,1358,1359,1360,1361,1363,1366,1367,1368,1369,1372,1373,1374,1375,1376,1377,1379,1382,1383,1384,1385
+   skip: already settled in the ledger 1 : 1370
+shyamsivakumar/fantasy-football-toolkit (3 merged PRs)
+   skip: ticket already closed 3 : 521,522,525
+shyamsivakumar/catalouge (1 merged PRs)
+   skip: already settled in the ledger 1 : 132
+```
+
+First pass total after the fix: 1 `ticket close` attempt (mac-ops #682 for ticket #675, the checklist would pass), 1 board item (`lane-merged-unreviewed-MO-588` on the owner board `~/Code/coordinator/mac-ops-owner.json`, reason `none`: the gate reply on the merged head has no PROVIDES line), 0 items on `decisions.json`, 0 truncation lines (94 is under the cap of 100). The 15 PRs of 2026-11-19 sit in the "ticket already closed" row, because the tickets were closed by hand.
+
+The "why the 14 lack a PASS" breakdown in the forecast above is unchanged by the fixes: they change what the item says and when it is raised, not which gate verdict each head has.
