@@ -83,6 +83,7 @@ SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
+SECRET_VALUE_RES = ["AKIA[0-9A-Z]{16}", "\\b(?:ghp|gho|ghs|github_pat)_[A-Za-z0-9_]{20,}", "\\bsk-[A-Za-z0-9_-]{16,}", "\\bxox[abprs]-[A-Za-z0-9-]{10,}", "(\\bbearer\\s+)\\S+", "((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)\\w*\\s*[=:]\\s*)\\S+"]
 FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
 SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval"
@@ -484,11 +485,20 @@ def tool_paths(tool_name, tool_input, cwd):
 
 def decide_tool(tool_name, tool_input, cwd, project_dir, permission_mode):
     """File tools touching the Ascend tree ask; the realpath makes symlinks and `..` count."""
-    shown = f"{tool_name} " + " ".join(str(tool_input[k]) for k in PATH_KEYS + ("pattern",) if tool_input.get(k))
+    shown = tool_label(tool_name, tool_input)
     ascend_session = bool(project_dir) and in_ascend(project_dir)
-    touches = not ascend_session and any(in_ascend(p) for p in tool_paths(tool_name, tool_input, cwd))
-    found = [("ascend", ASCEND_REASON)] if touches else []
-    return conclude(found, shown, cwd, permission_mode)
+    hits = [] if ascend_session else [p for p in tool_paths(tool_name, tool_input, cwd) if in_ascend(p)]
+    found = [("ascend", ASCEND_REASON)] if hits else []
+    outcome = conclude(found, shown, cwd, permission_mode)
+    if outcome:
+        outcome["target"] = os.path.realpath(hits[0])
+    return outcome
+
+
+def tool_label(tool_name, tool_input):
+    """The tool name and its path arguments; file contents and edit text are never part of it."""
+    paths = [str(tool_input[k]) for k in PATH_KEYS + ("pattern",) if tool_input.get(k)]
+    return " ".join([tool_name, *paths])
 
 
 def conclude(found, shown, cwd, permission_mode):
@@ -514,22 +524,33 @@ def conclude(found, shown, cwd, permission_mode):
     return {"decision": decision, "families": families, "reason": reason}
 
 
-def redact(command):
+def redact(text):
+    for pattern in SECRET_VALUE_RES:
+        text = re.sub(
+            pattern,
+            lambda m: (m.group(1) if m.lastindex else "") + "[redacted]",
+            text,
+            flags=re.I,
+        )
     return " ".join(
         "[secret]" if re.search(SECRET_FILE_RE, token) else token
-        for token in command.split(" ")
+        for token in text.split(" ")
     )
 
 
-def audit(outcome, command, payload):
+def audit(outcome, command, payload, tool_name):
     line = {
         "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "runtime": os.environ.get("MAC_OPS_DENY_RUNTIME", "claude"),
         "session_id": payload.get("session_id"),
+        "tool": tool_name,
         "family": ",".join(outcome["families"]),
         "decision": outcome["decision"],
-        "command": redact(command)[:COMMAND_LIMIT],
     }
+    if tool_name == "Bash":
+        line["command"] = redact(command)[:COMMAND_LIMIT]
+    else:
+        line["target"] = redact(outcome.get("target", ""))[:COMMAND_LIMIT]
     try:
         path = os.path.expanduser(AUDIT_PATH)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -550,7 +571,7 @@ def main():
         return 0
     if tool_name != "Bash" and tool_name not in PATH_TOOLS:
         return 0
-    command = str(tool_input.get("command") or "") if tool_name == "Bash" else f"{tool_name} {json.dumps(tool_input)}"
+    command = str(tool_input.get("command") or "") if tool_name == "Bash" else tool_label(tool_name, tool_input)
     try:
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         mode = payload.get("permission_mode")
@@ -563,7 +584,7 @@ def main():
             return 0
         outcome = {"decision": "deny", "families": ["guard_error"], "reason": "guard error: the command could not be classified, so it is denied"}
     if outcome:
-        audit(outcome, command, payload)
+        audit(outcome, command, payload, tool_name)
         print(json.dumps(verdict(outcome["decision"], outcome["reason"])))
     return 0
 

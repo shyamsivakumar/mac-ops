@@ -22,6 +22,7 @@ const SECRET_TEXT_RE = new RegExp(SPEC.secret_text_re);
 const ASCEND_TEXT_RES = SPEC.ascend_text_res.map((r) => new RegExp(r));
 const MODES = SPEC.family_modes;
 const WRITE_TOOLS = new Set(["edit", "write"]);
+const BASH_TOOLS = new Set(["bash", "powershell"]);
 // Only keys that name a location are checked as paths: a document that
 // mentions `.env` is not itself a secret.
 const PATH_KEY = /path|file|dir|folder|target|root|cwd|workspace/i;
@@ -60,18 +61,23 @@ function finding(family, reason, logged = false) {
 }
 
 function redact(text) {
-  return text.split(" ").map((token) => (SECRET_PATH_RE.test(token) ? "[secret]" : token)).join(" ");
+  let out = text;
+  for (const pattern of SPEC.secret_value_res) {
+    out = out.replace(new RegExp(pattern, "gi"), (_match, group) => (typeof group === "string" ? group : "") + "[redacted]");
+  }
+  return out.split(" ").map((token) => (SECRET_PATH_RE.test(token) ? "[secret]" : token)).join(" ");
 }
 
-function audit(decision, family, text, sessionId) {
+function audit(decision, family, tool, text, sessionId) {
   const line = {
     time: new Date().toISOString(),
     runtime: "pi",
     session_id: sessionId,
+    tool,
     family,
     decision,
-    command: redact(text).slice(0, 200),
   };
+  line[BASH_TOOLS.has(tool) ? "command" : "target"] = redact(text).slice(0, 200);
   try {
     fs.mkdirSync(path.dirname(SPEC.audit_log), { recursive: true });
     fs.appendFileSync(SPEC.audit_log, JSON.stringify(line) + "\n");
@@ -121,6 +127,10 @@ function toolFindings(name, input, cwd, env, sessionId, ascendSession) {
   return found;
 }
 
+function unlogged(found) {
+  return [...new Map(found.filter((f) => !f.logged).map((f) => [f.family, f])).values()];
+}
+
 function blocked(found, asked) {
   const why = [...new Set(found.map((f) => f.reason))].join("; ");
   const tail = asked
@@ -151,17 +161,18 @@ async function decide(event, ctx, sessionDir) {
   const input = event.input || {};
   const found = toolFindings(event.toolName, input, cwd, env, sessionId, ascendSession);
   if (!found.length) return undefined;
-  const text = String(input.command || input.path || event.toolName);
+  const tool = String(event.toolName || "");
+  const text = BASH_TOOLS.has(tool) ? String(input.command || "") : real(abs(String(input.path || input.file_path || cwd), cwd));
   const family = [...new Set(found.map((f) => f.family))].join(",");
   const hard = found.filter((f) => f.mode === "deny");
   if (hard.length) {
-    for (const f of hard.filter((f) => !f.logged)) audit("deny", f.family, text, sessionId);
+    for (const f of unlogged(hard)) audit("deny", f.family, tool, text, sessionId);
     return blocked(hard, false);
   }
-  for (const f of found.filter((f) => !f.logged)) audit("ask", f.family, text, sessionId);
+  for (const f of unlogged(found)) audit("ask", f.family, tool, text, sessionId);
   if (ctx.mode !== "tui") return blocked(found, true);
-  const message = [...new Set(found.map((f) => f.reason))].join("\n") + "\ncommand: " + text.slice(0, 300) + "\ncwd: " + cwd;
+  const message = [...new Set(found.map((f) => f.reason))].join("\n") + "\n" + (BASH_TOOLS.has(tool) ? "command: " : tool + ": ") + text.slice(0, 300) + "\ncwd: " + cwd;
   const approved = await ctx.ui.confirm("mac-ops deny rules: " + family, message);
-  audit(approved === true ? "approved" : "declined", family, text, sessionId);
+  audit(approved === true ? "approved" : "declined", family, tool, text, sessionId);
   return approved === true ? undefined : blocked(found, true);
 }

@@ -262,6 +262,7 @@ class ListTest(unittest.TestCase):
             families = [f for f, _ in hook_module.push_findings(["origin", "t3/x", flag])]
             self.assertIn("force_push", families, flag)
         self.assertEqual(hook_module.SECRET_FILE_RE, SPEC["secret_file_re"])
+        self.assertEqual(hook_module.SECRET_VALUE_RES, SPEC["secret_value_res"])
         self.assertEqual(
             hook_module.FAMILY_MODES,
             {name: family["mode"] for name, family in SPEC["families"].items()},
@@ -580,6 +581,31 @@ class HookTest(unittest.TestCase):
         )
         self.assertIn("[secret]", line["command"])
         self.assertLessEqual(len(line["command"]), 200)
+        self.decided("echo password=hunter2 key=AKIA" + "A" * 16 + " > ~/Code/slash-eureka/x")
+        bash_line = json.loads(log.read_text().splitlines()[1])
+        self.assertIn("password=[redacted]", bash_line["command"])
+        self.assertNotIn("hunter2", log.read_text())
+        self.assertNotIn("AKIA", log.read_text())
+        padded = "x" * 190 + " password=hunter2"
+        self.decided("cat ~/Code/slash-eureka/a " + padded)
+        self.assertNotIn("hunter", log.read_text())
+        edit = {
+            "file_path": str(self.home / "Code/slash-eureka/a.py"),
+            "old_string": "old-secret-text",
+            "new_string": "password=hunter2 AKIA" + "B" * 16,
+            "content": "token=abc123",
+            "edits": [{"new_string": "sk-" + "c" * 20}],
+        }
+        (self.home / "Code/slash-eureka").mkdir(parents=True)
+        self.run_hook({"tool_name": "Edit", "tool_input": edit, "cwd": str(self.home), "session_id": "s2"})
+        tool_line = json.loads(log.read_text().splitlines()[-1])
+        self.assertEqual(
+            sorted(tool_line),
+            ["decision", "family", "runtime", "session_id", "target", "time", "tool"],
+        )
+        self.assertEqual((tool_line["tool"], tool_line["family"]), ("Edit", "ascend"))
+        for leaked in ("hunter", "AKIA", "old-secret", "abc123", "sk-"):
+            self.assertNotIn(leaked, log.read_text())
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr view 1"}})
         audit_path = str(self.home / "unused-audit.jsonl")
         with mock.patch.object(hook_module, "AUDIT_PATH", audit_path), mock.patch.object(
