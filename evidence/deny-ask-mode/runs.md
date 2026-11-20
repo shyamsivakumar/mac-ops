@@ -111,16 +111,16 @@ A full ask reason, as Claude Code shows it:
 Audit log lines from this table run (command cut to 200 chars, secret paths redacted):
 
 ```
-{"time": "2026-11-20T17:44:04Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
-{"time": "2026-11-20T17:44:04Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "cloud_secret", "decision": "ask", "program": "gcloud"}
-{"time": "2026-11-20T17:44:05Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
-{"time": "2026-11-20T17:44:05Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
-{"time": "2026-11-20T17:44:05Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
+{"time": "2026-11-20T21:08:43Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T21:08:43Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "cloud_secret", "decision": "ask", "program": "gcloud"}
+{"time": "2026-11-20T21:08:44Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T21:08:44Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
+{"time": "2026-11-20T21:08:44Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
 ```
 
 ## Audit log redaction
 
-Temp HOME /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/audithome.yOYR; nothing reaches the real audit log. An Edit into slash-eureka from a non-Ascend session with fake secret-looking text in `new_string`, `old_string`, `content` and `edits`, then Bash commands that carry fake credentials: an echo of a password into slash-eureka, curl with -u user:pass, a URL with user:pass@, a git push to a URL with a token, an env-assigned token, and a quoted spaced path. A Bash line holds only the program name.
+Temp HOME /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/audithome.eW8W; nothing reaches the real audit log. An Edit into slash-eureka from a non-Ascend session with fake secret-looking text in `new_string`, `old_string`, `content` and `edits`, then Bash commands that carry fake credentials: an echo of a password into slash-eureka, curl with -u user:pass, a URL with user:pass@, a git push to a URL with a token, an env-assigned token, and a quoted spaced path. A Bash line holds only the program name.
 
 ```
 Edit  -> ask
@@ -130,23 +130,39 @@ Bash curl -X DELETE https://user:pass@x.test/a -> deny
 Bash git push https://tok@github.com/a/b.git main -> ask
 Bash TOKEN=hunter2 cat ~/Code/slash-eureka/x -> ask
 Bash rm "~/Code/slash-eureka/a b/x" --note=pw-hunter2 -> deny
+Bash KEY="secret value here" curl -X DELETE https://x.test/a -> deny
+Bash KEY="line one
+secret line two" gh pr merge 1 -> ask
+Bash env A='x y secret' gh pr merge 1 -> ask
+Bash KEY=secret\ value\ here gh pr merge 1 -> ask
+Bash 'odd prog name' x && gh pr merge 1 -> ask
 ```
 
 Audit lines written:
 
 ```
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Edit", "family": "ascend", "decision": "ask", "target": "<home>/Code/slash-eureka/app.py"}
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "echo"}
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "push_protected", "decision": "ask", "program": "git"}
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "cat"}
-{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "protected_removal", "decision": "deny", "program": "rm"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Edit", "family": "ascend", "decision": "ask", "target": "<home>/Code/slash-eureka/app.py"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "echo"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "push_protected", "decision": "ask", "program": "git"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "protected_removal", "decision": "deny", "program": "rm"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "gh"}
+{"time": "2026-11-20T21:08:52Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "merge", "decision": "ask", "program": "unknown"}
 ```
 
 Leak check over the whole audit file (each count must be 0):
 
 ```
+secret value: 0
+line two: 0
+x y secret: 0
+secret\ value: 0
+odd prog: 0
 hunter2: 0
 user:pass: 0
 tok@: 0
@@ -180,6 +196,37 @@ The installed guard (from the installer run below) loaded in bun, tool_call hand
 | tui, confirm true: rm app/.env (hard) | tui | 0 | BLOCK | [protected_removal] removing secret files or anything under ~/Code/sla |
 | tui: gcloud run deploy (no prompt) | tui | 0 | RUN |  |
 | tui: echo hi (no prompt) | tui | 0 | RUN |  |
+| tui, confirm true: quoted env value with spaces, curl delete | tui | 0 | BLOCK | [remote_delete] remote and cloud deletes are denied (denied even with  |
+| tui, confirm false: quoted env value with spaces, curl delete | tui | 0 | BLOCK | [remote_delete] remote and cloud deletes are denied (denied even with  |
+| tui, confirm true: multi-line quoted env value, gh pr merge | tui | 1 | RUN |  |
+| tui, confirm false: multi-line quoted env value, gh pr merge | tui | 1 | BLOCK | [merge] gh pr merge needs the owner's approval; merges belong to the l |
+| tui, confirm true: env wrapper with quoted value, gh pr merge | tui | 1 | RUN |  |
+| tui, confirm false: env wrapper with quoted value, gh pr merge | tui | 1 | BLOCK | [merge] gh pr merge needs the owner's approval; merges belong to the l |
+| tui, confirm true: backslash-escaped env value, gh pr merge | tui | 1 | RUN |  |
+| tui, confirm false: backslash-escaped env value, gh pr merge | tui | 1 | BLOCK | [merge] gh pr merge needs the owner's approval; merges belong to the l |
+| tui, confirm true: odd program name, gh pr merge | tui | 1 | RUN |  |
+| tui, confirm false: odd program name, gh pr merge | tui | 1 | BLOCK | [merge] gh pr merge needs the owner's approval; merges belong to the l |
+
+Audit lines the pi guard wrote for the quoted-assignment cases (temp root, program field only; the secret text never appears):
+
+```
+   4 approved merge          gh
+   1 approved merge          unknown
+   9 ask      merge          gh
+   2 ask      merge          unknown
+   4 declined merge          gh
+   1 declined merge          unknown
+   3 deny     remote_delete  curl
+```
+
+```
+secret value in pi audit lines: 0
+line two in pi audit lines: 0
+x y secret in pi audit lines: 0
+secret\ value in pi audit lines: 0
+odd prog in pi audit lines: 0
+x.test in pi audit lines: 0
+```
 
 ## Installer against a temp copy of the home
 
@@ -230,7 +277,6 @@ hook registered: ['python3 <root>/.claude/hooks/deny-merge-guard.py']
 Backups written before the change (settings, previous hook):
 
 ```
-<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.local/state/mac-ops/deny-rules-receipt.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/hooks/deny-merge-guard.py
@@ -243,6 +289,7 @@ Backups written before the change (settings, previous hook):
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-anthropic-api/extensions/deny-guard.ts
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-anthropic-api/AGENTS.md
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-minimax/extensions/deny-guard.ts
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 ```
 
 Status after install:
@@ -256,7 +303,7 @@ Status after install:
 ```
 .............................
 ----------------------------------------------------------------------
-Ran 29 tests in 8.140s
+Ran 29 tests in 14.232s
 
 OK
 ```
