@@ -3945,8 +3945,52 @@ def key_mint():
             exact([open_ticket(f"again {n}")["key"] for n in (1, 2, 3)],
                   ["MO-9", "MO-9", "MO-9"])
 
+def close_evidence():
+    check = load_ticket().close_check_module()
+    head = "a" * 40
+    ticket_body = "In: coordinator/bin/close_check.py."
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint}
+    def proof_item(repo, statuses, pr_body="Refs #7"):
+        pull = {"state": "MERGED", "headRefOid": head, "body": pr_body, "mergeCommit": {"oid": "c" * 40},
+                "title": "MO-1 · x", "changedFiles": 1}
+
+        def gh_json(args, timeout=60):
+            if args[0] == "pr":
+                return pull
+            if args[0] == "issue":
+                return {"body": ticket_body, "title": "MO-1 · x"}
+            if args[1].startswith(f"repos/{repo}/pulls/"):
+                return [{"filename": "coordinator/bin/close_check.py"}]
+            if args[1].startswith(f"repos/{repo}/commits/{head}/statuses"):
+                return statuses
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with patch.object(check, "gh_json", gh_json), \
+             patch.object(check, "report_state", return_value=("absent", "")):
+            items = check.run_check(repo, 7)["items"]
+        return {item["item"]: item for item in items}
+
+    srw = check.SRW_REPO
+    success = {"context": check.SRW_CHECK_CONTEXT, "state": "success"}
+    other = {"context": "other/check", "state": "success"}
+    items = proof_item(srw, [other, success])
+    exact(items["proof file"]["status"], "pass")
+    exact(items["proof file"]["detail"], f"{check.SRW_CHECK_CONTEXT} is success on {head}")
+    exact((items["checks"]["status"], items["checks"]["required"]), ("skipped", False))
+    for name, statuses in (("failure", [{"context": check.SRW_CHECK_CONTEXT, "state": "failure"}]),
+                           ("pending", [{"context": check.SRW_CHECK_CONTEXT, "state": "pending"}]),
+                           ("missing", [other]),
+                           ("superseded", [{"context": check.SRW_CHECK_CONTEXT, "state": "failure"}, success])):
+        exact((name, proof_item(srw, statuses)["proof file"]["status"]), (name, "fail"))
+    exact(proof_item(srw, [success, {"context": check.SRW_CHECK_CONTEXT, "state": "failure"}])["proof file"]["status"],
+          "pass")
+    elsewhere = "shyamsivakumar/fixture"
+    exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {head}")["proof file"]["status"], "pass")
+    exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {'b' * 40}")["proof file"]["status"], "fail")
+    exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "close-evidence": close_evidence}
 
 
 def main():
