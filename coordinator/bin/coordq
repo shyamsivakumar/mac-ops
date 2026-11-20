@@ -738,6 +738,9 @@ def drain():
     statuses = {}
     while True:
         queue = load()
+        if dispatch_stopped():
+            log("dispatch.stopped exists, nothing started")
+            return
         dispatchable = []
         dropped = set()
         for item in queue["items"]:
