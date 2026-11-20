@@ -3742,7 +3742,117 @@ def router_blocked():
     exact(resolved["modelSelection"], {"instanceId": "cursor", "model": "default"})
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked}
+def key_mint():
+    """Back-to-back opens against a list that never catches up.
+
+    GitHub's issue list can lag a create by a few seconds, so the list read
+    after a create can be missing the issue just made. The key is minted
+    from the list and from the keys the repo gave out, so the replay below
+    keeps the list stale on purpose: three opens must still give three
+    distinct keys, and the record must close the other ways to reuse one.
+    """
+    ticket = load_ticket()
+    from types import SimpleNamespace
+    repo = "fixture/repo"
+    config = {"repos": {repo: {"key": "MO"}},
+              "labels": {"stage": ["backlog"], "priority": [1], "type": ["standard"]}}
+    listed = [{"number": 1, "title": "MO-1 · first"}]
+    created = []
+    failure = [None]
+    record = Path("last-key-fixture_repo-MO.json")
+
+    def gh(args, stdin=None, fresh=False, optional=False):
+        if args[:2] == ["issue", "create"]:
+            if failure[0]:
+                raise ticket.GhError(failure[0], "fixture")
+            created.append(args[args.index("--title") + 1])
+            return f"https://github.com/{repo}/issues/{len(created) + 1}"
+        if args[:1] == ["api"]:
+            # The list never catches up: every read is the same page.
+            return json.dumps(listed)
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    def open_ticket(title):
+        args = SimpleNamespace(repo=repo, title=title, body="", body_file=None,
+                               label="", require_key=False, dry_run=False)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            ticket.cmd_open(args)
+        return json.loads(output.getvalue())
+
+    def refused(title):
+        with contextlib.redirect_stderr(io.StringIO()) as error:
+            try:
+                open_ticket(title)
+            except SystemExit as exit:
+                return exit.code, error.getvalue().strip()
+        raise AssertionError(f"the open of {title!r} was not refused")
+
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(ticket, "CACHE_DIR", directory), \
+         patch.object(ticket, "load_config", return_value=config), \
+         patch.object(ticket, "gh", side_effect=gh), \
+         patch.object(ticket, "builder_ids", return_value=[]), \
+         patch.object(ticket, "reviewer_ids", return_value=[]):
+        exact([open_ticket(f"ticket {n}")["key"] for n in (1, 2, 3)],
+              ["MO-2", "MO-3", "MO-4"])
+        exact(created, ["MO-2 · ticket 1", "MO-3 · ticket 2", "MO-4 · ticket 3"])
+        # The record sits beside the open lock, so the next open reads it.
+        exact(json.loads((Path(directory) / record).read_text()),
+              {"number": 4, "unconfirmed": [2, 3, 4], "pending": None})
+        # A key an earlier open gave out is refused by hand too, because the
+        # list has not shown it yet.
+        exact(refused("MO-3 · by hand"),
+              (2, "refused: MO-3 was given out by an earlier open and the issue list has not shown it yet"))
+        # A listed key past the record still wins: the mint goes one past the
+        # larger of the two sources, not one past the record alone.
+        listed.insert(0, {"number": 8, "title": "MO-8 · listed"})
+        exact(open_ticket("ticket 4")["key"], "MO-9")
+        # A failure that establishes rejection frees the key again, so the
+        # next open takes the same number instead of leaving a gap.
+        failure[0] = "rate_limit"
+        exact(refused("ticket 5"), (1, "gh failed (rate_limit): fixture"))
+        failure[0] = None
+        exact(open_ticket("ticket 5")["key"], "MO-10")
+        # A generic error does not establish rejection: `gh` can fail locally
+        # after GitHub has made the issue, so the key stays pending and the
+        # next open refuses instead of minting it again.
+        failure[0] = "error"
+        exact(refused("ticket 6"), (1, "gh failed (error): fixture"))
+        failure[0] = None
+        exact(json.loads((Path(directory) / record).read_text())["pending"], 11)
+        exact(refused("ticket 6")[0], 2)
+        # The recovery the refusal names: a human checks the repo, then clears
+        # `pending`.
+        state = json.loads((Path(directory) / record).read_text())
+        (Path(directory) / record).write_text(json.dumps({**state, "pending": None}))
+        # A new prefix starts at one instead of carrying the old sequence
+        # over, and switching back finds the old sequence again.
+        config["repos"][repo]["key"] = "NEW"
+        exact(open_ticket("ticket 7")["key"], "NEW-1")
+        config["repos"][repo]["key"] = "MO"
+        exact(open_ticket("ticket 8")["key"], "MO-12")
+        # A create whose answer was lost leaves the key pending, and the next
+        # open refuses instead of handing the key out again.
+        (Path(directory) / record).write_text(json.dumps(
+            {"number": 12, "unconfirmed": [12], "pending": 12}))
+        code, message = refused("ticket 9")
+        exact(code, 2)
+        exact(message.startswith("refused: the last open of fixture/repo did not finish, so MO-12 may exist"), True)
+        # A record that cannot be read is a refusal, not a reset to zero.
+        (Path(directory) / record).write_text("{")
+        exact(refused("ticket 10")[0], 2)
+        (Path(directory) / record).write_text(json.dumps({"number": "four"}))
+        exact(refused("ticket 11")[0], 2)
+        # The record is what makes it work: without it the stale list mints
+        # the same key again, so the eval would pass on a broken mint.
+        (Path(directory) / record).unlink()
+        with patch.object(ticket, "read_last_key",
+                          return_value={"number": 0, "unconfirmed": [], "pending": None}):
+            exact([open_ticket(f"again {n}")["key"] for n in (1, 2, 3)],
+                  ["MO-9", "MO-9", "MO-9"])
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint}
 
 
 def main():
