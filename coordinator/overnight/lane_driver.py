@@ -52,8 +52,7 @@ QUEUE = os.path.join(QUEUE_DIR, "queue.json")
 # The decisions board the lane raises one item on. The path comes from the
 # environment, so a test or a dry run writes its item to a scratch file
 # and never to the board Shyam reads.
-DECISIONS_PATH = os.environ.get(
-    "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
+DECISIONS_PATH = alarms.DECISIONS_PATH
 # The failed gate reviews one pull request gets before it goes to Shyam.
 # The convergence rule (Shyam, 2026-11-18): after 3 review rounds without
 # PASS the pull request is re-cut into smaller pull requests or brought to

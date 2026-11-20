@@ -13,6 +13,7 @@ if _OVERNIGHT_DIR not in sys.path:
     sys.path.append(_OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
+import lane_briefs
 import prompt_paths
 from tick_health import tick_alarm
 import alarms
@@ -1752,8 +1753,7 @@ def gate_changed_count(repo, number):
     return count if isinstance(count, int) else None
 
 
-DECISIONS_PATH = os.environ.get(
-    "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
+DECISIONS_PATH = alarms.DECISIONS_PATH
 BASE_PIN_TTL = 60
 _base_pins = {}
 
@@ -2128,7 +2128,12 @@ def cmd_gatekeep(a):
                 if a.dry_run:
                     print(f"would recut #{pr_number}", flush=True)
                     continue
-                item = recut_item(config["repos"][repo_name]["key"], repo_name, pr_number, event["head"],
+                entry = model_list.first_available("build", preferred="sol", task_type="design")
+                if entry is None:
+                    print(f"recut #{pr_number}: waits, every builder is blocked", flush=True)
+                    continue
+                settings = config["repos"][repo_name]
+                item = recut_item(settings["key"], repo_name, pr_number, event["head"],
                                   event["lines"], event["files"])
                 if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
                     print(f"recut #{pr_number}: the card could not be published", flush=True)
@@ -2139,6 +2144,16 @@ def cmd_gatekeep(a):
                     save(queue)
                 journal.emit("recut", "gatekeep", lines=event["lines"], files=event["files"],
                              **journal.parse_request_id(key))
+                title = f"{settings['key']} re-cut #{pr_number}"
+                brief = lane_briefs.RECUT_BRIEF.format(
+                    model=entry["id"], repo=repo_name, number=pr_number, head=event["head"],
+                    lines=event["lines"], files=event["files"],
+                    cap_lines=OVER_CAP_LINES, cap_files=OVER_CAP_FILES)
+                launch = {"projectId": settings["projectId"], "title": title, "taskType": "design",
+                          "modelSelection": model_list.selection_for(entry, "design"),
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": brief}
+                cmd_start(argparse.Namespace(args=json.dumps(launch), title=title, priority=900,
+                                             tool="t3_thread_launch", action_key=f"recut:{key}"))
                 print(f"recut #{pr_number}", flush=True)
                 continue
             if key in attempted:
