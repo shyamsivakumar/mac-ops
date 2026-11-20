@@ -2517,6 +2517,45 @@ def send_integrity():
             exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
 
 
+def build_here():
+    import lane_driver as lane
+    coordq = load_coordq()
+    repo = "shyamsivakumar/mac-ops"
+    other = "shyamsivakumar/scrapers"
+    rows = [{"number": number, "repository": {"nameWithOwner": name}, "labels": [{"name": "stage:todo"}], "body": ""}
+            for number, name in ((1, repo), (2, repo), (3, other))]
+    with tempfile.TemporaryDirectory() as scratch:
+        with patch.object(coordq, "DIR", scratch):
+            picked = coordq.lane_candidates(rows, set(), {}, {repo})
+            exact([row["number"] for row in picked], [3])
+            exact(Path(scratch, "dispatch.log").read_text().splitlines()[-1].split(" ", 2)[2],
+                  f"refill: skipped 2 build-here tickets in {repo}")
+        sent = []
+        head = "a" * 40
+        with scratch_board(scratch) as decisions:
+            def send(*args, **kwargs):
+                sent.append(args[4])
+                return "sent"
+            for pr_fields, verdict in (({"mergeable": "CONFLICTING"}, ("none", None, "")),
+                                       ({"body": "Refs #10"}, ("none", None, "")),
+                                       ({}, ("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"))):
+                pr = {**dict(number=20, state="OPEN", headRefOid=head, mergeable="MERGEABLE",
+                             body=f"Refs #10\nBuilder check: PASS {head}"), **pr_fields}
+                snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+                with patch.object(lane, "CFG", {repo: dict(key="MO", projectId="fixture", build="here")}), \
+                     patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                     patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                     patch.object(lane, "gate_verdict", return_value=verdict), \
+                     patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
+                     patch.object(lane, "run", side_effect=AssertionError("live command forbidden")), \
+                     patch.object(lane, "t3", side_effect=AssertionError("live T3 forbidden")), \
+                     patch.object(lane, "send", send):
+                    exact(lane.act_on_pr(repo, 20, {}), f"#20: {repo} is built in the Herdr session, board card raised")
+            exact(sent, [])
+            items = json.loads(decisions.read_text())["items"]
+            exact([item["id"] for item in items], [f"herdr-build-MO-20-{head[:8]}"])
+
+
 def root_workspace():
     """Pull request work never works in the shared root of a repository.
 
@@ -3149,6 +3188,14 @@ def stall():
     exact("Two outcomes end the work on an issue at once" in brief, True)
     exact("The lookup is incomplete (the command fails, or the list reaches the limit)" in brief, True)
     exact("report it and leave the issue alone" in brief, True)
+
+    # Brief text lives in lane_briefs.py, which the prompt hold knows by
+    # path, so a change to it is held even though lane_driver.py is code.
+    # Replay of #626: its brief change now lands in lane_briefs.py.
+    exact(lane.prompt_paths.prompt_scan(["coordinator/bin/lane_briefs.py"]), lane.prompt_paths.HOLD)
+    exact(lane.prompt_paths.prompt_scan(["coordinator/overnight/lane_driver.py"]), lane.prompt_paths.CLEAR)
+    exact("re-read its open pull requests" in Path(lane.__file__).read_text(), False)
+    exact("last review round" in Path(lane.__file__).read_text(), False)
     exact("skipped: matching PR #<n>" in brief, True)
     exact("skipped: incomplete PR lookup" in brief, True)
     exact("Every confirmed orphan must end closed" in brief, True)
@@ -4174,7 +4221,31 @@ def close_evidence():
     exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "close-evidence": close_evidence}
+def provider_until():
+    """A provider block ends at its own time, and an unknown model is dropped."""
+    import lane_driver as lane
+    model_list = lane.model_list
+    loader = importlib.machinery.SourceFileLoader("fixture_models", str(Path(model_list.__file__)))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    real = importlib.util.module_from_spec(spec)
+    loader.exec_module(real)
+    key = model_list.identity(model_list.entries("review")[0]["selection"])
+    now = 1_000_000_000.0
+
+    def blocked(name, entry):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(model_list, "blocked_identities", real.blocked_identities):
+            Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {name: entry}}))
+            return model_list.blocked_identities(now)
+
+    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}), False)
+    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-10T00:00:00Z"}), True)
+    exact(key in blocked(key, {"by": "manual"}), True)
+    exact("gone:retired-model" in blocked("gone:retired-model", {"expires_at": 4102444800}), False)
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "close-evidence": close_evidence, "build-here": build_here}
 
 
 def main():

@@ -21,6 +21,7 @@ PROMPT_FILE_NAMES = (
     "answer_format.py",
     "gate_bar.py",
     "gate_policy.py",
+    "lane_briefs.py",
     "playbook.md",
     "code-reviewer.md",
     "skill.md",
