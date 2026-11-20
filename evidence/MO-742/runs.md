@@ -39,3 +39,8 @@ The flagged file is `evals/ladder/traces/flagged-2026-11-20.jsonl` (gitignored, 
 ```
 {"run_id": "c71c85128276", "source": "~/Code/coordinator/loop/decisions.md", "start": "2026-11-20T04:40:00+00:00", "end": "2026-11-20T04:40:00+00:00", "rule": "rate_limit", "excerpt": "- 2026-11-19 20:40 PT | route | gatekeep aborts its pass on nonexistent tickets: each of its last three passes queued a gate and then stopped with `GitHub request failed: repos/shyamsivakumar/mac-ops/issues/1131/comments?per_page=100`.
 ```
+
+## Redaction example
+
+Input: `git clone https://exam:passwor@github.com/x/y.git`, `Authorization: Bearer abc123`, `password=foo`
+Excerpt: `git clone [redacted]github.com/x/y.git`, `[redacted]`, `[redacted]`
