@@ -209,6 +209,24 @@ def gate_thread_to_judge(queue, key, receipts):
     return thread_id
 
 
+def lane_gated(receipts, key):
+    """True when the lane launched a gate for the head, so the head has a recorded gate attempt gatekeep adopts."""
+    return any(k.startswith(key + ":") and k.endswith(":lane") for k in receipts)
+
+
+def retarget_key(key, pr, receipts):
+    """The gate key of a head, suffixed with the base when the recorded gate reviewed another base.
+
+    A gate that reviewed an old base does not cover the head on the new one,
+    so the head gets a key of its own and a new gate is queued for it. The
+    launch then overwrites the plain key's receipt with the new thread.
+    """
+    base = (pr.get("base") or {}).get("ref")
+    thread = receipts.get(key)
+    recorded = receipts.get("base:" + thread) if thread else None
+    return f"{key}:{base}" if base and recorded and recorded != base else key
+
+
 def read_dead_gate(queue, key):
     """The recorded gate of a head and its thread read, or None when the head
     has no gate thread to judge. Read before any lock is taken."""
@@ -1896,9 +1914,10 @@ def gate_candidates(config, rounds=None):
                 yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
                        "reason": "at the gate round cap"}
                 continue
-            gated_key = f"gate:{repo}#{number}:{head}"
-            if gated_key in queue.get("gatedHeads", {}) and gate_thread_to_judge(queue, gated_key, receipts) is None:
-                continue
+            gated_key = retarget_key(f"gate:{repo}#{number}:{head}", pr, receipts)
+            if gated_key in queue.get("gatedHeads", {}) or lane_gated(receipts, gated_key):
+                if gate_thread_to_judge(queue, gated_key, receipts) is None:
+                    continue
             body = pr.get("body") or ""
             refs = re.findall(r"\bRefs #(\d+)\b", body)
             for issue in dict.fromkeys(refs):
@@ -1965,7 +1984,7 @@ def gate_candidates(config, rounds=None):
                     passed = f"Builder check: PASS {head}" in body.splitlines()
                 if not passed:
                     continue
-                key = f"gate:{repo}#{number}:{head}"
+                key = gated_key
                 proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
                 prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
                                            (pr.get("base") or {}).get("ref"), head)
@@ -1980,7 +1999,8 @@ def gate_candidates(config, rounds=None):
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
-                                         base=(pr.get("base") or {}).get("ref") or "main")}
+                                         base=(pr.get("base") or {}).get("ref") or "main")
+                                         | {"clientRequestId": key}}
                 break
             else:
                 found = gate_request(repo, pr, settings, config, receipts, login)
@@ -1992,6 +2012,8 @@ def gate_candidates(config, rounds=None):
                     continue
                 if found:
                     key, args, models = found
+                    if key != gated_key:
+                        key, args = gated_key, {**args, "clientRequestId": gated_key}
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
                            "key": key, "builderModels": models, "args": args}
 
@@ -2034,7 +2056,8 @@ def cmd_gatekeep(a):
             if key in attempted:
                 continue
             observed = load()
-            dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) else None
+            adopted = lane_gated(load_receipts(), key)
+            dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
             if dead is not None and not a.dry_run:
                 block_quota_provider(thread_selection(dead[1]), dead[1], key)
             with model_list.blocked_lock(), Lock(True):
@@ -2045,11 +2068,11 @@ def cmd_gatekeep(a):
                 state = gate_state(heads.get(key))
                 retries = 0
                 retry_of = None
-                if key in heads:
+                if key in heads or adopted:
                     # A head whose retries ran out is left alone until its
                     # head changes, so a reviewer that cannot run is not
                     # relaunched on every run.
-                    if dead is None or state != gate_state(observed["gatedHeads"][key]):
+                    if dead is None or state != gate_state(observed["gatedHeads"].get(key)):
                         continue
                     thread_id, data = dead
                     if load_receipts().get(key) != thread_id:

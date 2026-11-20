@@ -1,0 +1,63 @@
+heavy: queued role=ordinary position=7
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (reviewer-priority)
+heavy: waiting (queue-order)
+heavy: waiting (queue-order)
+heavy: waiting (queue-order)
+heavy: waiting (queue-order)
+heavy: waiting (queue-order)
+heavy: waiting (queue-order)
+heavy: waiting (global-slots-busy)
+alarms: the mute state could not be read: the mute state is not readable: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
+alarms: the mute state could not be read or locked: the mute state is not readable: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
+PASS send-integrity
+PASS root-workspace
+PASS worktree-base-ref
+PASS consolidation-guard
+PASS script-results
+PASS start-routing
+PASS dead-run-recovery
+PASS gate-pipeline
+PASS merged-restart
+PASS merge-pass
+PASS gate-round-cap
+PASS decisions-board-guard
+PASS no-parking
+PASS turncap
+PASS watchdog
+PASS zero-merge
+PASS board-integrity
+PASS api-budget
+PASS ff-drift
+PASS cycle-health
+PASS stall
+PASS alarm-mute
+PASS router-build
+PASS router-blocked
+PASS key-mint
+PASS credit-block
+PASS close-evidence

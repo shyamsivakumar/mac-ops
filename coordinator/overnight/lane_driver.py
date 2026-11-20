@@ -46,6 +46,7 @@ SCORECARD_TRIES = 3
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
+QUEUE = "/Users/shyamsivakumar/Code/coordinator/queue/queue.json"
 # The decisions board the lane raises one item on. The path comes from the
 # environment, so a test or a dry run writes its item to a scratch file
 # and never to the board Shyam reads.
@@ -423,6 +424,12 @@ def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False
     return (state, action) if builder else ("needs-you", "needs-you")
 
 
+def gatekeep_gave_up(repo, number, head):
+    queue = json.load(open(QUEUE)) if os.path.exists(QUEUE) else {}
+    state = (queue.get("gatedHeads") or {}).get(f"gate:{repo}#{number}:{head}")
+    return isinstance(state, dict) and bool(state.get("givenUp"))
+
+
 def gate_in_flight(thread_id):
     status = (t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}).get("status")
     return status in ("running", "queued", "starting", "preparing")
@@ -458,18 +465,27 @@ def gate_verdict(repo, number, head, base):
     reply = last_reply(current)
     if reply.endswith("VERDICT: FAIL"):
         return "FAIL", gate, reply
-    if not complete_pass(reply, head) and not (
-            complete_pass(reply, head, provides=False)
-            and prompt_pull(repo, number, None, base, head) == prompt_paths.HOLD):
-        return "none", gate, reply
+    others = sorted({v for k, v in receipts.items() if k.startswith(key + ":") and v != current
+                     and receipts.get(f"base:{v}") == base})
+
+    def passes(text):
+        return complete_pass(text, head) or (
+            complete_pass(text, head, provides=False)
+            and prompt_pull(repo, number, None, base, head) == prompt_paths.HOLD)
+
+    if not passes(reply):
+        finished = next((t for t in others if not gate_in_flight(t) and passes(last_reply(t))), None)
+        if finished is None:
+            return "none", gate, reply
+        others.append(current)
+        others.remove(finished)
+        current, gate, reply = finished, {"threadId": finished}, last_reply(finished)
     if receipts.get(f"base:{current}") != base:
         return "absent", None, ""
-    earlier = sorted({v for k, v in receipts.items() if k.startswith(key + ":") and v != current
-                      and receipts.get(f"base:{v}") == base})
-    for thread in earlier:
+    for thread in others:
         if gate_in_flight(thread):
             return "running", {"threadId": thread}, ""
-    if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in earlier):
+    if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in others):
         return "SPLIT", gate, reply
     return "PASS", gate, reply
 
@@ -1534,27 +1550,10 @@ def act_on_pr(repo, number, ledger):
         # It is re-cut into smaller pull requests, or Shyam takes it
         # over, and it is not reviewed a 4th time as it is.
         return gate_round_decision(repo, number, head, ledger)
-    tag = "regate" if verdict == "none" else "gate"
-    reviewers = json.loads(run(["ticket", "gate", f"{repo}#{number}", "--print-model"]))
-    if not reviewers:
-        return f"#{number}: no gate reviewer is available"
-    model = reviewers[0]["selection"]
-    if verdict == "none" and f"regate:{repo}#{number}:{head}:{base}" in ledger:
-        if "quota" in reply.lower() and "exhaust" in reply.lower() and len(reviewers) > 1:
-            tag, model = "fallbackgate", reviewers[1]["selection"]
-        else:
-            ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after retry"
-            return f"#{number}: needs-you, gate ended without verdict after retry"
-    brief = run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
-    if head not in brief:
-        return f"#{number}: no gate brief ({brief[-120:]})"
-    if failed_reviews(repo, number, ledger)[0] >= GATE_ROUND_CAP - 1:
-        brief += f"\n{OPEN_FINDINGS_INSTRUCTION}\n"
-    key = CFG[repo]["key"]
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"gate:{repo}#{number}:{head}:{tag}:{base}:lane",
-            "message": brief}
-    return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}:{base}")
+    if verdict == "none" and gatekeep_gave_up(repo, number, head):
+        ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after gatekeep retries"
+        return f"#{number}: needs-you, gate ended without verdict after gatekeep retries"
+    return f"#{number}: waiting for gatekeep to gate head {head[:8]}"
 
 
 def fast_forward_main(repo):
