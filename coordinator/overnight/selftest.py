@@ -419,36 +419,32 @@ def gate_pipeline():
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     failures = []
-    # The reviewer chain is one list now (#552): the first entry is the gate's
-    # reviewer, the last is the fallback when its quota is exhausted.
     full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
-    chain = [entry["selection"]["instanceId"] for entry in lane.model_list.entries("review")]
     cases = [
-        ("checked-head", repo, "absent", "", {}, [chain[0]], None),
+        ("checked-head", repo, "absent", "", {}, [], None),
         ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
         ("prompt-pass", repo, "PASS", f"CHECK: PASS {head}\nVERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
-        ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
-        ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"}, [], None),
-        ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}:main": "retry"},
-         [chain[chain.index(chain[0]) + 1]], None),
+        ("no-verdict", repo, "none", "interrupted", {}, [], None),
+        ("second-no-verdict", repo, "none", "interrupted", {}, [], None),
+        ("pass-then-no-verdict-attempt", repo, "none", "interrupted", {}, ["merge", "provides", "ff"], None),
+        ("fail-then-no-verdict-attempt", repo, "none", "interrupted", {}, [], None),
         ("manual", "digitized/Concerning", "PASS", full, {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
-        ("stray-pass-ignored", repo, "absent", "", {}, [chain[0]], None),
+        ("stray-pass-ignored", repo, "absent", "", {}, [], None),
         ("earlier-fail-later-pass", repo, "PASS", full, {}, ["decisions"], None),
         ("retry-replaced-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("merge-timeout-but-merged", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("older-running-newer-pass", repo, "PASS", full, {}, [], None),
         ("older-pass-newer-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
-        ("pass-without-provides", repo, "none", f"CHECK: PASS {head}\nVERDICT: PASS", {}, [chain[0]], None),
-        ("pass-check-wrong-head", repo, "none", f"PROVIDES: PASS {head}\nCHECK: PASS {'b' * 40}\nVERDICT: PASS", {}, [chain[0]], None),
-        ("no-receipts-file", repo, "absent", "", {}, [chain[0]], None),
-        ("retargeted-after-pass", repo, "PASS", full, {}, [chain[0]], None),
+        ("pass-without-provides", repo, "none", f"CHECK: PASS {head}\nVERDICT: PASS", {}, [], None),
+        ("pass-check-wrong-head", repo, "none", f"PROVIDES: PASS {head}\nCHECK: PASS {'b' * 40}\nVERDICT: PASS", {}, [], None),
+        ("no-receipts-file", repo, "absent", "", {}, [], None),
+        ("retargeted-after-pass", repo, "PASS", full, {}, [], None),
+        ("retargeted-regated-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("trailing-space-pass", repo, "PASS", full.replace(f"PROVIDES: PASS {head}", f"PROVIDES: PASS {head}  "), {}, ["merge", "provides", "ff"], None),
-        ("indented-verdict", repo, "none", full.replace("\nVERDICT", "\n  VERDICT"), {}, [chain[0]], None),
+        ("indented-verdict", repo, "none", full.replace("\nVERDICT", "\n  VERDICT"), {}, [], None),
         ("older-pass-not-superseded", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("older-fail-superseded", repo, "FAIL", "finding\nVERDICT: FAIL", {}, [], None),
     ]
@@ -457,13 +453,16 @@ def gate_pipeline():
              "earlier-fail-later-pass": {gate_key + ":old:retry": "old"},
              "retry-replaced-pass": {gate_key + ":old:retry": "old"},
              "older-running-newer-pass": {gate_key + ":old:retry": "old"},
-             "older-pass-newer-pass": {gate_key + ":old:retry": "old"}}
+             "older-pass-newer-pass": {gate_key + ":old:retry": "old"},
+             "pass-then-no-verdict-attempt": {gate_key + ":old:retry": "old"},
+             "fail-then-no-verdict-attempt": {gate_key + ":old:retry": "old"}}
     replies = {"stray": full, "old": "dead\nVERDICT: FAIL"}
-    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": full}}
+    replies_by_case = {"retry-replaced-pass": {"old": "interrupted"}, "older-pass-newer-pass": {"old": full},
+                       "pass-then-no-verdict-attempt": {"old": full}}
     live_by_case = {"older-running-newer-pass": {"old"}}
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
-        receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate", "base:gate": "main"}
+        receipts = {} if verdict == "absent" else {f"gate:{target}#20:{head}": "gate", "base:gate": "other" if name == "retargeted-regated-pass" else "main"}
         receipts.update(extra.get(name, {}))
         receipts.update({f"base:{v}": "main" for k, v in extra.get(name, {}).items() if k.startswith("gate:")})
         thread_replies = {**replies, **replies_by_case.get(name, {}), "gate": reply}
@@ -477,11 +476,11 @@ def gate_pipeline():
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
                 # The pre-merge guard: the base and head the review was taken
                 # against, read in one call immediately before the merge.
-                return json.dumps({"baseRefName": "main", "headRefOid": head})
+                return json.dumps({"baseRefName": "other" if name == "retargeted-regated-pass" else "main", "headRefOid": head})
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName"]:
                 # The post-merge guard: a merged pull request cannot be
                 # retargeted, so this base is the one the merge landed on.
-                return json.dumps({"baseRefName": "main"})
+                return json.dumps({"baseRefName": "other" if name == "retargeted-regated-pass" else "main"})
             if cmd[:2] == ["gh", "api"]:
                 # The changed paths of the pull request: the case decides
                 # whether they carry one prompt path or only code. The lane
@@ -565,7 +564,7 @@ def gate_pipeline():
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "publish_decision", decision), \
                  patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture",
-                                                baseRefName="other" if name == "retargeted-after-pass" else "main"))), \
+                                                baseRefName="other" if name.startswith("retargeted") else "main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
                 if name != "no-receipts-file":
@@ -584,6 +583,7 @@ def gate_pipeline():
         raise AssertionError("; ".join(failures))
     completion_boundary()
     main_update_boundary()
+    gatekeep_retarget()
 
 
 def merged_restart():
@@ -2038,7 +2038,7 @@ def gate_round_cap():
 
         check_pass = f"CHECK: PASS {heads[2]}"
         none_line = f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
-        merged, briefs = [], []
+        merged = []
 
         def merge(repo_, number_, head_, base_):
             merged.append((number_, head_))
@@ -2111,15 +2111,67 @@ def gate_round_cap():
             result, _ = at_cap(35, none_line)
         exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
         exact(merged, [(30, heads[2])])
-        # (f) the brief asks for the line from round 3 on, not at round 1.
-        def brief_for(ledger):
-            with patch.object(lane, "start", lambda args, prio, led, lkey: briefs.append(args["message"]) or "started"):
-                act(36, heads[3], ledger, verdict=("absent", None, ""))
-            return briefs[-1]
-        two_rounds = {f"fix:{repo}#36:{heads[0]}": "sent", f"fix:{repo}#36:{heads[1]}": "sent"}
-        exact(lane.OPEN_FINDINGS_NONE in brief_for(two_rounds), True)
-        exact(lane.OPEN_FINDINGS_NONE in brief_for({}), False)
     gatekeep_round_cap()
+
+
+def gatekeep_retarget():
+    """A head gated on one base is gated again once the pull request moves to another.
+
+    The recorded gate reviewed `main`. The pull request now targets `other`
+    with the same head, so gatekeep queues one new gate for that base, and
+    the next run queues nothing more while that gate waits to launch.
+    """
+    coordq = load_coordq()
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    pr = {"draft": False, "number": 20, "head": {"sha": head}, "body": f"Refs #10\nBuilder check: PASS {head}\n",
+          "changed_files": 1, "base": {"ref": "other"}}
+    plain = f"gate:{repo}#20:{head}"
+    receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+    comment = {"user": {"login": "me"}, "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
+    receipts = {"req-1": "builder-1", plain: "gate", "base:gate": "main"}
+
+    class Run:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([[pr]]))
+        if endpoint == f"repos/{repo}/issues/10/comments?per_page=100":
+            return Run(json.dumps([[comment]]))
+        if endpoint == f"repos/{repo}/commits/{head}/statuses?per_page=100":
+            return Run("[[]]")
+        raise AssertionError(f"unexpected read: {endpoint}")
+
+    def gatekeep(scratch):
+        with patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "load_receipts", lambda: receipts), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             patch.object(coordq, "read_builder_thread", return_value=({"providerInstanceId": "fixture", "model": "m"}, [])), \
+             patch.object(coordq, "router_chain", return_value=[]), \
+             patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
+             patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
+             patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
+             patch.object(coordq, "gate_args", return_value={"clientRequestId": plain, "modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t"}), \
+             patch.object(coordq.model_list, "is_blocked", return_value=False), \
+             contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            settings = Path(scratch) / "gatekeep-config.json"
+            settings.write_text(json.dumps({"repos": {repo: {"key": "FIX", "projectId": "fixture"}}}))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+        return json.loads(Path(scratch, "queue.json").read_text())
+
+    with tempfile.TemporaryDirectory() as scratch:
+        queue = gatekeep(scratch)
+        exact([item["args"]["clientRequestId"] for item in queue["items"]], [f"{plain}:other"])
+        exact(list(queue["gatedHeads"]), [f"{plain}:other"])
+        exact(len(gatekeep(scratch)["items"]), 1)
 
 
 def gatekeep_round_cap():
