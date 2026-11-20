@@ -26,6 +26,7 @@ _BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
+import close_check
 import gate_policy
 import journal
 from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
@@ -993,6 +994,11 @@ def close_failed_ticket(item, key):
     return int(match.group(1)) if match else None
 
 
+def unreviewed_ticket(item, key):
+    match = re.search(rf"\(ticket {re.escape(key)}-(\d+)\)", str(item.get("title") or ""))
+    return int(match.group(1)) if match else None
+
+
 def card_candidate(item, lane_by_key, all_by_key, repos_by_dashed, open_prs):
     """What one board card is about, or None when this cleanup does not own it.
 
@@ -1016,16 +1022,20 @@ def card_candidate(item, lane_by_key, all_by_key, repos_by_dashed, open_prs):
     if match and match.group(1) in all_by_key:
         ticket = close_failed_ticket(item, match.group(1))
         return None if ticket is None else ("ticket", all_by_key[match.group(1)], ticket)
+    match = re.fullmatch(r"lane-merged-unreviewed-([A-Za-z0-9]+)-(\d+)", item_id)
+    if match and match.group(1) in all_by_key:
+        ticket = unreviewed_ticket(item, match.group(1))
+        return None if ticket is None else ("ticket", all_by_key[match.group(1)], ticket)
     return None
 
 
 def reconcile_prompt_items(snapshot):
     """Take settled asks off the board.
 
-    This is the one place a card is withdrawn, and it owns three kinds: a
+    This is the one place a card is withdrawn, and it owns four kinds: a
     prompt merge ask whose pull request Shyam merged or closed, a gate-rounds
-    ask whose pull request is settled, and a close-failed card whose ticket
-    is closed. A pull request Shyam settled between two passes is not in the
+    ask whose pull request is settled, and a close-failed or merged-unreviewed
+    card whose ticket is closed. A pull request Shyam settled between two passes is not in the
     snapshot any more, so no per-pull-request action ever reaches its item:
     the board would keep asking for work that is done. The items are read
     once here and the stale ones are removed by the key and number their id
@@ -1252,13 +1262,16 @@ def after_merge(repo, number, head, issue, gate):
                       "--gate-thread", gate["threadId"]])
         if "is already closed" in output:
             print(f"already-closed:{ref}: {output}")
-    fast_forward_main(repo)
 
 
-def failed_checklist_lines(exc):
-    text = f"{exc.output or ''}\n{exc.stderr or ''}"
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return [line for line in lines if ": fail" in line] or lines[:1]
+def failed_checklist_lines(repo, number, issue, exc):
+    try:
+        stopped = close_check.blocking(close_check.run_check(repo, number, int(issue))["items"])
+    except RuntimeError as err:
+        return [f"the checklist could not be read: {err}"]
+    if stopped:
+        return [f"{item['item']}: {item['status']} - {item['detail']}" for item in stopped]
+    return [line.strip() for line in f"{exc.output or ''}\n{exc.stderr or ''}".splitlines() if line.strip()]
 
 
 def close_failed_item(repo, number, head, issue, failed):
@@ -1278,9 +1291,14 @@ def close_after_merge(repo, number, head, issue, gate, ledger):
         after_merge(repo, number, head, issue, gate)
     except subprocess.CalledProcessError as exc:
         ledger[lkey] = "close failed"
-        publish_decision(close_failed_item(repo, number, head, issue, failed_checklist_lines(exc)))
+        publish_decision(close_failed_item(repo, number, head, issue,
+                                           failed_checklist_lines(repo, number, issue, exc)))
         return False
     ledger[lkey] = "closed"
+    try:
+        fast_forward_main(repo)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as exc:
+        print(f"{CFG[repo]['key']:5} #{number}: ticket closed, main not fast-forwarded: {exc}")
     return True
 
 
@@ -1293,11 +1311,11 @@ UNREVIEWED_REASONS = {
 }
 
 
-def merged_without_gate_item(repo, number, head, verdict):
+def merged_without_gate_item(repo, number, head, issue, verdict):
     key = CFG[repo]["key"]
     return {"id": f"lane-merged-unreviewed-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": (f"{key}-{number} is merged at head {head[:8]} without a gate PASS the lane can tie to the merge, "
-                      "so its ticket stays open: check the merge and close the ticket yourself."),
+                      f"so its ticket stays open (ticket {key}-{issue}): check the merge and close the ticket yourself."),
             "why": ("The lane closes a ticket only after a merge whose head the recorded gate attempt passed. "
                     f"Here {UNREVIEWED_REASONS[verdict]}.")}
 
@@ -1311,6 +1329,9 @@ def settle_merged_prs(repo, ledger):
     merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged",
                              "--search", f"merged:>={since[:10]}", "--limit", str(SETTLE_PR_LIMIT),
                              "--json", "number,headRefOid,body,mergedAt,baseRefName"]) or "[]")
+    if len(merged) == SETTLE_PR_LIMIT:
+        print(f"SETTLE TRUNCATED {repo}: {SETTLE_PR_LIMIT} merged PRs since {since[:10]}, "
+              "older merges in the window are not settled")
     for pr in merged:
         if (pr.get("mergedAt") or "") < since:
             continue
@@ -1323,6 +1344,8 @@ def settle_merged_prs(repo, ledger):
             print(f"DRY after-merge #{number}")
             continue
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
+        if verdict == "running":
+            continue
         journal_once("merged_outside_lane", repo, number, head, ledger,
                      f"journal-outside:{repo}#{number}:{head}",
                      thread=gate["threadId"] if gate else None, verdict=verdict)
@@ -1332,7 +1355,7 @@ def settle_merged_prs(repo, ledger):
             else:
                 print(f"{CFG[repo]['key']:5} #{number}: merged earlier, close failed, board item raised")
         else:
-            publish_decision(merged_without_gate_item(repo, number, head, verdict))
+            publish_decision(merged_without_gate_item(repo, number, head, found.group(1), verdict))
             ledger[lkey] = "item raised"
 
 
