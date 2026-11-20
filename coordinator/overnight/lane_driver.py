@@ -1449,10 +1449,14 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
 
 def unstick_brief_path():
     """The unstick brief: the copy installed beside this module, else the
-    coordinator runtime copy on a machine that has not reinstalled yet."""
+    tracked copy in the checkout, else the coordinator runtime copy on a
+    machine that has not reinstalled yet."""
     beside = Path(__file__).with_name("unstick-brief.md")
     if beside.is_file():
         return beside
+    tracked = Path(__file__).resolve().parent.parent / "bin" / "unstick-brief.md"
+    if tracked.is_file():
+        return tracked
     return Path("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md")
 
 
