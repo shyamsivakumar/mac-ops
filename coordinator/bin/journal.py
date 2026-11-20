@@ -12,6 +12,7 @@ against GitHub catches the missing line.
 """
 
 import fcntl
+import functools
 import json
 import os
 import re
@@ -19,7 +20,18 @@ import sys
 import time
 
 VERSION = 1
-COMMON = ("repo", "ticket", "pr", "head", "thread", "item", "attempt", "kind")
+COMMON = (
+    "repo",
+    "ticket",
+    "pr",
+    "head",
+    "thread",
+    "item",
+    "attempt",
+    "kind",
+    "model",
+    "arm",
+)
 
 _REPO = r"(?P<repo>[^#:\s]+)#(?P<n>\d+)"
 _HEAD = r"(?P<head>[0-9a-f]{40})"
@@ -43,12 +55,22 @@ def journal_path(now):
     )
 
 
+@functools.lru_cache(maxsize=1)
+def installed_sha():
+    path = os.path.expanduser("~/.local/state/mac-ops/coordinator-installation.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        return json.load(fh).get("source_sha")
+
+
 def emit(event, actor, **fields):
     now = time.time()
     row = {"v": VERSION, "ts": now, "event": event, "actor": actor}
     for key in COMMON:
         row[key] = fields.pop(key, None)
     row["data"] = {**(fields.pop("data", None) or {}), **fields}
+    row["data"]["sha"] = installed_sha()
     line = json.dumps(row, default=str, separators=(",", ":")) + "\n"
     try:
         os.makedirs(journal_dir(), exist_ok=True)

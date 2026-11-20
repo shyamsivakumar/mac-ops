@@ -2147,6 +2147,8 @@ def gatekeep_retarget():
             return Run(json.dumps([[comment]]))
         if endpoint == f"repos/{repo}/commits/{head}/statuses?per_page=100":
             return Run("[[]]")
+        if endpoint.endswith("/files?per_page=100"):
+            return Run("[[]]")
         raise AssertionError(f"unexpected read: {endpoint}")
 
     def gatekeep(scratch):
@@ -2253,6 +2255,8 @@ def gatekeep_round_cap():
             failed.stderr = "gh: Not Found (HTTP 404)"
             return failed
         if endpoint == f"repos/{repo}/commits/{'e' * 40}/statuses?per_page=100":
+            return Run("[[]]")
+        if endpoint.endswith("/files?per_page=100"):
             return Run("[[]]")
         raise AssertionError(f"unexpected read: {endpoint}")
 

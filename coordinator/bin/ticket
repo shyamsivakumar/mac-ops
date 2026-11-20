@@ -1542,6 +1542,8 @@ def cmd_start(a):
         if a.print_brief:
             print("brief:\n" + brief)
         return
+    if attempt == 1:
+        journal.emit("assigned", "ticket", repo=repo, ticket=n, attempt=attempt, arm=os.environ.get("COORD_ARM"))
     post_comment(repo, n, intent_text)
     try:
         result = run(command, COORDQ_TIMEOUT)

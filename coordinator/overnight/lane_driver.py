@@ -448,6 +448,30 @@ def journal_once(event, repo, number, head, ledger, key, **fields):
         journal_event(event, repo, number, head, **fields)
 
 
+def journal_has_merged(repo, number):
+    path = journal.journal_path(time.time())
+    if not os.path.exists(path):
+        return False
+    with open(path) as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("event") in ("merged", "merged_outside_lane") and row.get("repo") == repo and row.get("pr") == number:
+                return True
+    return False
+
+
+def journal_merged(repo, number, head, ledger, **fields):
+    event = fields.pop("event", "merged")
+    key = f"journal-merged:{repo}#{number}"
+    if DRY or key in ledger or journal_has_merged(repo, number):
+        return
+    ledger[key] = event
+    journal_event(event, repo, number, head, **fields)
+
+
 def journal_verdict(repo, number, head, verdict, gate, ledger):
     if verdict in ("PASS", "FAIL", "SPLIT"):
         journal_once("gate_verdict", repo, number, head, ledger,
@@ -1290,8 +1314,8 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     merged, note = merge_on_reviewed_base(repo, number, head, base)
     landed = LANDED_ELSEWHERE.pop((repo, number, head), None)
     if merged or landed:
-        journal_once("merged", repo, number, head, ledger, f"journal-outside:{repo}#{number}:{head}",
-                     thread=gate["threadId"], base=base, landed_base=landed or base)
+        journal_merged(repo, number, head, ledger,
+                       thread=gate["threadId"], base=base, landed_base=landed or base)
     if not merged:
         return note
     close_after_merge(repo, number, head, issue, gate, ledger)
@@ -1399,9 +1423,8 @@ def settle_merged_prs(repo, ledger):
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
         if verdict == "running":
             continue
-        journal_once("merged_outside_lane", repo, number, head, ledger,
-                     f"journal-outside:{repo}#{number}:{head}",
-                     thread=gate["threadId"] if gate else None, verdict=verdict)
+        journal_merged(repo, number, head, ledger, event="merged_outside_lane",
+                       thread=gate["threadId"] if gate else None, verdict=verdict)
         if verdict == "PASS":
             if close_after_merge(repo, number, head, found.group(1), gate, ledger):
                 print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
