@@ -284,12 +284,17 @@ def check_isolation(run, isolation, env):
     """
     before = live_log_counts(isolation)
     results = {}
+    roots = {}
     refused = []
     for name, command, timeout in (
         ("unittest", ["python3", "-m", "unittest"], 300),
         ("selftest", ["python3", "coordinator/overnight/overnight", "selftest"], 120),
     ):
-        root = Path(tempfile.mkdtemp(prefix=f"check-{name}-", dir=os.environ.get("TMPDIR")))
+        # The root carries the run's own prefix, because the isolation tests
+        # read the log paths and expect the run's name in them.
+        root = Path(tempfile.mkdtemp(prefix=f"{isolation.CALLER}-check-{name}-",
+                                     dir=os.environ.get("TMPDIR")))
+        roots[name] = root
         child_env = {**env, isolation.ROOT_VAR: str(root)}
         results[name] = run(command, timeout=timeout, check=False, capture=True,
                             child_env=child_env)
@@ -300,6 +305,13 @@ def check_isolation(run, isolation, env):
         refusals = root / "refusals.log"
         if refusals.is_file():
             refused.extend(refusals.read_text().splitlines())
+    # The tests for this feature must pass under the environment the check
+    # gives them. A run that is red here is a finding about the isolation,
+    # not the machine's own state, so it fails the check.
+    isolation_tests = run(
+        ["python3", "-m", "unittest", "tests.test_tick_external_call_bounds.IsolationTests"],
+        timeout=120, check=False, capture=True,
+        child_env={**env, isolation.ROOT_VAR: str(roots["unittest"])})
     after = live_log_counts(isolation)
     if after[:2] != before[:2]:
         raise AssertionError(
@@ -308,6 +320,11 @@ def check_isolation(run, isolation, env):
     if refused:
         raise AssertionError(
             f"the run needed a call the fake `gh` does not answer: {refused[0]}")
+    if isolation_tests.returncode != 0:
+        tail = (isolation_tests.stdout + isolation_tests.stderr).strip().splitlines()[-3:]
+        raise AssertionError(
+            f"the isolation tests failed under the check's own environment: "
+            f"{' | '.join(tail)}")
     suite = results["unittest"]
     selftest = results["selftest"]
     ran = re.search(r"^Ran (\d+) tests? in ", suite.stdout + suite.stderr, re.MULTILINE)
@@ -319,12 +336,14 @@ def check_isolation(run, isolation, env):
     if selftest.returncode != 0:
         raise AssertionError(
             f"the overnight selftest did not run: exited {selftest.returncode}")
+    for root in roots.values():
+        shutil.rmtree(root, ignore_errors=True)
     return (f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
             f"{before[1]}, unchanged after the run; gh-usage lines in total "
             f"{before[2]} -> {after[2]}; both entry points installed the fake "
-            f"`gh` themselves; no call the fake `gh` refused; "
-            f"{ran.group(1)} tests ran (unittest exited {suite.returncode}, "
-            f"selftest exited {selftest.returncode})")
+            f"`gh` themselves; no call the fake `gh` refused; the isolation "
+            f"tests passed; {ran.group(1)} tests ran (unittest exited "
+            f"{suite.returncode}, selftest exited {selftest.returncode})")
 
 
 def imports(path):
