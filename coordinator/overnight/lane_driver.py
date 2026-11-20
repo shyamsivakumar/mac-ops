@@ -990,6 +990,16 @@ def prompt_merge_item(repo, number, head):
                     f"`gh pr merge {number} -R {repo} --squash --match-head-commit {head}`.")}
 
 
+def herdr_build_card(repo, number, head, need):
+    key = CFG[repo]["key"]
+    item = {"id": f"herdr-build-{key}-{number}-{head[:8]}", "group": "Coordinator", "kind": "action",
+            "title": f"{key}-{number} needs work on head {head[:8]}: {need}. The Herdr session builds {repo}, so no builder thread was sent it.",
+            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch."}
+    if not DRY:
+        publish_decision(item)
+    return f"#{number}: {repo} is built in the Herdr session, board card raised"
+
+
 def withdraw_decision(item_id):
     """Take one item off Shyam's board, once the pull request is settled."""
     return alarms.route_update(DECISIONS_PATH, item_id, "remove", None)
@@ -1499,6 +1509,8 @@ def act_on_pr(repo, number, ledger):
     check_ok = f"Builder check: PASS {head}" in body or agent_ok
     if pr.get("mergeable") == "CONFLICTING" or not check_ok:
         why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
+        if CFG[repo].get("build") == "here":
+            return herdr_build_card(repo, number, head, why)
         if not builder:
             return f"skip #{number}: {why}, no builder thread"
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
@@ -1528,6 +1540,8 @@ def act_on_pr(repo, number, ledger):
             if no_open_findings(reply, head):
                 return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
             return gate_round_decision(repo, number, head, ledger)
+    if verdict == "FAIL" and CFG[repo].get("build") == "here":
+        return herdr_build_card(repo, number, head, "the gate returned FAIL findings")
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
@@ -2434,6 +2448,8 @@ def run_pass(ledger):
                     if result.startswith("skip "):
                         continue
                     done = True
+            if CFG[repo].get("build") == "here":
+                continue
             if repo != "shyamsivakumar/strategy-replay-workbench" and done and not DRY and not b:
                 u = unstick(repo, ledger)
                 if not u.startswith("nothing ready"):
