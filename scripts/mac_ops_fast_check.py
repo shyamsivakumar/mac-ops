@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SUFFIXLESS_PYTHON = (
     "coordinator/overnight/overnight",
     "coordinator/bin/coord-watch",
+    "coordinator/bin/scorecard",
     "coordinator/pi/bin/coord-tick",
 )
 
