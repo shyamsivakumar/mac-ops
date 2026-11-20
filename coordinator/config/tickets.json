@@ -85,5 +85,9 @@
     "Rollback",
     "Gate",
     "Finish"
-  ]
+  ],
+  "limits": {
+    "maxCodeFiles": 3,
+    "maxCodeLines": 150
+  }
 }
