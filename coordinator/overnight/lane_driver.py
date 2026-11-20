@@ -417,9 +417,10 @@ def journal_once(event, repo, number, head, ledger, key, **fields):
 
 
 def journal_verdict(repo, number, head, verdict, gate, ledger):
-    journal_once("gate_verdict", repo, number, head, ledger,
-                 f"journal-verdict:{gate['threadId']}:{head}",
-                 thread=gate["threadId"], kind="gate", verdict=verdict)
+    if verdict in ("PASS", "FAIL", "SPLIT"):
+        journal_once("gate_verdict", repo, number, head, ledger,
+                     f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
+                     thread=gate["threadId"], kind="gate", verdict=verdict)
 
 
 def gate_verdict(repo, number, head, base):
@@ -632,8 +633,11 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     out = receipt.splitlines()[-1]
     ledger[lkey] = out
     if lkey.startswith("fix:"):
-        journal.emit("fix_sent", "lane", thread=thread_id, model=fixer["selection"]["model"],
-                     **journal.parse_request_id(lkey))
+        queued_item = re.search(r"#(\d+)", out)
+        journal.emit("fix_sent", "lane", thread=thread_id if sendable else None,
+                     item=int(queued_item[1]) if queued_item else None,
+                     rerouted_from=None if sendable else thread_id,
+                     model=fixer["selection"]["model"], **journal.parse_request_id(lkey))
     if not sendable:
         print(f"SEND REROUTE {thread_id}: {out}")
         return f"fresh ({thread_id} {reroute}): {out}"
@@ -1010,6 +1014,9 @@ def base_moved_item(repo, number, head, landed, base):
                     "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
 
 
+LANDED_ELSEWHERE = {}
+
+
 def merge_on_reviewed_base(repo, number, head, base):
     """Merge one pull request only when its base is still the reviewed one.
 
@@ -1064,7 +1071,7 @@ def merge_on_reviewed_base(repo, number, head, base):
         # The pull request cannot be retargeted once it is merged, so the base
         # it names now is the base the merge landed on. The item puts that in
         # front of Shyam; the pass itself claims no merge.
-        journal_event("merge_held", repo, number, head, reason="base moved")
+        LANDED_ELSEWHERE[(repo, number, head)] = landed.get("baseRefName")
         published = publish_decision(base_moved_item(repo, number, head,
                                                      landed.get("baseRefName"), base))
         return False, (f"critical #{number}: the merge landed on base "
@@ -1127,9 +1134,12 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     # head are read again inside the merge step, as close to the merge as
     # the merge can be guarded: a pull request that moved merges nothing.
     merged, note = merge_on_reviewed_base(repo, number, head, base)
+    landed = LANDED_ELSEWHERE.pop((repo, number, head), None)
+    if merged or landed:
+        journal_once("merged", repo, number, head, ledger, f"journal-outside:{repo}#{number}:{head}",
+                     thread=gate["threadId"], base=base, landed_base=landed or base)
     if not merged:
         return note
-    journal_event("merged", repo, number, head, thread=gate["threadId"], base=base)
     close_after_merge(repo, number, head, issue, gate, ledger)
     return note
 
@@ -1197,8 +1207,9 @@ def settle_merged_prs(repo, ledger):
             print(f"DRY after-merge #{number}")
             continue
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
-        journal_event("merged_outside_lane", repo, number, head,
-                      thread=gate["threadId"] if gate else None, verdict=verdict)
+        journal_once("merged_outside_lane", repo, number, head, ledger,
+                     f"journal-outside:{repo}#{number}:{head}",
+                     thread=gate["threadId"] if gate else None, verdict=verdict)
         if verdict == "PASS":
             close_after_merge(repo, number, head, found.group(1), gate, ledger)
             print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")

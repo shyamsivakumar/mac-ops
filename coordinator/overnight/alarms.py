@@ -355,11 +355,17 @@ def change_board(board, alarm_id, action, item):
     return board, changed
 
 
+def alarm_shape(entry):
+    if entry is None:
+        return None
+    return entry.get("group"), cause_of(entry.get("cause") or entry.get("title"))
+
+
 def alarm_event(board, alarm_id, action, item):
     held = next((e for e in board["items"]
                  if isinstance(e, dict) and e.get("id") == alarm_id), None)
     if action == "raise" and item is not None:
-        return ("alarm_raised", item.get("group")) if held != item else None
+        return ("alarm_raised", item.get("group")) if alarm_shape(held) != alarm_shape(item) else None
     return ("alarm_withdrawn", held.get("group")) if held is not None else None
 
 
