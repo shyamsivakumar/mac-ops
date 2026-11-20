@@ -2875,6 +2875,8 @@ def stall():
     # thread reports the issue and moves on, so the disposition rule cannot
     # send it back to close a ticket that has a pull request.
     exact("Two outcomes end the work on an issue at once" in brief, True)
+    exact("The lookup is incomplete (the command fails, or the list reaches the limit)" in brief, True)
+    exact("report it and leave the issue alone" in brief, True)
     exact("skipped: matching PR #<n>" in brief, True)
     exact("skipped: incomplete PR lookup" in brief, True)
     exact("Every confirmed orphan must end closed" in brief, True)
