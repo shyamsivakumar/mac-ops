@@ -929,8 +929,8 @@ def cmd_start(a):
         duplicate = duplicate_message(queue, title, target, live,
                                       started_before if started_before else None)
         if duplicate:
-            refuse_start(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
-                         f"already {duplicate[0]} as coordq #{duplicate[1]}", args, tool)
+            die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
+                f"already {duplicate[0]} as coordq #{duplicate[1]}")
         if key:
             item["actionKey"] = key
         queue["next"] += 1

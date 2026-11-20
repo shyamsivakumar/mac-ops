@@ -509,7 +509,9 @@ def cmd_open(a):
         die(f"refused: {e}", 2)
     except GhError as e:
         die(f"gh failed ({e.kind}): {e}")
-    journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(url.rsplit("/", 1)[1]), key=key, labels=labels)
+    number = url.rsplit("/", 1)[-1]
+    journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(number) if number.isdigit() else None,
+                 key=key, labels=labels)
     print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "url": url}))
 
 
