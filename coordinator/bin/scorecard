@@ -147,7 +147,7 @@ class GitHub:
         return grouped
 
     def merged_prs(self, start, end):
-        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,closedAt")
+        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,body,closedAt")
 
     def closed_issues(self, start, end):
         return self.search("issues", ["--state", "closed", "--closed", span(start, end)], "number,title,closedAt")
@@ -155,6 +155,24 @@ class GitHub:
     def reverts(self, start, end):
         return self.search("prs", ["--match", "title", "--merged", "--merged-at", span(start, end)],
                            "number,title,body,closedAt", query=["Revert"])
+
+    def fixes(self, start, end):
+        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,body,closedAt")
+
+    def reopened(self, start, end):
+        found = {}
+        for repo in sorted(self.repos):
+            if self.calls >= CALL_LIMIT:
+                raise Unavailable(f"the {CALL_LIMIT} call limit for one report was reached")
+            self.calls += 1
+            result = gh_gateway.run(["gh", "api", "--paginate", f"repos/{repo}/issues/events?per_page=100",
+                                     "--jq", '.[] | select(.event=="reopened") | {number: .issue.number, at: .created_at}'],
+                                    timeout=90, caller_name=CALLER)
+            if result.returncode:
+                raise Unavailable(f"gh api issues/events failed for {repo}: {result.stderr.strip()[:120]}")
+            rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            found[repo] = [row for row in rows if start <= iso_ts(row["at"]) <= end]
+        return found
 
 
 def span(start, end):
@@ -167,7 +185,10 @@ def fetch_github(repos, start, end, revert_window_closed):
         merged = github.merged_prs(start, end)
         closed = github.closed_issues(start, end)
         reverted = github.reverts(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
-        return {"merged": merged, "closed": closed, "reverts": reverted, "calls": github.calls}
+        fixes = github.fixes(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
+        reopened = github.reopened(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
+        return {"merged": merged, "closed": closed, "reverts": reverted, "fixes": fixes,
+                "reopened": reopened, "calls": github.calls}
     except (Unavailable, gh_gateway.ApiBudgetExhausted, json.JSONDecodeError,
             subprocess.TimeoutExpired, OSError) as exc:
         return {"error": f"GitHub read failed: {exc}", "calls": github.calls}
@@ -184,6 +205,39 @@ def reverted_merges(merged, reverts):
                 if (revert["title"] == quoted or names_it) and within:
                     found.append(ref(repo, pr["number"]))
                     break
+    return found
+
+
+def escaped_merges(merged, reverts, fixes, reopened):
+    found = {}
+    for repo, prs in merged.items():
+        for pr in prs:
+            tickets = {int(n) for n in re.findall(r"(?:Refs|Fixes|Closes)\s+\S*#(\d+)", pr.get("body") or "")}
+            numbers = {pr["number"]} | tickets
+            closed = iso_ts(pr["closedAt"])
+            best = None
+            for revert in reverts.get(repo, []):
+                names_it = re.search(rf"Reverts\s+\S*#{pr['number']}\b", revert.get("body") or "")
+                at = iso_ts(revert["closedAt"])
+                if (revert["title"] == f'Revert "{pr["title"]}"' or names_it) and 0 <= at - closed <= REVERT_DAYS * 86400:
+                    if best is None or (at, 0) < best[:2]:
+                        best = (at, 0, "revert")
+            for fix in fixes.get(repo, []):
+                if fix["number"] == pr["number"]:
+                    continue
+                named = {int(n) for n in re.findall(r"(?:Fixes|Follow-up to|Follow up to)\s+\S*#(\d+)",
+                                                    fix.get("body") or "")}
+                at = iso_ts(fix["closedAt"])
+                if named & numbers and 0 <= at - closed <= REVERT_DAYS * 86400:
+                    if best is None or (at, 1) < best[:2]:
+                        best = (at, 1, "fix")
+            for row in reopened.get(repo, []):
+                at = iso_ts(row["at"])
+                if row["number"] in tickets and 0 <= at - closed <= REVERT_DAYS * 86400:
+                    if best is None or (at, 2) < best[:2]:
+                        best = (at, 2, "reopen")
+            if best:
+                found[ref(repo, pr["number"])] = best[2]
     return found
 
 
@@ -307,8 +361,11 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
         change_failure = unknown(gh_why)
     else:
         reverted = reverted_merges(merged, github["reverts"] or {})
-        change_failure = metric({"reverted": reverted, "merges": len(merged_refs)},
-                                f"a merged PR whose revert merged within {REVERT_DAYS} days")
+        escaped = escaped_merges(merged, github["reverts"] or {}, github["fixes"] or {},
+                                 github["reopened"] or {})
+        change_failure = metric({"reverted": reverted, "merges": len(merged_refs), "escaped": len(escaped),
+                                 "kinds": escaped},
+                                f"a merged PR with a revert, a fix PR or a reopened ticket within {REVERT_DAYS} days")
 
     lane_merged = {ref(row["repo"], row["pr"]) for row in live if row["event"] == "merged"}
     outside = {ref(row["repo"], row["pr"]) for row in live if row["event"] == "merged_outside_lane"}
