@@ -2164,7 +2164,7 @@ def gatekeep_round_cap():
 
 
 def decisions_board_guard():
-    """A test run never writes the board Shyam reads.
+    """A test run never writes the board Shyam reads, and settled cards leave it.
 
     The lane raises one item on the decisions board when a pull request
     uses its review rounds. The board path comes from the environment, so
@@ -2172,6 +2172,12 @@ def decisions_board_guard():
     raises the item and checks that every write names the scratch file as
     its destination. The board Shyam reads is not compared before and
     after, because the coordinator may publish to it while this runs.
+
+    The same eval replays the settled cards this ticket names: four
+    gate-rounds cards whose pull requests are closed, and one close-failed
+    card whose ticket is closed. A gate-rounds card for an open pull
+    request stays, a prompt-merge card is still withdrawn, a dry run writes
+    nothing, and a card whose state cannot be read stays.
     """
     import lane_driver as lane
     targets = []
@@ -2192,6 +2198,73 @@ def decisions_board_guard():
         exact(targets, [str(board)] * 2)
         exact(len(items), 1)
         exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
+
+    repo = "shyamsivakumar/mac-ops"
+    settled = [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (602, 623, 625, 627)]
+    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544"]
+    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702"]
+    # The close-failed title is the one `close_failed_item` writes, and it
+    # names the ticket the close was for.
+    def close_failed_title(pr, ticket):
+        return (f"MO-{pr} is merged at head 12345678 but closing MO-{ticket} failed: "
+                "check why and close the ticket yourself.")
+    cards = [{"id": card} for card in settled + kept]
+    cards[settled.index("lane-close-failed-MO-661")]["title"] = close_failed_title(661, 660)
+    open_card = cards[len(settled) + 1]
+    open_card["title"] = close_failed_title(702, 701)
+    snapshot = {"repos": {repo: {"prs": [{"number": 700}]}}}
+    closed_prs = {602, 623, 625, 627, 544}
+    closed_tickets = {660}
+
+    def read(cmd, timeout=150):
+        kind, number = cmd[1], int(cmd[3])
+        if kind == "pr":
+            return json.dumps({"state": "CLOSED" if number in closed_prs else "OPEN",
+                               "mergedAt": None})
+        return json.dumps({"state": "CLOSED" if number in closed_tickets else "OPEN"})
+
+    taken = []
+
+    def withdraw(item_id):
+        taken.append(item_id)
+        return "wrote"
+
+    def reconcile(runner=read, dry=False):
+        taken.clear()
+        with patch.object(lane, "CFG", {repo: {"key": "MO", "projectId": "fixture"}}), \
+                patch.object(lane, "DRY", dry), \
+                patch.object(lane, "run", runner), \
+                patch.object(lane.alarms, "read_board", return_value=(b"", {"items": cards})), \
+                patch.object(lane, "withdraw_decision", withdraw):
+            return lane.reconcile_prompt_items(snapshot)
+
+    # The five cards this ticket names are withdrawn, and the prompt-merge
+    # card is still withdrawn. The open pull request and the open ticket keep
+    # their cards.
+    exact(reconcile(), len(settled))
+    exact(sorted(taken), sorted(settled))
+    # A dry run writes nothing and reads nothing.
+    exact(reconcile(dry=True), 0)
+    exact(taken, [])
+    # A state that did not come back is not a settled card.
+    def broken(cmd, timeout=150):
+        raise RuntimeError("gh failed")
+    exact(reconcile(runner=broken), 0)
+    exact(taken, [])
+    # A close-failed card whose title names no ticket stays.
+    open_card["title"] = "MO-702 is merged but the close failed."
+    exact(reconcile(), len(settled))
+    exact("lane-close-failed-MO-702" in taken, False)
+    open_card["title"] = close_failed_title(702, 701)
+    # A close-failed card whose ticket is still open stays.
+    closed_tickets.clear()
+    exact(reconcile(), len(settled) - 1)
+    exact("lane-close-failed-MO-661" in taken, False)
+    closed_tickets.add(660)
+    # A card this cleanup does not own is left alone.
+    cards.append({"id": "unrelated"})
+    exact(reconcile(), len(settled))
+    exact("unrelated" in taken, False)
 
 
 def send_integrity():
