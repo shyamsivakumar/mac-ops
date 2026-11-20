@@ -993,7 +993,7 @@ def prompt_merge_item(repo, number, head):
 
 def herdr_build_card(repo, number, head, need):
     key = CFG[repo]["key"]
-    item = {"id": f"herdr-build-{key}-{number}-{head[:8]}", "group": "Coordinator", "kind": "action",
+    item = {"id": f"herdr-build-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": f"{key}-{number} needs work on head {head[:8]}: {need}. The Herdr session builds {repo}, so no builder thread was sent it.",
             "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch."}
     if not DRY:
