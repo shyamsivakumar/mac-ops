@@ -1,6 +1,6 @@
 # MO-740 runs
 
-Code commit: 322ba5be45144bd00fa68565675c7035649cbef8. Journal: ~/Library/Logs/coordinator/events-2026-11.jsonl.
+Code commit: 5683b53d76b9d3ab6caaa96e1e1eddf13340dda9 (round 2). The unittest runs below ran on 322ba5be; the later commits change only the quarantine script and a comment in gh_isolation.py. Journal: ~/Library/Logs/coordinator/events-2026-11.jsonl.
 The live coordinator and other builders append real rows to the journal all day, so its line count and mtime move.
 The fake-signature count (rows whose head is a fixture sha, the quarantine script's rule) is the invariant.
 
@@ -30,12 +30,21 @@ Each run failed one test, test_gate_reviewer_quota.test_vendor_routing, which al
 ## Fast check
 
 Journal fake-signature rows 318 before and 318 after. Queue file list unchanged. Result: passed
-(evidence/MO-740/check-proof.md names commit 322ba5be). The isolation step passed with 0 mac-ops-test usage rows,
+(evidence/MO-740/check-proof.md names commit 5683b53d; round 2 ran once on that commit, fake-signature rows 318 before and 318 after). The isolation step passed with 0 mac-ops-test usage rows,
 skips.log unchanged, and no refused gh call. Only this one fast check was run, as the coordinator cut the proof to one.
 
 ## Quarantine script, on COPIES of the live journal (never run on the live one)
 
+Round 2: --apply no longer replaces the file. Under the writers' exclusive flock it writes the backup (the rows it read)
+and the quarantine file, fsyncs both, then rewrites the same inode in place (seek 0, write kept rows, truncate, fsync) and
+only then releases the lock. The late-append recovery code is gone.
+
 Rule: any string in a row (head, or a sha inside data) that is one hex character x40, or 8 x one character then 32 x another.
-Copy of 2514 rows: dry run matched 316, kept 2198. By event: gate_queued 109, gate_verdict 98, fix_sent 40, merged 21,
-merge_held 15, round_cap 15, ticket_closed 11, close_failed 7. Apply on the copy: backup, 316-row quarantine file,
-2198-row journal; 2198 + 316 = 2514 and the sorted rows of backup equal kept plus quarantined. Second run: 0 matched.
+Copy of 2709 rows: dry run matched 318, kept 2391. By event: gate_queued 109, gate_verdict 98, fix_sent 40, merged 21,
+merge_held 17, round_cap 15, ticket_closed 11, close_failed 7.
+
+Concurrency demo on a copy: a loop appended one line every 50 ms through journal.py's own emit (flock plus O_APPEND)
+for 4 s while --apply ran (apply started about 1 s in; it saw 2728 rows, matched 318, kept 2410). The loop wrote 75 lines.
+Afterwards 75 demo rows were in the journal, items 0..74 contiguous with none missing or duplicated. The journal held
+2466 rows and the quarantine file 318; 2466 + 318 = 2784 = 2709 original rows + 75 appended. The backup holds the 2728 rows
+read under the lock (the 19 demo rows that landed before the lock, all also in the journal). A second run matched 0, 2466 kept.
