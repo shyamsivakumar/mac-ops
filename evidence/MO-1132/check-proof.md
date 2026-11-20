@@ -1,5 +1,8 @@
 # Check proof
 
+Superseded by `evidence/MO-707/check-proof.md`: the close checklist reads the
+proof at the ticket's own path, `evidence/<key>-<issue>/check-proof.md`.
+
 Command: `python3 scripts/mac_ops_fast_check.py`
 Checked commit: `9ea5669deb92e36985467269bb5f9340bb05d87b`
 Working tree clean when the checks ran: yes
