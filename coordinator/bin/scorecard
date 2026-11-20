@@ -84,6 +84,23 @@ def read_events(path):
     return rows, bad
 
 
+def clean_rows(rows):
+    kept, seen = [], set()
+    for row in rows:
+        head = row.get("head")
+        if isinstance(head, str) and len(head) == 40 and len(set(head)) == 1:
+            continue
+        if head:
+            key = (row.get("event"), row.get("repo"), row.get("pr"), head)
+        else:
+            key = (row.get("event"), row.get("repo"), row.get("pr"), row.get("ts"))
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(row)
+    return kept
+
+
 def load_journal(directory):
     live, backfill, bad = [], [], 0
     if os.path.isdir(directory):
@@ -93,8 +110,8 @@ def load_journal(directory):
                 live += rows
                 bad += unreadable
     backfill, unreadable = read_events(os.path.join(directory, BACKFILL_FILE))
-    live.sort(key=lambda row: row["ts"])
-    backfill.sort(key=lambda row: row["ts"])
+    live = clean_rows(sorted(live, key=lambda row: row["ts"]))
+    backfill = clean_rows(sorted(backfill, key=lambda row: row["ts"]))
     return live, backfill, bad + unreadable
 
 
