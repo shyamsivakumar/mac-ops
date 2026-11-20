@@ -2871,6 +2871,15 @@ def stall():
     exact("{repo}" in brief, True)
     exact("{list}" in brief, True)
 
+    # A matching pull request and an incomplete lookup are terminal: the
+    # thread reports the issue and moves on, so the disposition rule cannot
+    # send it back to close a ticket that has a pull request.
+    exact("Two outcomes end the work on an issue at once" in brief, True)
+    exact("skipped: matching PR #<n>" in brief, True)
+    exact("skipped: incomplete PR lookup" in brief, True)
+    exact("Every confirmed orphan must end closed" in brief, True)
+    exact("Every issue must end closed" in brief, False)
+
 
 def alarm_mute_on_one_board():
     import datetime as dt
