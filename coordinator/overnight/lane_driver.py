@@ -1460,6 +1460,7 @@ def unstick(repo, ledger, excl=frozenset()):
         return "nothing ready"
     receipts = json.load(open(RECEIPTS))
     failures_before = ledger.get("_item_failures", 0)
+    started = set()
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
@@ -1467,6 +1468,7 @@ def unstick(repo, ledger, excl=frozenset()):
                         if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
             if not best:
                 continue
+            started.add(n)
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
                 continue
@@ -1492,7 +1494,10 @@ def unstick(repo, ledger, excl=frozenset()):
         if isinstance(v, list) and (now - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
             return True
         return False
-    orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}")]
+    # A receipt is the proof a builder was started. A ticket with no receipt
+    # was never started, so nothing finished and there is nothing to re-cut:
+    # the batch takes only the started tickets.
+    orphans = [n for n in orphans if n in started and not marked(f"unstick:{repo}#{n}")]
     if not orphans:
         return "nothing ready"
     batch = orphans[:7]
