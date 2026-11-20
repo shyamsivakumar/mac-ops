@@ -449,10 +449,12 @@ def mint_key(rcfg, issues, last=0):
     return f"{rcfg['key']}-{number}"
 
 
-# A create that failed with one of these may still have reached GitHub, so
-# its key stays pending and the next open refuses until a human checks. Every
-# other failure is GitHub refusing the create, so the key is free again.
-UNSURE_FAILURES = ("offline",)
+# A create that failed with one of these is known not to have made an issue,
+# so its key is free again. Every other failure may have landed, so the key
+# stays pending and the next open refuses until a human checks the repo. A
+# generic `error` is in that second group: `gh` can fail locally after GitHub
+# has already made the issue, so it does not establish a rejection.
+REJECTED_FAILURES = ("auth", "budget", "rate_limit")
 
 
 def last_key_path(repo, prefix):
@@ -591,9 +593,10 @@ def cmd_open(a):
         try:
             url = gh(args).strip()
         except GhError as e:
-            if e.kind not in UNSURE_FAILURES:
-                # GitHub refused the create, so the key is free again: the
-                # record goes back to what it was before this open.
+            if e.kind in REJECTED_FAILURES:
+                # GitHub refused the create before it could make an issue, so
+                # the key is free again: the record goes back to what it was
+                # before this open.
                 write_last_key(repo, rcfg["key"], {**state, "unconfirmed": unconfirmed})
             raise
         write_last_key(repo, rcfg["key"], {**after, "pending": None})
