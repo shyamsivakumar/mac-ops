@@ -858,6 +858,10 @@ def _adaptive_capacity_decision(helper, sample, census, compressor, previous, cu
     if (not contiguous or not isinstance(healthy_since, (int, float))
             or isinstance(healthy_since, bool) or not math.isfinite(float(healthy_since))):
         healthy_since = now_mono
+    if getattr(sample, "degraded", False):
+        detail.update(target=current, reason="degraded_telemetry")
+        state.update(heavy_slots=current, healthy_since_monotonic=None)
+        return state, detail
     candidate = current + 1
     pending = max(0, candidate - active)
     candidate_fits = (candidate <= ceiling
