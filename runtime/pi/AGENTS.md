@@ -52,10 +52,18 @@ User-level rules for pi board workers, linked by mac-ops from
 A machine guard enforces this list before tools run; prose cannot override it.
 The list lives in `mac-ops runtime/agents/deny-rules.json` and `scripts/install_deny_rules.py` installs it.
 
-- No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).
-- No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.
-- No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.
-- No `gh pr merge` by an agent. Merges belong to the lane and the merge pass.
+Asks the owner in an interactive thread (a headless run is denied):
+
+- Reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN) from a session that did not start there.
+- Commands on secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.
+- A push to `main` or `master`, and `gh pr merge`.
+- Printing secret values with `gcloud secrets versions access`, `heroku config` or `config:get`, or a gcloud `--format` that shows one.
+
+Denied even with approval:
+
+- Force-push in any form.
+- Remote and cloud deletes: `gcloud ... delete`, `bq rm`, `heroku ... destroy`, `gh repo delete`, `gh release delete`, `git push --delete`.
+- Removing secret files or anything under `~/Code/slash-eureka`.
 <!-- mac-ops deny-rules END -->
 
 For omp conventions, see `llmwiki/runtime/omp/AGENTS.md`. Pi board workers

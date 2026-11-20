@@ -3,9 +3,11 @@
 
 One deny list, one source: runtime/agents/deny-rules.json. It is installed as:
 
-- Claude Code (~/.claude/settings.json): permissions.deny entries generated
-  from the list, plus a PreToolUse hook (deny-merge-guard.py) for the push and
-  merge rules permissions.deny cannot express.
+- Claude Code (~/.claude/settings.json): permissions.deny entries for the
+  families that are denied even with approval, permissions.ask entries for the
+  families that ask the owner (a settings deny beats a hook, so an ask family
+  cannot stay in deny), plus a PreToolUse hook (deny-merge-guard.py) for the
+  push, merge, cloud and removal rules permissions cannot express.
 - Each pi instance directory: extensions/deny-guard.ts with the list embedded.
   It runs the same hook file for shell commands.
 - The scope files agents read: the list as prose.
@@ -30,7 +32,7 @@ ROOT_REPO = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT_REPO / "runtime/agents/deny-rules.json"
 GUARD_TEMPLATE = ROOT_REPO / "runtime/agents/deny-guard.ts"
 GUARD_MARKER = "/*__MAC_OPS_DENY_SPEC__*/{}"
-HOOK_ROOTS_LINE = 'ASCEND_ROOTS = ["~/Code/slash-eureka"]'
+HOOK_CONSTANTS = ("ASCEND_ROOTS", "SECRET_DIRS", "SECRET_FILE_RE", "FAMILY_MODES", "AUDIT_PATH")
 OWNER = "mac-ops/deny-rules.v1"
 BEGIN = "<!-- BEGIN mac-ops deny-rules -->"
 END = "<!-- mac-ops deny-rules END -->"
@@ -57,24 +59,56 @@ def ascend_text_res(roots: list[str], home: str) -> list[str]:
     return out
 
 
-def claude_deny(spec: dict, root: Path) -> list[str]:
-    tools = ("Read", "Edit")
-    entries = []
-    for p in spec["ascend_roots"] + spec["secret_dirs"]:
+def family_modes(spec: dict) -> dict[str, str]:
+    return {name: family["mode"] for name, family in spec["families"].items()}
+
+
+def claude_rules(spec: dict, root: Path) -> dict[str, list[str]]:
+    """Settings entries by decision. Edits of secret files and force-push flags stay denied.
+
+    The Ascend tree has no settings entries: a settings rule cannot tell an Ascend session
+    from any other, so the hook decides it. `retired` lists the entries earlier installs wrote."""
+    modes = family_modes(spec)
+    rules: dict[str, list[str]] = {"deny": [], "ask": [], "retired": []}
+
+    def add(entry: str, family: str | None) -> None:
+        mode = modes[family] if family else "deny"
+        rules[mode].append(entry)
+
+    for p in spec["ascend_roots"]:
         for form in (p, "/" + expand(p, root)):
-            entries += [f"{tool}({form}/**)" for tool in tools]
+            for tool in ("Read", "Edit"):
+                rules["retired"].append(f"{tool}({form}/**)")
+    for p in spec["secret_dirs"]:
+        for form in (p, "/" + expand(p, root)):
+            add(f"Read({form}/**)", "secret_files")
+            add(f"Edit({form}/**)", None)
     for glob in spec["secret_globs"]:
-        entries += [f"{tool}({glob})" for tool in tools]
+        add(f"Read({glob})", "secret_files")
+        add(f"Edit({glob})", None)
     for p in spec["ascend_roots"]:
         for form in (p, "$HOME" + p[1:]):
-            entries += [
-                f"Bash({command} {form}:*)" for command in spec["ascend_read_commands"]
-            ]
-    entries += [f"Bash(git push {flag}:*)" for flag in spec["push_force_flags"]]
-    entries += [
-        f"Bash(git push origin {branch}:*)" for branch in spec["push_protected"]
-    ]
-    return entries
+            for command in spec["ascend_read_commands"]:
+                rules["retired"].append(f"Bash({command} {form}:*)")
+    for flag in spec["push_force_flags"]:
+        add(f"Bash(git push {flag}:*)", None)
+    for branch in spec["push_protected"]:
+        add(f"Bash(git push origin {branch}:*)", "push_protected")
+    return {mode: list(dict.fromkeys(entries)) for mode, entries in rules.items()}
+
+
+def drop_managed(permissions: dict, saved: dict) -> dict:
+    """The permissions with what a previous install added removed and what it moved to ask put back in deny."""
+    result = dict(permissions)
+    for key, receipt_key in (("deny", "managed_deny"), ("ask", "managed_ask")):
+        if key in result:
+            owned = saved.get(receipt_key) or []
+            result[key] = [e for e in result[key] if e not in owned]
+    moved = saved.get("moved_from_deny") or []
+    if moved:
+        deny = result.get("deny") or []
+        result["deny"] = deny + [e for e in moved if e not in deny]
+    return result
 
 
 def render_guard(spec: dict, root: Path) -> str:
@@ -91,6 +125,8 @@ def render_guard(spec: dict, root: Path) -> str:
         "secret_text_re": derive_text_re(spec["secret_file_re"]),
         "ascend_bash_reason": spec["ascend_bash_reason"],
         "secret_bash_reason": spec["secret_bash_reason"],
+        "family_modes": family_modes(spec),
+        "audit_log": expand(spec["audit_log"], root),
         "hook_path": expand(spec["claude_code"]["hook"]["target"], root),
     }
     return template.replace(GUARD_MARKER, json.dumps(embedded, indent=2))
@@ -98,10 +134,23 @@ def render_guard(spec: dict, root: Path) -> str:
 
 def render_hook(spec: dict, root: Path) -> str:
     text = (ROOT_REPO / spec["claude_code"]["hook"]["source"]).read_text()
-    if text.count(HOOK_ROOTS_LINE) != 1:
-        raise RuntimeError("deny-merge-guard.py must contain the roots line exactly once")
-    roots = [expand(p, root) for p in spec["ascend_roots"]]
-    return text.replace(HOOK_ROOTS_LINE, "ASCEND_ROOTS = " + json.dumps(roots))
+    values = {
+        "ASCEND_ROOTS": [expand(p, root) for p in spec["ascend_roots"]],
+        "SECRET_DIRS": [expand(p, root) for p in spec["secret_dirs"]],
+        "SECRET_FILE_RE": spec["secret_file_re"],
+        "FAMILY_MODES": family_modes(spec),
+        "AUDIT_PATH": expand(spec["audit_log"], root),
+    }
+    for name in HOOK_CONSTANTS:
+        text, count = re.subn(
+            rf"^{name} = .*$",
+            lambda _m, name=name: f"{name} = {json.dumps(values[name])}",
+            text,
+            flags=re.M,
+        )
+        if count != 1:
+            raise RuntimeError(f"deny-merge-guard.py must define {name} on one line exactly once")
+    return text
 
 
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
@@ -227,16 +276,20 @@ class Installer:
     def hook_command(self, spec: dict) -> str:
         return f"python3 {self.hook_target(spec)}"
 
-    def merge_claude(self, spec: dict) -> tuple[list[str], bool]:
+    def merge_claude(self, spec: dict) -> dict:
         settings = load_json(self.settings())
         permissions = dict(settings.get("permissions") or {})
-        deny = list(permissions.get("deny") or [])
-        added = [
-            entry
-            for entry in dict.fromkeys(claude_deny(spec, self.root))
-            if entry not in deny
-        ]
-        permissions["deny"] = deny + added
+        rules = claude_rules(spec, self.root)
+        current_deny = list(permissions.get("deny") or [])
+        ask = list(permissions.get("ask") or [])
+        dropped = rules["ask"] + rules["retired"]
+        moved = [e for e in current_deny if e in dropped]
+        deny = [e for e in current_deny if e not in dropped]
+        ask = [e for e in ask if e not in rules["retired"]]
+        added_deny = [e for e in rules["deny"] if e not in deny]
+        added_ask = [e for e in rules["ask"] if e not in ask]
+        permissions["deny"] = deny + added_deny
+        permissions["ask"] = ask + added_ask
         settings["permissions"] = permissions
         hooks = dict(settings.get("hooks") or {})
         pre = list(hooks.get("PreToolUse") or [])
@@ -257,20 +310,23 @@ class Installer:
         hooks["PreToolUse"] = pre
         settings["hooks"] = hooks
         write_json(self.settings(), settings)
-        return added, not registered
+        return {
+            "added_deny": added_deny,
+            "added_ask": added_ask,
+            "moved_from_deny": moved,
+            "registered": not registered,
+        }
 
     def unmerge_claude(self, saved: dict, spec: dict) -> str:
         settings = load_json(self.settings())
-        permissions = settings.get("permissions") or {}
-        managed = saved.get("managed_deny") or []
-        if "deny" in permissions:
-            permissions["deny"] = [e for e in permissions["deny"] if e not in managed]
+        if "permissions" in settings:
+            settings["permissions"] = drop_managed(settings["permissions"], saved)
         command = self.hook_command(spec)
         hooks = settings.get("hooks") or {}
         if saved.get("hook_registered") and "PreToolUse" in hooks:
             pre = []
             for entry in hooks["PreToolUse"]:
-                ours = entry.get("matcher") == spec["claude_code"]["hook"]["matcher"]
+                ours = entry.get("matcher") == saved.get("hook_matcher", "Bash")
                 inner = [
                     h
                     for h in entry.get("hooks") or []
@@ -318,10 +374,12 @@ class Installer:
 
     def apply(self, spec: dict) -> dict:
         prior_files: dict = {}
-        added, registered = self.merge_claude(spec)
+        merged = self.merge_claude(spec)
         actions = [
-            f"claude settings: +{len(added)} deny entries",
-            f"claude hook: registered={registered}",
+            f"claude settings: +{len(merged['added_deny'])} deny entries, "
+            f"+{len(merged['added_ask'])} ask entries, "
+            f"{len(merged['moved_from_deny'])} existing deny entries moved to ask or retired",
+            f"claude hook: registered={merged['registered']}",
         ]
         hook = self.hook_target(spec)
         self.claim(hook, prior_files)
@@ -341,8 +399,11 @@ class Installer:
                 "owner": OWNER,
                 "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "backups": str(self.prior),
-                "managed_deny": added,
-                "hook_registered": registered,
+                "managed_deny": merged["added_deny"],
+                "managed_ask": merged["added_ask"],
+                "moved_from_deny": merged["moved_from_deny"],
+                "hook_registered": merged["registered"],
+                "hook_matcher": spec["claude_code"]["hook"]["matcher"],
                 "prior_files": prior_files,
             },
         )
@@ -371,12 +432,18 @@ class Installer:
         return {"uninstalled": True, "actions": actions}
 
     def status(self, spec: dict) -> dict:
-        deny = (load_json(self.settings()).get("permissions") or {}).get("deny") or []
+        permissions = load_json(self.settings()).get("permissions") or {}
+        deny = permissions.get("deny") or []
+        ask = permissions.get("ask") or []
+        rules = claude_rules(spec, self.root)
         guard = render_guard(spec, self.root)
         return {
             "installed": bool(load_json(self.receipt)),
-            "claude_deny_missing": [
-                e for e in claude_deny(spec, self.root) if e not in deny
+            "claude_deny_missing": [e for e in rules["deny"] if e not in deny],
+            "claude_ask_missing": [e for e in rules["ask"] if e not in ask],
+            "claude_ask_still_denied": [e for e in rules["ask"] if e in deny],
+            "claude_ascend_entries_present": [
+                e for e in rules["retired"] if e in deny or e in ask
             ],
             "merge_hook_file": self.hook_target(spec).is_file(),
             "pi_guards": {
@@ -391,20 +458,67 @@ class Installer:
             },
         }
 
+    def plan(self, spec: dict) -> dict:
+        """What install would change, computed without writing anything."""
+        saved = load_json(self.receipt)
+        current = load_json(self.settings()).get("permissions") or {}
+        permissions = drop_managed(current, saved)
+        rules = claude_rules(spec, self.root)
+        dropped = rules["ask"] + rules["retired"]
+        deny = [e for e in permissions.get("deny") or [] if e not in dropped]
+        ask = [e for e in permissions.get("ask") or [] if e not in rules["retired"]]
+        deny_added = [e for e in rules["deny"] if e not in deny]
+        ask_added = [e for e in rules["ask"] if e not in ask]
+
+        def file_state(path: Path, text: str) -> str:
+            if not path.is_file():
+                return "new"
+            return "identical" if path.read_text() == text else "changed"
+
+        return {
+            "dry_run": True,
+            "claude_settings": {
+                "deny_entries": [len(current.get("deny") or []), len(deny) + len(deny_added)],
+                "ask_entries": [len(current.get("ask") or []), len(ask) + len(ask_added)],
+                "ascend_entries_left": [
+                    e for e in deny + deny_added + ask + ask_added if e in rules["retired"]
+                ],
+            },
+            "claude_hook": {
+                str(self.hook_target(spec)): file_state(
+                    self.hook_target(spec), render_hook(spec, self.root)
+                )
+            },
+            "pi_guards": {
+                str(t): file_state(t, render_guard(spec, self.root))
+                for t in self.guard_targets(spec)
+            },
+            "backups": f"every existing managed file is copied under {self.backups}/<timestamp>/snapshot before any change",
+        }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["install", "status", "uninstall"])
     parser.add_argument(
         "--root",
+        "--target-root",
         type=Path,
         default=Path.home(),
         help="home root the agent and Claude directories live under",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with install: print what would change and write nothing",
+    )
     args = parser.parse_args()
+    if args.dry_run and args.action != "install":
+        parser.error("--dry-run only applies to install")
     spec = json.loads(SPEC_PATH.read_text())
     installer = Installer(args.root.expanduser().resolve())
-    print(json.dumps(getattr(installer, args.action)(spec), indent=2))
+    action = "plan" if args.dry_run else args.action
+    print(json.dumps(getattr(installer, action)(spec), indent=2))
 
 
 if __name__ == "__main__":
