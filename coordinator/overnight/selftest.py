@@ -2176,6 +2176,59 @@ def gatekeep_round_cap():
             queue = json.loads(Path(scratch, "queue.json").read_text())
         return queue, errors.getvalue()
 
+    # A ticket that cannot be read costs only its pull request: the next
+    # pull request is still gated, and an exhausted API budget still stops
+    # the pass.
+    missing = {"draft": False, "number": 711, "head": {"sha": "d" * 40}, "title": "MO-1131 fix",
+               "body": f"Refs #1131\nBuilder check: PASS {'d' * 40}\n", "changed_files": 1,
+               "base": {"ref": "main"}}
+    second = {"draft": False, "number": 712, "head": {"sha": "e" * 40},
+              "body": f"Builder check: PASS {'e' * 40}\n", "changed_files": 1, "base": {"ref": "main"}}
+
+    def unreadable_run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([[missing, second]]))
+        if endpoint == f"repos/{repo}/issues/1131/comments?per_page=100":
+            failed = Run()
+            failed.returncode = 1
+            failed.stderr = "gh: Not Found (HTTP 404)"
+            return failed
+        if endpoint == f"repos/{repo}/commits/{'e' * 40}/statuses?per_page=100":
+            return Run("[[]]")
+        raise AssertionError(f"unexpected read: {endpoint}")
+
+    def unreadable_events(run_stub):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq.gh_gateway, "run", run_stub), \
+             patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
+             patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
+             patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
+             patch.object(coordq, "gate_args", return_value={}), \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            return list(coordq.gate_candidates(config, {})), errors.getvalue()
+
+    found, errors = unreadable_events(unreadable_run)
+    exact([(event["kind"], event["pr"]) for event in found],
+          [("skip", f"{repo}#711"), ("candidate", f"{repo}#712")])
+    reason = "Refs #1131 cannot be read (issue #1131 does not exist; a ticket key number used as an issue number?)"
+    exact(found[0]["reason"], reason)
+    exact(f"skip {repo}#711: {reason}" in errors, True)
+
+    def exhausted_run(argv, **kwargs):
+        if argv[-1] == f"repos/{repo}/issues/1131/comments?per_page=100":
+            raise coordq.gh_gateway.ApiBudgetExhausted("quota could not be read")
+        return unreadable_run(argv, **kwargs)
+
+    try:
+        unreadable_events(exhausted_run)
+    except coordq.gh_gateway.ApiBudgetExhausted:
+        pass
+    else:
+        raise AssertionError("an exhausted API budget must stop the pass")
     # The SRW#1338 shape: ten failed rounds, a new head, no gate queued.
     found, errors = events({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
     exact([event["kind"] for event in found], ["skip"])

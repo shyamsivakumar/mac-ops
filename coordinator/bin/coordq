@@ -1486,6 +1486,12 @@ def cmd_status(a):
 OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
 
 
+class GhReadError(RuntimeError):
+    def __init__(self, endpoint, stderr):
+        super().__init__(f"GitHub request failed: {endpoint}")
+        self.stderr = stderr or ""
+
+
 def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
@@ -1495,7 +1501,7 @@ def gh_json(endpoint, optional=True, fresh=False):
                          timeout=40, limit=FLOOR if optional else None,
                          fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
     if run.returncode:
-        raise RuntimeError(f"GitHub request failed: {endpoint}")
+        raise GhReadError(endpoint, run.stderr)
     pages = json.loads(run.stdout)
     rows = []
     for page in pages if isinstance(pages, list) else [pages]:
@@ -1811,6 +1817,15 @@ def gate_rounds_used(repo, number, ledger):
     return count >= GATE_ROUND_CAP
 
 
+def unreadable_ticket_reason(error, issue, body, title):
+    if "HTTP 404" not in error.stderr:
+        return error.stderr.strip().splitlines()[0] if error.stderr.strip() else "request failed"
+    reason = f"issue #{issue} does not exist"
+    if re.search(rf"\b[A-Z][A-Za-z0-9]*-{issue}\b", f"{title}\n{body}"):
+        reason += "; a ticket key number used as an issue number?"
+    return reason
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -1852,7 +1867,16 @@ def gate_candidates(config, rounds=None):
             refs = re.findall(r"\bRefs #(\d+)\b", body)
             for issue in dict.fromkeys(refs):
                 ledger = []
-                for comment in gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100"):
+                try:
+                    comments = gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100")
+                except GhReadError as e:
+                    reason = unreadable_ticket_reason(e, issue, body, pr.get("title") or "")
+                    print(f"skip {repo}#{number}: Refs #{issue} cannot be read ({reason})",
+                          file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                           "reason": f"Refs #{issue} cannot be read ({reason})"}
+                    break
+                for comment in comments:
                     if comment["user"]["login"] != login:
                         continue
                     for match in re.finditer(r"<!-- coordinator-ticket (\{.*?\}) -->", comment["body"]):
