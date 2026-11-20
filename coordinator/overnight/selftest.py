@@ -259,6 +259,11 @@ def start_routing():
             exact(ledger, {})
 
 
+def pr_reads(lane, row):
+    lane.PASS_PRS.clear()
+    return lambda command, **_: [row] if command[:3] == ["gh", "pr", "list"] else row
+
+
 def dead_run_recovery():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
@@ -469,8 +474,6 @@ def gate_pipeline():
 
         def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
                     head=head, reply=reply, verdict=verdict, name=name):
-            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
-                return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
                 # The pre-merge guard: the base and head the review was taken
                 # against, read in one call immediately before the merge.
@@ -561,8 +564,8 @@ def gate_pipeline():
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "publish_decision", decision), \
-                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture",
-                                                baseRefName="other" if name == "retargeted-after-pass" else "main")), \
+                 patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture",
+                                                baseRefName="other" if name == "retargeted-after-pass" else "main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
                 if name != "no-receipts-file":
@@ -713,10 +716,11 @@ def merge_pass():
                 return "updated"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def read(cmd):
+        def read(cmd, **_):
             gh_calls.append(cmd)
-            return dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
-                        body="Refs #10", changedFiles=1)
+            row = dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
+                       body="Refs #10", changedFiles=1)
+            return [row] if cmd[:3] == ["gh", "pr", "list"] else row
 
         def threads(tool, args):
             return {"thread": {"status": "completed" if finished else "running"},
@@ -724,6 +728,7 @@ def merge_pass():
 
         ledger = {} if ledger is None else ledger
         output = io.StringIO()
+        lane.PASS_PRS.clear()
         with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board, \
              patch.dict(os.environ, {"COORDINATOR_OWNER_BOARD": str(Path(scratch) / "owner.json")}), \
              patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
@@ -896,8 +901,6 @@ def no_parking(status="interrupted"):
     actions = []
 
     def command(cmd, timeout=150):
-        if cmd == ["gh", "pr", "view", "20", "-R", repo, "--json", "state,mergedAt"]:
-            return json.dumps({"state": "OPEN", "mergedAt": None})
         if cmd == [lane.COORDQ, "list"]:
             return ""
         exact(cmd[0:2], [lane.COORDQ, "start"])
@@ -913,7 +916,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
-         patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+         patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
          patch.object(lane, "run", command), \
          patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
@@ -1670,7 +1673,7 @@ def api_budget():
     repo = "fixture/repo"
     ledger = {}
     commands = []
-    def read(command):
+    def read(command, fresh=False):
         commands.append(command)
         return {"issues": []} if command[0] == "ticket" else []
     with patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "read_json", side_effect=read):
@@ -1965,7 +1968,7 @@ def gate_round_cap():
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "gate_verdict", return_value=verdict), \
-                 patch.object(lane, "read_json", return_value=dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch.object(lane, "send", send):
                 return lane.act_on_pr(repo, number, ledger)
@@ -2414,7 +2417,7 @@ def send_integrity():
             output = io.StringIO()
             with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
                  patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
-                 patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
                  patch.object(lane, "run", command), contextlib.redirect_stdout(output):
                 try:
                     result = lane.send("old", "brief", "fix", ledger, key, repo=repo, pr_number=385)
@@ -2508,7 +2511,7 @@ def root_workspace():
         pull = pr or dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main")
         with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
              patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
-             patch.object(lane, "read_json", return_value=pull), \
+             patch.object(lane, "read_json", side_effect=pr_reads(lane, pull)), \
              patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
             result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
                                worktree_only=worktree_only)
