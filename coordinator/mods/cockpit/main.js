@@ -306,7 +306,7 @@ export default class Board extends View {
     });
     cx.timer.every(TICK, (cx) => {
       this.logAnswers();
-      cx.spawn(() => flushFlowLog(Date.now()));
+      cx.spawn((task) => flushFlowLog(Date.now(), task));
       this.refreshActs(cx);
       this.publishNeeds();
     });
@@ -877,13 +877,13 @@ export default class Board extends View {
     localStorage.setItem(SEEN_KEY, JSON.stringify(next));
   }
 
-  noteAct(g, act, t = Date.now(), eligible = g && this.seen[g.key]?.col === "needs") {
-    if (g && eligible) logAct({ t, key: g.key, act, src: srcOf(g), project: g.project });
+  noteAct(g, act, t = Date.now(), from = this.seen[g.key]?.col ?? null) {
+    if (g) logAct({ t, key: g.key, act, src: srcOf(g), project: g.project, from });
   }
 
   logAnswers() {
     const fresh = Object.entries(shared("co.decided") ?? {}).filter(([key, d]) => d.at > (this.answerSeen.get(key) ?? 0));
-    for (const [key, d] of fresh) logAct({ t: d.at, key: `ask:${key}`, act: "answer", src: "coordinator", project: null });
+    for (const [key, d] of fresh) logAct({ t: d.at, key: `ask:${key}`, act: "answer", src: "coordinator", project: null, from: "needs" });
     for (const [key, d] of fresh) this.answerSeen.set(key, d.at);
   }
 
@@ -1637,6 +1637,7 @@ export default class Board extends View {
   openEntry(e, cx) {
     if (!e || this.opening === e.key) return;
     this.glanceOpened(e.group.key);
+    this.noteAct(e.group, "open");
     if (e.group.kind === "ask") return run("coordinator.asks");
     if (e.group.issue) return exec("open", [e.group.issue.url]);
     const thread = this.threadOf(e);
@@ -1688,11 +1689,11 @@ export default class Board extends View {
     if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
     const card = this.reviewMode ? this.reviewing(Date.now()).g : null;
     const target = card ?? this.entryOf(this.replyKey)?.group;
-    const eligible = target && this.seen[target.key]?.col === "needs";
+    const from = target ? this.seen[target.key]?.col ?? null : null;
     this.closeInput();
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
       const sent = await sendReply(thread.key, text);
-      this.noteAct(target, card ? "sendback" : "reply", Date.now(), eligible);
+      this.noteAct(target, card ? "sendback" : "reply", Date.now(), from);
       if (card) this.finishReview(card, "Sent back");
       return sent;
     }, cx);
@@ -1704,12 +1705,12 @@ export default class Board extends View {
     const thread = this.threadOf(entry);
     const text = thread.choices?.options[index];
     if (!text || this.choosing || this.outdated || this.guard(true)) return;
-    const eligible = this.seen[entry.group.key]?.col === "needs";
+    const from = this.seen[entry.group.key]?.col ?? null;
     this.choosing = true;
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
       try {
         const sent = await sendReply(thread.key, text);
-        this.noteAct(entry.group, "reply", Date.now(), eligible);
+        this.noteAct(entry.group, "reply", Date.now(), from);
         return sent;
       } finally {
         this.choosing = false;
@@ -1780,11 +1781,14 @@ export default class Board extends View {
     for (const c of threads) this.settled.set(c.key, c.at);
     const label = summary ?? (threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`);
     const undo = (failed = threads) => failed.forEach((c) => this.settled.delete(c.key));
+    const owner = (c) => (this.board?.groups ?? []).find((g) => g.threads.some((t) => t.key === c.key));
+    const from = new Map(threads.map((c) => [c.key, this.seen[owner(c)?.key]?.col ?? null]));
     this.attempt(label, async () => {
       const failures = [];
       for (const c of threads) {
         try {
           await settle(c.key);
+          this.noteAct(owner(c), "dismiss", Date.now(), from.get(c.key));
         } catch (error) {
           failures.push({ thread: c, message: error.message });
         }
@@ -1889,7 +1893,7 @@ export default class Board extends View {
   }
 
   async mergeOne(g, shown) {
-    const eligible = this.seen[g.key]?.col === "needs";
+    const from = this.seen[g.key]?.col ?? null;
     const name = g.task || g.title;
     let problem;
     try {
@@ -1901,7 +1905,7 @@ export default class Board extends View {
     try {
       const r = await mergeThread(g, this.planned);
       if (r.queued) {
-        this.noteAct(g, "merge", Date.now(), eligible);
+        this.noteAct(g, "merge", Date.now(), from);
         return { name, queued: true, text: r.text };
       }
       return this.refuse(g, name, r.refused);
@@ -2090,18 +2094,18 @@ export default class Board extends View {
     const verbOf = ([, , own]) => own ?? verb;
     const actionOf = ([, , , action]) => action;
     const fresh = pairs.filter((pair) => !this.sentAs(pair[0], verbOf(pair)));
-    const eligibleByKey = new Map(fresh.map(([g]) => [g.key, this.seen[g.key]?.col === "needs"]));
+    const fromByKey = new Map(fresh.map(([g]) => [g.key, this.seen[g.key]?.col ?? null]));
     const skipped = pairs.length - fresh.length ? `${pairs.length - fresh.length} skipped, already sent` : "";
     if (!fresh.length) return say("info", `${verb} skipped`, skipped);
     this.attempt(`${verb} sent`, async () => {
       const failed = [];
       for (const pair of fresh) {
         const [g, text] = pair;
-        const eligible = eligibleByKey.get(g.key);
+        const from = fromByKey.get(g.key);
         try {
           await send(text, g, actionOf(pair));
           SENT.set(g.key, { action: verbOf(pair), stamp: this.activity(g), at: Date.now() });
-          if (ACT_OF[verbOf(pair)]) this.noteAct(g, ACT_OF[verbOf(pair)], Date.now(), eligible);
+          if (ACT_OF[verbOf(pair)]) this.noteAct(g, ACT_OF[verbOf(pair)], Date.now(), from);
         } catch {
           failed.push(g.task || this.cleanTitle(g));
         }
