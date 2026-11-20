@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -418,6 +419,7 @@ class Proof:
             "# Check proof",
             "",
             "Command: `python3 scripts/mac_ops_fast_check.py`",
+            f"Host: {socket.gethostname()}",
             f"Checked commit: `{head}`",
             f"Working tree clean when the checks ran: {'no' if dirty else 'yes'}",
             f"Run result: {result}",
