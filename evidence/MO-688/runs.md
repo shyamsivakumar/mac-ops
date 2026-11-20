@@ -1,0 +1,108 @@
+# MO-688 run output
+
+The runs the ticket's acceptance asks for. They live here, apart from the check table in check-proof.md, so the close checklist reads only the checks.
+
+## Journal runs
+
+Code head these runs used: `f577faf5d0c098d6f830f354b736180e82d0a9d5`. The check proof in check-proof.md ran on the same head.
+
+### Acceptance 2: concurrency, 8 processes x 500 emits
+
+```
+for i in 1..8: COORD_JOURNAL_DIR=$D python3 -c 'for n in range(i*1000, i*1000+500): journal.emit("conc", "coordq", repo="r", item=n, pad="x"*300)' &  (then wait)
+files: events-2026-11.jsonl
+lines:     4000
+parsed: 4000 lines, 0 missing a common key, 4000 distinct item values
+```
+
+### Acceptance 3: real paths, COORD_JOURNAL_DIR in a temp dir
+
+A queue dir of its own and a stub t3mcp (two live threads) stand in for the live queue, so no real thread is launched.
+```
+$ coordq start {"threadId":"t-x","message":"<omitted>"} --title sandbox   # enqueued, then drain: slots, launched
+started #1
+$ same start again   # duplicate refusal
+refused: duplicate message 'sandbox' for t-x: already started as coordq #1
+$ coordq start ... --tool t3_thread_bogus   # tool refusal
+refused: tool 't3_thread_bogus' is not dispatchable. Accepted tools: t3_thread_launch, t3_thread_send
+$ coordq dispatch   # drain again, slot triple unchanged: no slots line
+$ coordq status
+{"cap": 6, "live": 2, "reserved": {"1": 1795137753.093059}, "queued": 0, "failed": [], "stuck": [], "tickAlarm": ""}
+$ wc -l and lines in the journal
+       5
+{"v":1,"ts":1795137752.986094,"event":"enqueued","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":1,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","taskType":null,"modelSelection":null}}
+{"v":1,"ts":1795137753.092844,"event":"slots","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"live":2,"reserved":0,"cap":6,"over_cap":false}}
+{"v":1,"ts":1795137753.099838,"event":"launched","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":1,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","live":2,"reserved":1,"cap":6}}
+{"v":1,"ts":1795137753.112918,"event":"slots","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"live":2,"reserved":1,"cap":6,"over_cap":false}}
+{"v":1,"ts":1795137753.2343009,"event":"refused","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":null,"attempt":null,"kind":"other","data":{"tool":"t3_thread_bogus","reason":"refused: tool 't3_thread_bogus' is not dispatchable. Accepted tools: t3_thread_launch, t3_thread_send"}}
+```
+
+Read-only ticket command, journal dir empty afterwards:
+```
+$ COORD_JOURNAL_DIR=$T ticket show shyamsivakumar/mac-ops#688 | head -3
+{
+ "repo": "shyamsivakumar/mac-ops",
+ "number": 688,
+journal files written:        0
+```
+
+Emits that need a real launch, a real gate or a real merge are not run here. By file and line at this head:
+
+- `coordinator/bin/coordq:105` `    journal.emit("refused", "coordq", thread=args.get("threadId"), tool=tool, reason=message,`
+- `coordinator/bin/coordq:114` `    journal.emit(event, "coordq", **row)`
+- `coordinator/bin/coordq:123` `    journal.emit("slots", "coordq", live=triple[0], reserved=triple[1], cap=triple[2],`
+- `coordinator/bin/coordq:635` `            journal.emit("thread_ended", "coordq", item=int(key.split(":")[0]), thread=thread,`
+- `coordinator/bin/coordq:663` `                journal_item("dropped", item, tries=item["attempts"], error=item.get("last_error"))`
+- `coordinator/bin/coordq:672` `            journal_item("refused", item, reason=tool_refusal(tool))`
+- `coordinator/bin/coordq:797` `            journal_item("launched", item, thread=started_thread(queue, item, reservation) or None,`
+- `coordinator/bin/coordq:818` `            journal_item("launch_failed", item, tries=item["attempts"], error=out[:200])`
+- `coordinator/bin/coordq:889` `        refuse_start(f"refused: {tool_refusal(tool)}", args, tool)`
+- `coordinator/bin/coordq:897` `            refuse_start(refusal, requested, tool)`
+- `coordinator/bin/coordq:904` `                refuse_start(f"refused: {e}", args, tool)`
+- `coordinator/bin/coordq:919` `                refuse_start(f"refused: the action key {key} is already "`
+- `coordinator/bin/coordq:946` `                refuse_start(f"refused: a gate for this head is already recorded as "`
+- `coordinator/bin/coordq:950` `        journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool,`
+- `coordinator/bin/coordq:1902` `                journal.emit("gate_queued", "gatekeep", item=item["id"],`
+- `coordinator/bin/ticket:513` `    journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(number) if number.isdigit() else None,`
+- `coordinator/bin/ticket:1381` `    journal.emit("ticket_started", "ticket", builder=t["builderAlias"], reviewer=t["reviewerAlias"],`
+- `coordinator/bin/ticket:1791` `        journal.emit("close_failed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,`
+- `coordinator/bin/ticket:1796` `    journal.emit("ticket_closed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,`
+- `coordinator/bin/ticket:1822` `    journal.emit("ticket_abandoned", "ticket", repo=repo, ticket=n)`
+- `coordinator/overnight/lane_driver.py:410` `        journal.emit(event, "lane", repo=repo, pr=number, head=head, **fields)`
+- `coordinator/overnight/lane_driver.py:416` `        journal_event(event, repo, number, head, **fields)`
+- `coordinator/overnight/lane_driver.py:421` `        journal_once("gate_verdict", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:637` `        journal.emit("fix_sent", "lane", thread=thread_id if sendable else None,`
+- `coordinator/overnight/lane_driver.py:713` `        journal_event("round_cap", repo, number, head, reviews=count)`
+- `coordinator/overnight/lane_driver.py:1057` `        journal_event("merge_held", repo, number, head,`
+- `coordinator/overnight/lane_driver.py:1117` `            journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1125` `        journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1139` `        journal_once("merged", repo, number, head, ledger, f"journal-outside:{repo}#{number}:{head}",`
+- `coordinator/overnight/lane_driver.py:1210` `        journal_once("merged_outside_lane", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1243` `        journal_verdict(repo, number, head, verdict, gate, ledger)`
+- `coordinator/overnight/lane_driver.py:1245` `            journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1328` `        journal_verdict(repo, number, head, verdict, gate, ledger)`
+- `coordinator/overnight/lane_driver.py:1330` `        journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/alarms.py:374` `        journal.emit(event[0], "alarms", alarm=alarm_id, board=str(path), group=event[1])`
+- `coordinator/overnight/alarms.py:390` `    journal_alarm(path, alarm_id, event)`
+- `coordinator/overnight/alarms.py:422` `        journal_alarm(path, alarm_id, event)`
+
+### Acceptance 4: parse_request_id on real ids from dispatch-receipts.json
+
+```
+ticket:shyamsivakumar/strategy-replay-workbench#902:a1
+  -> {"repo": "shyamsivakumar/strategy-replay-workbench", "ticket": 902, "pr": null, "head": null, "attempt": 1, "kind": "build", "data": {}}
+gate:shyamsivakumar/mac-ops#150:366d395bf5628ade62bd5ccf5c0324a78ca11c06
+  -> {"repo": "shyamsivakumar/mac-ops", "ticket": null, "pr": 150, "head": "366d395bf5628ade62bd5ccf5c0324a78ca11c06", "attempt": null, "kind": "gate", "data": {}}
+gate:digitized/Concerning#59:121dbc981e50b56ed3d1acf4cae323633fad5fd6:lane
+  -> {"repo": "digitized/Concerning", "ticket": null, "pr": 59, "head": "121dbc981e50b56ed3d1acf4cae323633fad5fd6", "attempt": null, "kind": "gate", "data": {"suffix": "lane"}}
+fix:shyamsivakumar/mac-ops#545:496a1d732adcf32d23146e3d94bc417580ec41b1
+  -> {"repo": "shyamsivakumar/mac-ops", "ticket": null, "pr": 545, "head": "496a1d732adcf32d23146e3d94bc417580ec41b1", "attempt": null, "kind": "fix", "data": {}}
+continue:shyamsivakumar/mac-ops#545:496a1d732adcf32d23146e3d94bc417580ec41b1
+  -> {"repo": "shyamsivakumar/mac-ops", "ticket": null, "pr": 545, "head": "496a1d732adcf32d23146e3d94bc417580ec41b1", "attempt": null, "kind": "continue", "data": {}}
+crit:one-lane:Sol
+  -> {"repo": null, "ticket": null, "pr": null, "head": null, "attempt": null, "kind": "other", "data": {"request": "crit:one-lane:Sol"}}
+```
+
+### Existing tests that load coordq and ticket, run for the reason the fast check does not select them
+
+The fast check selects tests by changed .py file, and coordq and ticket have no .py suffix. The twelve test modules that load them ran on this head and on da70cd7d (`git archive`): both give 298 tests, 13 failures, 3 errors, with the same 16 names. The failures are already in origin/main and are not in this diff.
