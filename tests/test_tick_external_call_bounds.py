@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,40 @@ class SkipLogTests(unittest.TestCase):
             written = log.read_text()
         self.assertIn("skipped", written)
         self.assertIn("sleep 30", written)
+
+
+class IsolationTests(unittest.TestCase):
+    """A test run reaches a fake `gh` and temp logs, not the live ones.
+
+    The environment is set once, when the suite is launched, so every test
+    in the run inherits it. These cases check that it is in force: the fake
+    `gh` is first on PATH, it fails a call it was not asked to answer, and
+    the skip log and the gh usage log are temp files.
+    """
+
+    def setUp(self):
+        self.overnight = load_overnight()
+
+    def test_the_fake_gh_is_first_on_path(self):
+        found = shutil.which("gh")
+        self.assertIsNotNone(found, "no gh on PATH")
+        self.assertIn("fake gh", Path(found).read_text())
+
+    def test_a_call_the_tests_do_not_ask_for_fails(self):
+        result = subprocess.run(["gh", "pr", "view", "1"],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no answer for", result.stderr)
+
+    def test_the_skip_log_is_a_temp_file(self):
+        live = Path.home() / "Library/Logs/coordinator/skips.log"
+        self.assertNotEqual(self.overnight.SKIP_LOG, live)
+        self.assertIn("mac-ops-test-", str(self.overnight.SKIP_LOG))
+
+    def test_the_gh_usage_log_is_a_temp_file(self):
+        live = Path.home() / "Library/Logs/coordinator/gh-usage.jsonl"
+        self.assertNotEqual(self.overnight.gh_gateway.USAGE_LOG, live)
+        self.assertIn("mac-ops-test-", str(self.overnight.gh_gateway.USAGE_LOG))
 
 
 class CoordqCallBoundTests(unittest.TestCase):
