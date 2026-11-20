@@ -26,6 +26,11 @@ T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 # on without end.
 T3MCP_TIMEOUT = 60
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
+# A lane thread that waits for an answer is still a builder in flight: the
+# ticket CLI counts `waiting` as live, so the lane rule has to as well, or a
+# second builder can start on the same repo while the first one waits. The
+# cap keeps its own list, so this does not change how many slots are used.
+LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
@@ -1018,7 +1023,7 @@ def live_lane_repositories(config):
         receipts = {}
     cursor = None
     while True:
-        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+        args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES,
                 "includeSubagents": False}
         if cursor is not None:
             args["cursor"] = cursor
@@ -1050,26 +1055,35 @@ def live_lane_repositories(config):
 # `Closes #n` or `Fixes #n`; all three are evidence that a builder is in
 # flight for that ticket.
 PR_REF = re.compile(r"(?i)\b(?:refs|closes|fixes)\s+#(\d+)")
+# One page of open pull requests is the whole read allowance a repo gets in a
+# pass. A repo with more open pull requests than this cannot be read within
+# that allowance, so the pass stops instead of spending a second call.
+PR_PAGE = 100
 
 
 def open_pr_refs(repo):
     """The ticket numbers the open, non-draft pull requests of one repo ref.
 
     One read per repo per pass, through the gateway like the issue read, so
-    the refill's GitHub budget stays known. A draft pull request is not a
-    builder in flight, so it is skipped.
+    the refill's GitHub budget stays known. The read is fresh: a pull request
+    opened after a cached read would be invisible for the cache's two
+    minutes, and a ticket could start while its own pull request is open. A
+    draft pull request is not a builder in flight, so it is skipped.
     """
-    run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
-                          f"repos/{repo}/pulls?state=open&per_page=100"],
-                         timeout=40, limit=FLOOR)
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls?state=open&per_page={PR_PAGE}"],
+                         timeout=40, limit=FLOOR, fresh=True)
     if run.returncode:
         raise RuntimeError(f"open pull request snapshot failed for {repo}")
+    pulls = json.loads(run.stdout)
+    if not isinstance(pulls, list) or not all(isinstance(pull, dict) for pull in pulls):
+        raise RuntimeError(f"open pull request snapshot is not a list for {repo}")
+    if len(pulls) >= PR_PAGE:
+        raise RuntimeError(f"open pull request list is longer than one page for {repo}")
     refs = set()
-    for page in json.loads(run.stdout):
-        for pull in page:
-            if pull.get("draft"):
-                continue
-            refs.update(int(number) for number in PR_REF.findall(pull.get("body") or ""))
+    for pull in pulls:
+        if pull.get("draft"):
+            continue
+        refs.update(int(number) for number in PR_REF.findall(str(pull.get("body") or "")))
     return refs
 
 

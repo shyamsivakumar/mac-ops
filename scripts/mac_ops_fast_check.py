@@ -342,8 +342,17 @@ def check_lane_selection():
         (0, '{"threads":[{"threadId":"one","title":"AB-1 build"}],"nextCursor":1}'),
         (0, '{"threads":[{"threadId":"two","clientRequestId":"gate:a/c#2:head"}]}')]
     with tempfile.TemporaryDirectory() as scratch:
-        with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=snapshots):
+        asked = []
+
+        def threads(tool, args):
+            asked.append(args)
+            return snapshots[len(asked) - 1]
+
+        with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=threads):
             assert module.live_lane_repositories(config) == {"a/b", "a/c"}
+        # A thread that waits for an answer is still a builder in flight, so
+        # the lane read asks for it: the ticket CLI counts it as live.
+        assert all("waiting" in args["statuses"] for args in asked), asked
         config_path = Path(scratch) / "tickets.json"
         config_path.write_text(__import__("json").dumps(config))
         # One repo, so a ticket number names one ticket and the log line is
@@ -355,40 +364,70 @@ def check_lane_selection():
                       "updated_at": "now"},
                      {"number": 2, "title": "todo", "labels": ["stage:todo"],
                       "updated_at": "now"}]]
-        logged = []
+
+        def gateway(pulls, calls=None):
+            """The gateway answer for one pass: the issue snapshot for the
+            issue read, and `pulls` for the pull request read. The pull read
+            is recorded, so the check can see how it was asked for."""
+            def run(argv, **kwargs):
+                if "/pulls?" in argv[-1]:
+                    if calls is not None:
+                        calls.append((argv, kwargs))
+                    body = pulls if isinstance(pulls, str) else __import__("json").dumps(pulls)
+                    return SimpleNamespace(returncode=0, stdout=body)
+                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(snapshot))
+            return run
+
+        def board(pulls, calls=None):
+            logged = []
+            with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
+                    patch.object(module, "live_lane_repositories", return_value=set()), \
+                    patch.object(module, "log", side_effect=logged.append), \
+                    patch.object(module.gh_gateway, "run", side_effect=gateway(pulls, calls)):
+                return [row["number"] for row in module.board_candidates()], logged
+
+        # No open pull request: the stale started ticket is logged and does
+        # not block its repo, and the todo ticket is the candidate.
+        assert board([]) == ([2], ["refill: #1 is stage:started with no live thread or open PR"])
+        # An open, non-draft pull request that refs the started ticket is
+        # evidence, so nothing is logged and the repo stays busy.
+        assert board([{"number": 5, "draft": False, "body": "Refs #1"}]) == ([], [])
+        # A draft pull request is not a builder in flight.
+        assert board([{"number": 5, "draft": True, "body": "Refs #1"}]) == (
+            [2], ["refill: #1 is stage:started with no live thread or open PR"])
+        # A pull request that refs a number that is not an open ticket of the
+        # repo is not evidence for this repo.
+        assert board([{"number": 5, "draft": False, "body": "Refs #9"}]) == (
+            [2], ["refill: #1 is stage:started with no live thread or open PR"])
+        # The pull read is one fresh page, so a cached or paginated read can
+        # never hide a pull request that is open now.
+        calls = []
+        board([], calls)
+        assert len(calls) == 1
+        argv, kwargs = calls[0]
+        assert argv[-1].endswith("/pulls?state=open&per_page=100"), argv
+        assert "--paginate" not in argv and "--slurp" not in argv, argv
+        assert kwargs.get("fresh") is True, kwargs
+        # A pull request list that cannot be read stops the pass: a failed
+        # read, a body that is not a list, a page that is not a list of pull
+        # requests, and a list longer than the one page the pass may read.
+        for pulls in ("not json", {}, [None], [{"number": n} for n in range(100)]):
+            try:
+                board(pulls)
+            except (RuntimeError, ValueError):
+                pass
+            else:
+                raise AssertionError(f"unreadable pull request snapshot accepted: {pulls!r:.40}")
         with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
                 patch.object(module, "live_lane_repositories", return_value=set()), \
-                patch.object(module, "open_pr_refs", return_value=set()), \
-                patch.object(module, "log", side_effect=logged.append), \
-                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
-                    returncode=0, stdout=__import__("json").dumps(snapshot))):
-            # The stale started ticket is logged and does not block its repo;
-            # the todo ticket is the candidate.
-            assert [row["number"] for row in module.board_candidates()] == [2]
-            assert logged == ["refill: #1 is stage:started with no live thread or open PR"]
-        # An open pull request that refs the started ticket is evidence, so
-        # nothing is logged and the repo stays busy.
-        logged = []
-        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
-                patch.object(module, "live_lane_repositories", return_value=set()), \
-                patch.object(module, "open_pr_refs", return_value={1}), \
-                patch.object(module, "log", side_effect=logged.append), \
-                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
-                    returncode=0, stdout=__import__("json").dumps(snapshot))):
-            assert module.board_candidates() == []
-            assert logged == []
-        # A pull request list that cannot be read stops the pass.
-        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
-                patch.object(module, "live_lane_repositories", return_value=set()), \
-                patch.object(module, "open_pr_refs", side_effect=RuntimeError("no pull list")), \
-                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
-                    returncode=0, stdout=__import__("json").dumps(snapshot))):
+                patch.object(module.gh_gateway, "run", return_value=SimpleNamespace(
+                    returncode=1, stdout="", stderr="boom")):
             try:
                 module.board_candidates()
             except RuntimeError:
                 pass
             else:
-                raise AssertionError("failed pull request snapshot accepted")
+                raise AssertionError("failed pull request read accepted")
         with patch.object(module, "DIR", scratch), patch.object(module, "call", return_value=(1, "failed")):
             try:
                 module.live_lane_repositories(config)
