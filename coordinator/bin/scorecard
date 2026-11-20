@@ -119,6 +119,29 @@ def data_of(row):
     return row.get("data") or {}
 
 
+def first_gate_pass(rows, start=None, end=None):
+    assigned = {}
+    for row in rows:
+        ts = row.get("ts", 0)
+        if row["event"] == "assigned" and (start is None or start <= ts < end):
+            assigned.setdefault((row["repo"], row["ticket"]), ts)
+    pr_ticket = {(row["repo"], row["pr"]): row["ticket"] for row in rows
+                 if row.get("ticket") is not None and row.get("pr") is not None}
+    first = {}
+    for row in rows:
+        if row["event"] != "gate_verdict":
+            continue
+        ticket = row.get("ticket")
+        if ticket is None:
+            ticket = pr_ticket.get((row["repo"], row.get("pr")))
+        key = (row["repo"], ticket)
+        if key in assigned and row.get("ts", 0) >= assigned[key]:
+            first.setdefault(key, data_of(row).get("verdict"))
+    if not assigned:
+        return None
+    return sum(1 for key in assigned if first.get(key) == "PASS") / len(assigned)
+
+
 class GitHub:
     def __init__(self, repos):
         self.repos = set(repos)
@@ -404,7 +427,11 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
                  "launches_per_accepted": per_accepted, "gate_launches_per_merge": per_merge,
                  "gate_heads": gate_heads, "duplicate_gate_heads": duplicates, "fix_rounds": fix_rounds,
                  "prs_at_round_cap": capped, "launch_failures": with_backfill("launch_failed"),
-                 "dropped": with_backfill("dropped"), "verdict_mix": verdicts},
+                 "dropped": with_backfill("dropped"), "verdict_mix": verdicts,
+                 "assigned": counted("assigned"),
+                 "first_gate_pass": (metric(round(first_gate_pass(live, start, end), 3), "tickets assigned that day whose first gate verdict is PASS, over all assigned tickets (blocked and abandoned included); a ticket counts once a closing row links its PR")
+                                     if covered and any(row["event"] == "assigned" for row in live_day)
+                                     else unknown(no_journal if not covered else "no assigned event"))},
         "machine": {"peak_concurrent_threads": peak, "minutes_over_cap": over},
         "board": {"alarms_raised": raised, "alarms_withdrawn": withdrawn, "alarms_open_at_end": still_open},
         "reconcile": reconcile,
