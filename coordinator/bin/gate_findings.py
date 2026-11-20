@@ -50,7 +50,7 @@ def format_instruction(next_id):
 
 
 def queue_dir():
-    return os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+    return os.environ.get("COORDQ_DIR") or os.path.expanduser("~/Code/coordinator/queue")
 
 
 def ledger_path(repo, number, base=None):

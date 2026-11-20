@@ -2040,7 +2040,7 @@ def gate_round_cap():
 
         check_pass = f"CHECK: PASS {heads[2]}"
         none_line = f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
-        merged, briefs = [], []
+        merged = []
 
         def merge(repo_, number_, head_, base_):
             merged.append((number_, head_))
@@ -4136,8 +4136,11 @@ def main():
     else:
         print("FAIL negative-control: equality accepted wrong actions")
         return 1
+    import gate_findings
+    findings_dir = tempfile.TemporaryDirectory()
     with patch.object(subprocess, "run", side_effect=AssertionError("live subprocess forbidden")), \
          patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")), \
+         patch.object(gate_findings, "queue_dir", return_value=findings_dir.name), \
          fixture_models():
         for name, evaluate in EVALS.items():
             try:
