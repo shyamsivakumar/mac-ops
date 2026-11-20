@@ -12,6 +12,7 @@ EXECUTABLE = "overnight"
 # `hourly_selftest_fixture`, so the two cannot drift apart unnoticed.
 EXPECTED = frozenset("send-integrity root-workspace worktree-base-ref consolidation-guard script-results start-routing "
                      "dead-run-recovery gate-pipeline merged-restart merge-pass gate-round-cap decisions-board-guard "
+                     "settled-cards "
                      "no-parking turncap watchdog "
                      "zero-merge board-integrity api-budget ff-drift cycle-health "
                      "stall alarm-mute router-build router-blocked".split())

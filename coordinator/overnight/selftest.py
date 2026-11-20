@@ -2194,6 +2194,82 @@ def decisions_board_guard():
         exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
 
 
+def settled_cards():
+    """Settled gate-rounds and close-failed cards leave the owner board.
+
+    The five cards this ticket names are replayed: four gate-rounds cards
+    whose pull requests are closed, and one close-failed card whose ticket
+    is closed. A gate-rounds card for an open pull request stays, a
+    prompt-merge card is still withdrawn, a dry run writes nothing, and a
+    card whose state cannot be read stays.
+    """
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    settled = [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (602, 623, 625, 627)]
+    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544"]
+    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702"]
+    board = {"items": [{"id": card} for card in settled + kept]}
+    snapshot = {"repos": {repo: {"prs": [{"number": 700}]}}}
+    closed_prs = {602, 623, 625, 627, 544}
+    closed_tickets = {660}
+    # The pull request whose close failed names the ticket it belongs to.
+    ticket_of = {661: 660, 702: 701}
+
+    def read(cmd, timeout=150):
+        kind, number = cmd[1], int(cmd[3])
+        if kind == "pr" and cmd[-1] == "state,mergedAt":
+            return json.dumps({"state": "CLOSED" if number in closed_prs else "OPEN",
+                               "mergedAt": None})
+        if kind == "pr":
+            return json.dumps({"body": f"Refs #{ticket_of[number]}\n\nThe body."})
+        return json.dumps({"state": "CLOSED" if number in closed_tickets else "OPEN"})
+
+    taken = []
+
+    def withdraw(item_id):
+        taken.append(item_id)
+        return "wrote"
+
+    def reconcile(runner=read, dry=False):
+        taken.clear()
+        with patch.object(lane, "CFG", {repo: {"key": "MO", "projectId": "fixture"}}), \
+                patch.object(lane, "DRY", dry), \
+                patch.object(lane, "run", runner), \
+                patch.object(lane.alarms, "read_board", return_value=(b"", board)), \
+                patch.object(lane, "withdraw_decision", withdraw):
+            return lane.reconcile_prompt_items(snapshot)
+
+    # The five cards this ticket names are withdrawn, and the prompt-merge
+    # card is still withdrawn. The open pull request and the open ticket keep
+    # their cards.
+    exact(reconcile(), len(settled))
+    exact(sorted(taken), sorted(settled))
+    # A dry run writes nothing and reads nothing.
+    exact(reconcile(dry=True), 0)
+    exact(taken, [])
+    # A state that did not come back is not a settled card.
+    def broken(cmd, timeout=150):
+        raise RuntimeError("gh failed")
+    exact(reconcile(runner=broken), 0)
+    exact(taken, [])
+    # A close-failed card whose pull request names no ticket stays.
+    def no_reference(cmd, timeout=150):
+        if cmd[1] == "pr" and cmd[-1] == "body":
+            return json.dumps({"body": "no reference here"})
+        return read(cmd, timeout)
+    exact(reconcile(runner=no_reference), len(settled) - 1)
+    exact("lane-close-failed-MO-661" in taken, False)
+    # A close-failed card whose ticket is still open stays.
+    closed_tickets.clear()
+    exact(reconcile(), len(settled) - 1)
+    exact("lane-close-failed-MO-661" in taken, False)
+    closed_tickets.add(660)
+    # A card this cleanup does not own is left alone.
+    board["items"].append({"id": "unrelated"})
+    exact(reconcile(), len(settled))
+    exact("unrelated" in taken, False)
+
+
 def send_integrity():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
@@ -3612,7 +3688,7 @@ def router_blocked():
     exact(resolved["modelSelection"], {"instanceId": "cursor", "model": "default"})
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "settled-cards": settled_cards, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked}
 
 
 def main():

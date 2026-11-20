@@ -965,16 +965,76 @@ def pull_settled(repo, number):
     return state.get("state") in ("MERGED", "CLOSED") or bool(state.get("mergedAt"))
 
 
-def reconcile_prompt_items(snapshot):
-    """Take merge asks off the board for pull requests Shyam settled.
+def ticket_closed(repo, number):
+    """True only when the ticket itself says it is closed.
 
-    A prompt pull request Shyam merged or closed between two passes is not in
-    the snapshot any more, so no per-pull-request action ever reaches its
-    item: the board would keep asking for work that is done. The items are
-    read once here and the stale ones are removed by the key and number their
-    id carries. A request that left the capped open list without being
-    settled is still open, so each candidate's own state is read before its
-    card goes. Return how many were removed.
+    A close-failed card is settled by the ticket, not by the pull request
+    that merged: the merge is what raised the card. A read that fails
+    answers nothing, so the card stays until the state is known.
+    """
+    try:
+        state = json.loads(run(["gh", "issue", "view", str(number), "-R", repo,
+                                "--json", "state"]))
+    except (subprocess.SubprocessError, RuntimeError, ValueError):
+        return False
+    return isinstance(state, dict) and state.get("state") == "CLOSED"
+
+
+def pull_ticket(repo, number):
+    """The ticket a merged pull request names, or None when it names none.
+
+    A close-failed card's id carries the pull request whose close failed, not
+    the ticket: the ticket is the one the pull request body references, in
+    the `Refs #<n>` form this repo requires. A body that cannot be read or
+    names no ticket answers None, and the card stays.
+    """
+    try:
+        pull = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                               "--json", "body"]))
+    except (subprocess.SubprocessError, RuntimeError, ValueError):
+        return None
+    body = pull.get("body") if isinstance(pull, dict) else None
+    if not isinstance(body, str):
+        return None
+    match = re.search(r"\bRefs\s+#(\d+)", body)
+    return int(match.group(1)) if match else None
+
+
+def card_candidate(item_id, repos_by_key, repos_by_dashed, open_prs):
+    """What one board card is about, or None when this cleanup does not own it.
+
+    A prompt-merge or gate-rounds card names a pull request, so a pull
+    request still in the open list settles the question without a read. A
+    close-failed card names the pull request whose close failed and is
+    settled by the ticket that pull request references.
+    """
+    match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", item_id)
+    if match and match.group(1) in repos_by_key:
+        repo, number = repos_by_key[match.group(1)], int(match.group(2))
+        return None if (repo, number) in open_prs else ("pull", repo, number)
+    match = re.fullmatch(r"lane-gate-rounds-(.+)-(\d+)", item_id)
+    if match and match.group(1) in repos_by_dashed:
+        repo, number = repos_by_dashed[match.group(1)], int(match.group(2))
+        return None if (repo, number) in open_prs else ("pull", repo, number)
+    match = re.fullmatch(r"lane-close-failed-([A-Za-z0-9]+)-(\d+)", item_id)
+    if match and match.group(1) in repos_by_key:
+        return ("ticket", repos_by_key[match.group(1)], int(match.group(2)))
+    return None
+
+
+def reconcile_prompt_items(snapshot):
+    """Take settled asks off the board.
+
+    This is the one place a card is withdrawn, and it owns three kinds: a
+    prompt merge ask whose pull request Shyam merged or closed, a gate-rounds
+    ask whose pull request is settled, and a close-failed card whose ticket
+    is closed. A pull request Shyam settled between two passes is not in the
+    snapshot any more, so no per-pull-request action ever reaches its item:
+    the board would keep asking for work that is done. The items are read
+    once here and the stale ones are removed by the key and number their id
+    carries. A request that left the capped open list without being settled
+    is still open, so each candidate's own state is read before its card
+    goes. Return how many were removed.
     """
     boards = []
     for path in (Path(DECISIONS_PATH), alarms.board_for(DECISIONS_PATH, "prompt-merge-MO-0")):
@@ -985,23 +1045,29 @@ def reconcile_prompt_items(snapshot):
     items = {str(i.get("id")): i for b in boards if isinstance(b, dict)
              for i in b.get("items") or [] if isinstance(i, dict)}.values()
     repos_by_key = {CFG[repo]["key"]: repo for repo in CFG if repo in LANE_REPOS}
+    repos_by_dashed = {repo.replace("/", "-"): repo for repo in CFG if repo in LANE_REPOS}
     open_prs = {(repo, pull["number"]) for repo, data in snapshot["repos"].items()
                 for pull in data["prs"]}
     removed = 0
     for item in items:
-        match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", str(item.get("id") or ""))
-        if not match or match.group(1) not in repos_by_key:
-            continue
-        repo, number = repos_by_key[match.group(1)], int(match.group(2))
-        if (repo, number) in open_prs:
+        item_id = str(item.get("id") or "")
+        candidate = card_candidate(item_id, repos_by_key, repos_by_dashed, open_prs)
+        if candidate is None:
             continue
         if DRY:
             continue
+        kind, repo, number = candidate
         # Absent from the capped list is not settled: confirm it on the pull
-        # request, and leave the card when the state cannot be read.
-        if not pull_settled(repo, number):
-            continue
-        if withdraw_decision(item["id"]) == "wrote":
+        # request or the ticket, and leave the card when the state cannot be
+        # read.
+        if kind == "pull":
+            if not pull_settled(repo, number):
+                continue
+        else:
+            ticket = pull_ticket(repo, number)
+            if ticket is None or not ticket_closed(repo, ticket):
+                continue
+        if withdraw_decision(item_id) == "wrote":
             removed += 1
     return removed
 
