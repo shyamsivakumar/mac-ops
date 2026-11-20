@@ -75,7 +75,7 @@ def drift_alarm():
             f"ALARM: installed coordinator differs from {checkout} "
             f"for {minutes} minutes: {names}"
         )
-    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return ""
 
 
