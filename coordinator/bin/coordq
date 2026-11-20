@@ -26,7 +26,13 @@ T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 # on without end.
 T3MCP_TIMEOUT = 60
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
+# A lane thread that waits for an answer is still a builder in flight: the
+# ticket CLI counts `waiting` as live, so the lane rule has to as well, or a
+# second builder can start on the same repo while the first one waits. The
+# cap keeps its own list, so this does not change how many slots are used.
+LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
+JOURNAL_TITLE_LIMIT = 120
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
 # carries this prefix and reconcile knows the thread may not be listed live yet.
@@ -112,8 +118,12 @@ def die(message):
     sys.exit(1)
 
 
-def refuse_start(message, args, tool):
-    journal.emit("refused", "coordq", thread=args.get("threadId"), tool=tool, reason=message,
+def journal_title(title):
+    return str(title or "")[:JOURNAL_TITLE_LIMIT]
+
+
+def refuse_start(message, args, tool, label):
+    journal.emit("refused", "coordq", thread=args.get("threadId"), tool=tool, title=label, reason=message,
                  **journal.parse_request_id(args.get("clientRequestId")))
     die(message)
 
@@ -121,6 +131,7 @@ def refuse_start(message, args, tool):
 def journal_item(event, item, **fields):
     args = item.get("args") or {}
     row = {"item": item["id"], "thread": args.get("threadId"), "tool": item.get("tool"),
+           "title": journal_title(item.get("title")),
            **journal.parse_request_id(args.get("clientRequestId")), **fields}
     journal.emit(event, "coordq", **row)
 
@@ -896,8 +907,9 @@ def action_key_state(queue, item_id, state=None):
 def cmd_start(a):
     args = json.loads(a.args)
     tool = a.tool or tool_for(args)
+    label = journal_title(a.title or args.get("title") or args.get("threadId"))
     if tool not in DISPATCHABLE_TOOLS:
-        refuse_start(f"refused: {tool_refusal(tool)}", args, tool)
+        refuse_start(f"refused: {tool_refusal(tool)}", args, tool, label)
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
@@ -905,14 +917,14 @@ def cmd_start(a):
         requested = args
         args, refusal = with_model(args)
         if refusal:
-            refuse_start(refusal, requested, tool)
+            refuse_start(refusal, requested, tool, label)
         if not requested.get("modelSelection"):
             args = requested
         if wants_rules(args, task_type):
             try:
                 read_rules()
             except RuntimeError as e:
-                refuse_start(f"refused: {e}", args, tool)
+                refuse_start(f"refused: {e}", args, tool, label)
     # The thread list is read before the writer lock is taken: a slow t3 call
     # under it would hold every other start for its length. The started-message
     # records it speaks for are snapshotted first, because a record added since
@@ -929,7 +941,7 @@ def cmd_start(a):
                          else "with an unreadable queue item")
                 refuse_start(f"refused: the action key {key} is already "
                              f"{action_key_state(queue, record.get('id'), record.get('state'))} "
-                             f"{where}", args, tool)
+                             f"{where}", args, tool, label)
         explicit = a.title or args.get("title") or ""
         item = {"id": queue["next"], "tool": tool, "args": args,
                 "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
@@ -955,10 +967,10 @@ def cmd_start(a):
             heads = queue.setdefault("gatedHeads", {})
             if request_id in heads:
                 refuse_start(f"refused: a gate for this head is already recorded as "
-                             f"{gate_label(gate_state(heads[request_id]))}", args, tool)
+                             f"{gate_label(gate_state(heads[request_id]))}", args, tool, label)
             heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
         save(queue)
-        journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool,
+        journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool, title=label,
                      taskType=args.get("taskType"), modelSelection=args.get("modelSelection"),
                      **journal.parse_request_id(request_id))
         drain()
@@ -1018,7 +1030,7 @@ def live_lane_repositories(config):
         receipts = {}
     cursor = None
     while True:
-        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+        args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES,
                 "includeSubagents": False}
         if cursor is not None:
             args["cursor"] = cursor
@@ -1045,7 +1057,72 @@ def live_lane_repositories(config):
         cursor = next_cursor
 
 
-def lane_candidates(rows, occupied):
+# A pull request body refs a ticket with one of these words. The lane's own
+# briefs write `Refs #n`, and a builder that closes its ticket writes
+# `Closes #n` or `Fixes #n`; all three are evidence that a builder is in
+# flight for that ticket.
+PR_REF = re.compile(r"(?i)\b(?:refs|closes|fixes)\s+#(\d+)")
+# One page of open pull requests is the whole read allowance a repo gets in a
+# pass. A repo with more open pull requests than this cannot be read within
+# that allowance, so the pass stops instead of spending a second call.
+PR_PAGE = 100
+
+
+def open_pr_refs(repo):
+    """The ticket numbers the open, non-draft pull requests of one repo ref.
+
+    One read per repo per pass, through the gateway like the issue read, so
+    the refill's GitHub budget stays known. The read is fresh: a pull request
+    opened after a cached read would be invisible for the cache's two
+    minutes, and a ticket could start while its own pull request is open. A
+    draft pull request is not a builder in flight, so it is skipped.
+    """
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls?state=open&per_page={PR_PAGE}"],
+                         timeout=40, limit=FLOOR, fresh=True)
+    if run.returncode:
+        raise RuntimeError(f"open pull request snapshot failed for {repo}")
+    pulls = json.loads(run.stdout)
+    if not isinstance(pulls, list) or not all(isinstance(pull, dict) for pull in pulls):
+        raise RuntimeError(f"open pull request snapshot is not a list for {repo}")
+    if len(pulls) >= PR_PAGE:
+        raise RuntimeError(f"open pull request list is longer than one page for {repo}")
+    refs = set()
+    for pull in pulls:
+        if pull.get("draft"):
+            continue
+        refs.update(int(number) for number in PR_REF.findall(str(pull.get("body") or "")))
+    return refs
+
+
+def stale_started(rows, occupied, pr_refs):
+    """The stage:started tickets with no live lane thread and no open pull
+    request that refs them.
+
+    A label is a claim; the thread and the pull request are the evidence. The
+    refill logs one line per ticket per pass and changes nothing, so a person
+    or the lane decides what the label means.
+    """
+    stale = []
+    for row in rows:
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        repo = row["repository"]["nameWithOwner"]
+        if "stage:started" not in names or repo in occupied:
+            continue
+        if row["number"] in pr_refs.get(repo, ()):
+            continue
+        stale.append(row)
+    return stale
+
+
+def lane_candidates(rows, occupied, pr_refs=None):
+    """The stage:todo tickets the refill may start, in board order.
+
+    A repo is busy when a live lane thread works it, or when an open,
+    non-draft pull request refs one of its open tickets. A `stage:started`
+    label alone is not evidence of a builder in flight, so a stale label no
+    longer makes its repo busy.
+    """
     def order(row):
         names = [label["name"] if isinstance(label, dict) else str(label)
                  for label in row.get("labels") or []]
@@ -1057,12 +1134,12 @@ def lane_candidates(rows, occupied):
         return (min(priorities, default=999), tuple(blockers), row["number"],
                 row["repository"]["nameWithOwner"])
 
+    pr_refs = pr_refs or {}
     busy = set(occupied)
     for row in rows:
-        names = [label["name"] if isinstance(label, dict) else str(label)
-                 for label in row.get("labels") or []]
-        if "stage:started" in names:
-            busy.add(row["repository"]["nameWithOwner"])
+        repo = row["repository"]["nameWithOwner"]
+        if row["number"] in pr_refs.get(repo, ()):
+            busy.add(repo)
     selected = []
     for row in sorted(rows, key=order):
         repo = row["repository"]["nameWithOwner"]
@@ -1077,6 +1154,7 @@ def board_candidates():
         cfg = json.load(f)
     occupied = live_lane_repositories(cfg)
     rows = []
+    pr_refs = {}
     for repo in cfg["repos"]:
         run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
                               f"repos/{repo}/issues?state=open&per_page=100"],
@@ -1088,7 +1166,10 @@ def board_candidates():
                 if "pull_request" not in row:
                     rows.append({**row, "repository": {"nameWithOwner": repo},
                                  "updatedAt": row["updated_at"]})
-    return lane_candidates(rows, occupied)
+        pr_refs[repo] = open_pr_refs(repo)
+    for row in stale_started(rows, occupied, pr_refs):
+        log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
+    return lane_candidates(rows, occupied, pr_refs)
 
 
 def ticket_start(repo, number, dry_run):
@@ -1405,6 +1486,12 @@ def cmd_status(a):
 OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
 
 
+class GhReadError(RuntimeError):
+    def __init__(self, endpoint, stderr):
+        super().__init__(f"GitHub request failed: {endpoint}")
+        self.stderr = stderr or ""
+
+
 def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
@@ -1414,7 +1501,7 @@ def gh_json(endpoint, optional=True, fresh=False):
                          timeout=40, limit=FLOOR if optional else None,
                          fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
     if run.returncode:
-        raise RuntimeError(f"GitHub request failed: {endpoint}")
+        raise GhReadError(endpoint, run.stderr)
     pages = json.loads(run.stdout)
     rows = []
     for page in pages if isinstance(pages, list) else [pages]:
@@ -1730,6 +1817,15 @@ def gate_rounds_used(repo, number, ledger):
     return count >= GATE_ROUND_CAP
 
 
+def unreadable_ticket_reason(error, issue, body, title):
+    if "HTTP 404" not in error.stderr:
+        return error.stderr.strip().splitlines()[0] if error.stderr.strip() else "request failed"
+    reason = f"issue #{issue} does not exist"
+    if re.search(rf"\b[A-Z][A-Za-z0-9]*-{issue}\b", f"{title}\n{body}"):
+        reason += "; a ticket key number used as an issue number?"
+    return reason
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -1771,7 +1867,16 @@ def gate_candidates(config, rounds=None):
             refs = re.findall(r"\bRefs #(\d+)\b", body)
             for issue in dict.fromkeys(refs):
                 ledger = []
-                for comment in gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100"):
+                try:
+                    comments = gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100")
+                except GhReadError as e:
+                    reason = unreadable_ticket_reason(e, issue, body, pr.get("title") or "")
+                    print(f"skip {repo}#{number}: Refs #{issue} cannot be read ({reason})",
+                          file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                           "reason": f"Refs #{issue} cannot be read ({reason})"}
+                    break
+                for comment in comments:
                     if comment["user"]["login"] != login:
                         continue
                     for match in re.finditer(r"<!-- coordinator-ticket (\{.*?\}) -->", comment["body"]):

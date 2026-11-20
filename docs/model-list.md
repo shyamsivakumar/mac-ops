@@ -56,11 +56,13 @@ A provider that fails with no credits, a usage limit or an auth error is
 recorded in `providers-blocked.json` in the queue folder. Every caller skips a
 blocked entry until the hourly probe of that provider answers. `models.py` reads
 that file and `block_provider` writes an entry with an `expires_at` epoch time;
-the reader drops an entry once that time has passed, and an entry without
-`expires_at` (a manual block) stays until removed. The router entry covers one
-identity per Morph model in its chains, so it counts as blocked only when every
-one of them is blocked. When every entry of a list is blocked, the caller waits
-and says so.
+the reader drops an entry once that time has passed. An entry written before
+that rule carries only an ISO 8601 `until`, which the reader honours when
+`expires_at` is absent. An entry with neither is a manual block and stays until
+removed, and the reader also drops an entry whose model is no longer in
+`models.json`. The router entry covers one identity per Morph model in its
+chains, so it counts as blocked only when every one of them is blocked. When
+every entry of a list is blocked, the caller waits and says so.
 
 ## Callers
 

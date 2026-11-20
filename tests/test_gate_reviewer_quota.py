@@ -1,7 +1,18 @@
+import os
 import runpy
+import tempfile
 import unittest
+from unittest.mock import patch
 
 C = runpy.run_path('coordinator/bin/coordq')
+
+
+def setUpModule():
+    queue = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(queue.cleanup)
+    environment = patch.dict(os.environ, {"COORDQ_DIR": queue.name})
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
 
 
 def review_selection(entry_id):
@@ -55,7 +66,7 @@ class ReviewerQuotaTests(unittest.TestCase):
                     load_counts=lambda: {}, write_counts=lambda *a: None,
                     # The same head reaches the loop twice, so the run must
                     # queue one reviewer, not two.
-                    gate_candidates=lambda cfg: [event, event], load_receipts=lambda: receipts,
+                    gate_candidates=lambda cfg, rounds=None: [event, event], load_receipts=lambda: receipts,
                     path=lambda name: d + '/' + name,
                     call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'openai/gpt-6.2-astra', 'providerInstanceId': 'openai-api', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
                 with redirect_stdout(io.StringIO()):

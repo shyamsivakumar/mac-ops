@@ -252,7 +252,7 @@ def start_issue(body):
         "id": "I_1", "number": 1, "url": "https://github.com/o/r/issues/1", "title": "SRW-1 · x",
         "state": "OPEN", "body": body, "comments": [],
         "labels": [{"name": "stage:todo"}, {"name": "type:standard"}, {"name": "priority:1"},
-                   {"name": "builder:minimax"}, {"name": "reviewer:opus-api"}],
+                   {"name": "builder:router"}, {"name": "reviewer:opus-api"}],
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
 
@@ -286,7 +286,7 @@ class ValidateStartTest(unittest.TestCase):
 
     def test_force_skips_the_text_blockers(self):
         started = ticket.validate_start(START_CFG, REPO, start_issue(templated_body()), check_text=False)
-        self.assertEqual(started["builderAlias"], "minimax")
+        self.assertEqual(started["builderAlias"], "router")
 
     def test_native_blocker_refusal_keeps_its_own_text(self):
         issue = start_issue(templated_body())
@@ -329,7 +329,7 @@ class HoldLabelTest(unittest.TestCase):
 
     def test_a_held_ticket_is_refused(self):
         issue = self.held_issue(("stage:todo", "type:standard", "priority:1",
-                                  "builder:minimax", "reviewer:opus-api", "stage:hold"))
+                                  "builder:router", "reviewer:opus-api", "stage:hold"))
         with self.assertRaises(ticket.Refuse) as caught:
             ticket.validate_start(START_CFG, REPO, issue)
         self.assertEqual(str(caught.exception), "on hold (stage:hold); only Shyam clears it")
@@ -351,7 +351,7 @@ class HoldLabelTest(unittest.TestCase):
 
     def test_a_ticket_without_the_hold_starts(self):
         started = ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
-        self.assertEqual(started["builderAlias"], "minimax")
+        self.assertEqual(started["builderAlias"], "router")
 
 
 class ReferenceWordTest(unittest.TestCase):
@@ -566,7 +566,7 @@ class DocsOnlyDeliveryTest(unittest.TestCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             started = ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
-        self.assertEqual(started["builderAlias"], "minimax")
+        self.assertEqual(started["builderAlias"], "router")
         self.assertIn("merged PR #1038 changed only docs; not treated as delivery", err.getvalue())
 
     def test_a_code_merge_still_refuses_the_start(self):
