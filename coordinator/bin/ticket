@@ -28,6 +28,7 @@ STAGES = ("stage:backlog", "stage:todo")
 # it is a family of its own: a hold says the ticket waits for Shyam, and it
 # never counts as the one stage label a ticket needs.
 HOLD_LABEL = "stage:hold"
+STARTED_LABEL = "stage:started"
 HOLD_FAMILY = "hold"
 FAMILIES = ("stage", HOLD_FAMILY, "priority", "type", "builder", "reviewer")
 FAMILY_COLORS = {"stage": "1d76db", HOLD_FAMILY: "b60205", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
@@ -243,7 +244,7 @@ def repo_config(cfg, repo):
 
 def ensure_labels(a):
     cfg = load_config()
-    wanted = label_names(cfg)
+    wanted = label_names(cfg) + [("stage", STARTED_LABEL)]
     for repo in cfg["repos"]:
         existing = {l["name"].lower(): l for l in gh_json(["label", "list", "-R", repo, "--limit", "1000", "--json", "name,color"])}
         create, recolor, ok = [], [], 0
@@ -1460,7 +1461,7 @@ def cmd_start(a):
         print(f"workspace: {strategy['type']} from {strategy['baseRef']}")
         print("command:\n" + shlex.join(command) + "\n")
         print(f"receipt comment (after coordq):\n<!-- coordinator-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"coordq\":\"<coordq output>\"}} -->\n")
-        print(f"then remove label stage:{t['stage']}")
+        print(f"then swap label stage:{t['stage']} for {STARTED_LABEL} in one edit")
         if a.print_brief:
             print("brief:\n" + brief)
         return
@@ -1486,9 +1487,37 @@ def cmd_start(a):
         except GhError as e:
             print(f"receipt comment failed ({e.kind}): {e}", file=sys.stderr)
             time.sleep(2)
-    gh(["issue", "edit", str(n), "-R", repo, "--remove-label", f"stage:{t['stage']}"])
+    swap_stage(repo, n, f"stage:{t['stage']}", STARTED_LABEL)
     if not posted:
         die(f"started, but the receipt comment could not be posted after 3 tries; coordq output was: {output}")
+
+
+STARTED_LABEL_READY = set()
+
+
+def ensure_started_label(repo):
+    if repo not in STARTED_LABEL_READY:
+        gh(["label", "create", STARTED_LABEL, "-R", repo, "--color", FAMILY_COLORS["stage"],
+            "--description", "A builder thread has the ticket", "--force"])
+        STARTED_LABEL_READY.add(repo)
+
+
+def swap_stage(repo, n, old, new):
+    """Replace the one stage label `old` with `new` in a single edit.
+
+    A failed edit changes no label, so the ticket keeps `old`. The restore
+    below re-asserts that and the message names the state that is left."""
+    edit = ["issue", "edit", str(n), "-R", repo]
+    try:
+        ensure_started_label(repo)
+        gh(edit + ["--add-label", new, "--remove-label", old])
+    except GhError as e:
+        try:
+            gh(edit + ["--add-label", old, "--remove-label", new])
+        except GhError as restore:
+            die(f"stage swap {old} -> {new} failed ({e.kind}): {e}; restoring {old} also failed ({restore.kind}): {restore}; "
+                f"{repo}#{n} may have no stage label, check it by hand")
+        die(f"stage swap {old} -> {new} failed ({e.kind}): {e}; {repo}#{n} has {old} and not {new}")
 
 
 def parse_pr_ref(ref):
