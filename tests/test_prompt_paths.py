@@ -561,7 +561,7 @@ class CoordqGateTest(unittest.TestCase):
 
         def fake_gh(endpoint):
             if "/files" in endpoint:
-                return [{"filename": path} for path in changed]
+                return [{"filename": path, "additions": 1, "deletions": 0} for path in changed]
             if endpoint.startswith(f"repos/{repo}/pulls"):
                 return [dict(pull)]
             if endpoint.endswith("/comments?per_page=100"):
