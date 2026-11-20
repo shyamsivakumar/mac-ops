@@ -9,14 +9,19 @@ A provider that fails for a blocking reason is recorded in
 `providers-blocked.json` in the queue folder, so every caller skips the same
 blocked providers. `block_provider` writes an entry with an `expires_at`
 epoch time; the reader drops an entry once that time has passed. An entry
-without a numeric `expires_at` is a manual block and stays until removed.
+written before that rule carries only an ISO 8601 `until`, which the reader
+honours when `expires_at` is absent. An entry with neither is a manual block
+and stays until removed. The reader also drops an entry whose model is no
+longer listed in `models.json`.
 """
 
 import contextlib
+import datetime
 import fcntl
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import time
@@ -27,6 +32,12 @@ INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
 BLOCKED_FILE = "providers-blocked.json"
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
+# A router entry names the T3 `router` instance and a route, `task/<chain>`.
+# The chain table says which models that route tries, in order, so the order
+# inside Morph is owned by the router and the order after Morph by this file.
+ROUTER_INSTANCE = "router"
+ROUTE_PREFIX = "task/"
+DEFAULT_CHAIN = "standard"
 
 
 class ModelsError(ValueError):
@@ -67,6 +78,8 @@ def validate(data):
                 types = entry.get(key, [])
                 if not (isinstance(types, list) and all(nonempty_string(t) for t in types)):
                     raise ModelsError(f"models.json {name} entry {key} must be a list of task types: {entry!r}")
+            if is_router(entry):
+                validate_router(entry, name)
             if entry["id"] in seen:
                 raise ModelsError(f"models.json {name} lists {entry['id']} twice")
             seen.add(entry["id"])
@@ -75,6 +88,120 @@ def validate(data):
 
 def reject_constant(token):
     raise ValueError(f"{token} is not a JSON value")
+
+
+def is_router(entry):
+    """Whether an entry runs on the T3 router instance."""
+    selection = entry.get("selection") if isinstance(entry, dict) else None
+    return isinstance(selection, dict) and selection.get("instanceId") == ROUTER_INSTANCE
+
+
+def validate_router(entry, list_name):
+    """A router entry needs a chain table and a route table that names it."""
+    chains = entry.get("chains")
+    if not isinstance(chains, dict) or not chains:
+        raise ModelsError(f"models.json {list_name} router entry needs a non-empty chains table: {entry!r}")
+    for chain, models in chains.items():
+        if not (nonempty_string(chain) and isinstance(models, list) and models
+                and all(nonempty_string(model) for model in models)):
+            raise ModelsError(f"models.json {list_name} router chain {chain!r} must be a non-empty list of models: {entry!r}")
+    routes = entry.get("routes")
+    if not isinstance(routes, dict) or not routes:
+        raise ModelsError(f"models.json {list_name} router entry needs a non-empty routes table: {entry!r}")
+    for task_type, chain in routes.items():
+        if not (nonempty_string(task_type) and nonempty_string(chain) and chain in chains):
+            raise ModelsError(f"models.json {list_name} router route {task_type!r} must name a chain: {entry!r}")
+    if DEFAULT_CHAIN not in chains:
+        raise ModelsError(f"models.json {list_name} router entry needs a {DEFAULT_CHAIN!r} chain: {entry!r}")
+
+
+def chain_of(entry, task_type=None):
+    """The chain a router entry runs for a task type, `standard` when the type names none."""
+    routes = entry.get("routes") or {}
+    return routes.get(task_type) or DEFAULT_CHAIN
+
+
+def router_route(selection):
+    """The chain a router selection names, or None when it names none."""
+    model = str(selection.get("model") or "") if isinstance(selection, dict) else ""
+    return model[len(ROUTE_PREFIX):] if model.startswith(ROUTE_PREFIX) else None
+
+
+def route_of(entry, task_type=None):
+    """The router route a task type runs, `task/<chain>`."""
+    return f"{ROUTE_PREFIX}{chain_of(entry, task_type)}"
+
+
+def selection_for(entry, task_type=None):
+    """The selection an entry runs for a task type.
+
+    A router entry names the route for the type, so one entry serves every
+    chain; every other entry names its own selection."""
+    if is_router(entry):
+        return {**entry["selection"], "model": route_of(entry, task_type)}
+    return entry["selection"]
+
+
+def chain_models(entry):
+    """Every model a router entry can run, in chain order, without repeats."""
+    models = []
+    for chain in (entry.get("chains") or {}).values():
+        for model in chain:
+            if model not in models:
+                models.append(model)
+    return models
+
+
+def pi_identity(model):
+    """The blocked-store identity of a model the `pi` instance runs."""
+    return identity({"instanceId": "pi", "model": model})
+
+
+def entry_identities(entry):
+    """The blocked-store identities an entry covers.
+
+    A router entry covers one identity per Morph model in its chains, so it is
+    blocked only when every one of them is blocked."""
+    if is_router(entry):
+        return {pi_identity(model) for model in chain_models(entry)}
+    return {identity(entry["selection"])}
+
+
+def entry_blocked(entry, blocked=None):
+    """Whether the entry is blocked: by its own identity, or for a router entry
+    by every Morph model in its chains."""
+    blocked = blocked_identities() if blocked is None else blocked
+    return identity(entry["selection"]) in blocked or entry_identities(entry) <= blocked
+
+
+def router_entry(list_name):
+    """The router entry of a list, or None when the list has none."""
+    for entry in entries(list_name):
+        if is_router(entry):
+            return entry
+    return None
+
+
+def router_covers(list_name, selection):
+    """The router entry of a list when it runs the model a selection names.
+
+    A caller that still sends a direct `pi` Morph model is mapped to the
+    router entry, so the launch goes through the router and its fallback. The
+    match is on the blocked-store identity, so a model of another instance
+    never counts."""
+    entry = router_entry(list_name)
+    if entry is None or not isinstance(selection, dict):
+        return None
+    return entry if identity(selection) in entry_identities(entry) else None
+
+
+def selection_identities(selection, list_name="build"):
+    """The identities to block so the entry a selection names is skipped.
+
+    A router selection names one entry that covers every Morph model, so
+    skipping it means blocking each of them."""
+    entry = find(selection, (list_name,))
+    return entry_identities(entry) if entry is not None else {identity(selection)}
 
 
 def read_json(file_path):
@@ -132,26 +259,75 @@ def read_blocked_file(file_path):
     return data
 
 
-def expiry(entry):
-    """The entry's `expires_at` as a float, or infinity for a manual entry that never expires.
+FRACTION = re.compile(r"\.(\d+)")
 
-    Anything that is not a finite number counts as manual, including an integer too
-    large for a float, which JavaScript's JSON.parse reads as an infinity.
-    """
-    value = entry.get("expires_at") if isinstance(entry, dict) else None
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return math.inf
+
+def moment(value):
+    """The epoch second an ISO 8601 timestamp names, or None when it names none.
+
+    Python 3.9 reads a fractional second only at three or six digits, so the
+    fraction is padded or cut to six before parsing."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    text = FRACTION.sub(lambda m: "." + (m.group(1) + "000000")[:6], text, count=1)
     try:
-        seconds = float(value)
-    except OverflowError:
+        stamp = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return stamp.timestamp()
+
+
+def expiry(entry):
+    """The epoch second the entry stops blocking, or infinity for a manual entry.
+
+    `expires_at` is the epoch second `block_provider` writes. An entry written
+    before that rule carries only an ISO 8601 `until`, so `until` is read when
+    `expires_at` is absent. Anything that is not a finite number counts as
+    manual, including an integer too large for a float, which JavaScript's
+    JSON.parse reads as an infinity.
+    """
+    if not isinstance(entry, dict):
         return math.inf
-    return seconds if math.isfinite(seconds) else math.inf
+    if "expires_at" in entry:
+        value = entry["expires_at"]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return math.inf
+        try:
+            seconds = float(value)
+        except OverflowError:
+            return math.inf
+        return seconds if math.isfinite(seconds) else math.inf
+    until = moment(entry.get("until"))
+    return math.inf if until is None else until
+
+
+def known_identities():
+    """Every blocked-store identity a list can produce.
+
+    An entry whose key is not one of these names a model no list carries any
+    more, so the reader drops it instead of keeping a stale block forever. A
+    router entry is known by its own route (`router:<chain>`) as well as by
+    each Morph model in its chains."""
+    known = set()
+    catalog = load()
+    for name in LISTS:
+        for entry in catalog[name]:
+            known |= entry_identities(entry)
+            known.add(identity(entry["selection"]))
+            if is_router(entry):
+                instance = entry["selection"]["instanceId"]
+                known |= {f"{instance}:{chain}" for chain in entry.get("chains") or {}}
+    return known
 
 
 def blocked_identities(now=None):
     now = time.time() if now is None else now
     blocked = read_blocked_file(blocked_path())["blocked"]
-    return {key for key, entry in blocked.items() if expiry(entry) > now}
+    known = known_identities()
+    return {key for key, entry in blocked.items() if key in known and expiry(entry) > now}
 
 
 @contextlib.contextmanager
@@ -229,16 +405,23 @@ def first_available(list_name, preferred=None, blocked=None, task_type=None):
     """The first entry that is not blocked, or None when every entry is."""
     blocked = blocked_identities() if blocked is None else blocked
     for entry in in_order(list_name, preferred, task_type):
-        if identity(entry["selection"]) not in blocked:
+        if not entry_blocked(entry, blocked):
             return entry
     return None
 
 
 def find(selection, list_names=LISTS):
+    """The entry a selection names.
+
+    A router selection names the router entry of the list when it carries a
+    configured route, because one entry owns every route."""
     wanted = identity(selection)
+    chain = router_route(selection) if isinstance(selection, dict) else None
     for name in list_names:
         for entry in entries(name):
             if identity(entry["selection"]) == wanted:
+                return entry
+            if chain is not None and is_router(entry) and chain in (entry.get("chains") or {}):
                 return entry
     return None
 
@@ -281,21 +464,28 @@ def pi_routes(task_type=None):
     """The build list as pi route specs, `provider/model`, in the order the
     task type uses.
 
-    Only an entry whose model carries a pi provider prefix can run in pi."""
-    return [
-        e["selection"]["model"]
-        for e in in_order("build", task_type=task_type)
-        if "/" in e["selection"]["model"]
-    ]
+    A router entry contributes the models of the chain its route names, so the
+    installer rebuilds the router's own table from this file. Only an entry
+    whose model carries a pi provider prefix can run in pi."""
+    specs = []
+    for entry in in_order("build", task_type=task_type):
+        if is_router(entry):
+            specs += (entry.get("chains") or {}).get(chain_of(entry, task_type), [])
+        elif "/" in entry["selection"]["model"]:
+            specs.append(entry["selection"]["model"])
+    return specs
 
 
 def pi_identities():
     """The blocked-store identity of each pi route spec, so pi can skip a blocked provider."""
-    return {
-        e["selection"]["model"]: identity(e["selection"])
-        for e in entries("build")
-        if "/" in e["selection"]["model"]
-    }
+    identities = {}
+    for entry in entries("build"):
+        if is_router(entry):
+            for model in chain_models(entry):
+                identities[model] = pi_identity(model)
+        elif "/" in entry["selection"]["model"]:
+            identities[entry["selection"]["model"]] = identity(entry["selection"])
+    return identities
 
 
 def first_other(list_name, own_model=None):
@@ -303,7 +493,7 @@ def first_other(list_name, own_model=None):
     own = str(own_model or "").split("/")[-1]
     blocked = blocked_identities()
     for entry in entries(list_name):
-        if entry["selection"]["model"].split("/")[-1] != own and identity(entry["selection"]) not in blocked:
+        if entry["selection"]["model"].split("/")[-1] != own and not entry_blocked(entry, blocked):
             return entry
     return None
 

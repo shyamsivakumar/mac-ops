@@ -10,11 +10,11 @@ EXECUTABLE = "overnight"
 # The eval names the suite registers today. This set is what the hourly
 # check compares against, and the suite's own registry is pinned to it in
 # `hourly_selftest_fixture`, so the two cannot drift apart unnoticed.
-EXPECTED = frozenset("send-integrity root-workspace consolidation-guard script-results start-routing "
+EXPECTED = frozenset("send-integrity root-workspace worktree-base-ref consolidation-guard script-results start-routing "
                      "dead-run-recovery gate-pipeline merged-restart merge-pass gate-round-cap decisions-board-guard "
                      "no-parking turncap watchdog "
                      "zero-merge board-integrity api-budget ff-drift cycle-health "
-                     "stall alarm-mute".split())
+                     "stall alarm-mute router-build router-blocked key-mint credit-block close-evidence".split())
 
 
 def save(path, value):

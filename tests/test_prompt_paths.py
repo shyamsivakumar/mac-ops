@@ -573,8 +573,12 @@ class CoordqGateTest(unittest.TestCase):
         quiet = types.SimpleNamespace(returncode=0, stdout="me\n", stderr="")
         fake_subprocess = types.SimpleNamespace(run=lambda *a, **k: quiet,
                                                SubprocessError=subprocess.SubprocessError)
+        # The lane's round count is not what this test is about, and the live
+        # ledger is not read here: an empty one keeps the gatekeep path
+        # hermetic.
         with patch.object(coordq, "subprocess", fake_subprocess), \
                 patch.object(coordq.gh_gateway, "run", return_value=quiet), \
+                patch.object(coordq.gh_gateway, "cached_login", lambda _directory, read: read()), \
                 patch.object(coordq, "reviewer_model",
                              return_value={"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}), \
                 patch.object(coordq, "gh_json", fake_gh), \
@@ -582,6 +586,7 @@ class CoordqGateTest(unittest.TestCase):
                 patch.object(coordq, "read_builder_thread",
                              return_value=({"providerInstanceId": "codex", "model": "gpt-6.2-astra"}, [])), \
                 patch.object(coordq, "builder_thread_for_issue", return_value="thread-1"), \
+                patch.object(coordq, "lane_ledger", return_value={}), \
                 patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")), \
                 redirect_stderr(io.StringIO()):
             events = list(coordq.gate_candidates({"repos": {repo: {"key": "T", "projectId": "P"}}}))
@@ -629,6 +634,7 @@ class CoordqGateTest(unittest.TestCase):
                                                SubprocessError=subprocess.SubprocessError)
         with patch.object(coordq, "subprocess", fake_subprocess), \
                 patch.object(coordq.gh_gateway, "run", return_value=quiet), \
+                patch.object(coordq.gh_gateway, "cached_login", lambda _directory, read: read()), \
                 patch.object(coordq, "reviewer_model",
                              return_value={"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}), \
                 patch.object(coordq, "gh_json", fake_gh), \
@@ -636,6 +642,7 @@ class CoordqGateTest(unittest.TestCase):
                 patch.object(coordq, "read_builder_thread",
                              return_value=({"providerInstanceId": "codex", "model": "gpt-6.2-astra"}, [])), \
                 patch.object(coordq, "builder_thread_for_issue", return_value="thread-1"), \
+                patch.object(coordq, "lane_ledger", return_value={}), \
                 patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")), \
                 redirect_stderr(io.StringIO()):
             events = list(coordq.gate_candidates({"repos": {repo: {"key": "T", "projectId": "P"}}}))

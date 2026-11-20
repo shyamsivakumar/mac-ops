@@ -74,11 +74,13 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     merge = (PROMPT_NO_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if mode == "ascend" else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-    provides_ask = (f"Verify every Provides claim from the ticket on head {head}. Only if all hold, include the exact line "
-                    f"`PROVIDES: PASS {head}` before the final CHECK and VERDICT lines.")
+    provides_ask = (f"Verify every Provides claim from the ticket on head {head}. A ticket with no Provides section has "
+                    f"no claims, so it passes this check trivially. Include the exact line `PROVIDES: PASS {head}` before "
+                    f"the final CHECK and VERDICT lines whenever every claim holds, and `PROVIDES: FAIL {head}` with "
+                    f"`VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.")
     lane = mode == "lane" and not prompt
     if lane:
-        merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. " + provides_ask
+        merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict."
     fast_forward = ("" if mode == "ascend" or lane or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
                     "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
@@ -111,7 +113,7 @@ Tag findings critical, major, minor with file:line. Runtime changes outside the 
 {GATE_BAR}
 {ANSWER_FORMAT}
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{manual_gate_ending() + " " + provides_ask if mode == "manual" else merge + fast_forward + close + " Never call emp. Never print secrets."}"""
+{manual_gate_ending() if mode == "manual" else merge + fast_forward + close} {provides_ask} Never call emp. Never print secrets."""
     if not fast_forward_main and mode != "manual":
         message = message.replace(" Never call emp. Never print secrets.", "\nNever call emp. Never print secrets.")
     return message

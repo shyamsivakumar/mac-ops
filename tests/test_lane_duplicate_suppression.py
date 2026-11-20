@@ -84,9 +84,6 @@ class ReplayTests(unittest.TestCase):
         def run(cmd, timeout=150):
             commands.append(cmd)
             if cmd[:2] == ["gh", "pr"] and "view" in cmd:
-                fields = cmd[cmd.index("--json") + 1]
-                if fields == "state,mergedAt":
-                    return json.dumps({"state": "OPEN", "mergedAt": None})
                 return json.dumps({"number": 20, "state": "OPEN",
                                    "headRefName": "builder/fixture", "baseRefName": "main"})
             if cmd[0] == self.lane.COORDQ:
@@ -108,9 +105,9 @@ class ReplayTests(unittest.TestCase):
              patch.object(self.lane, "builder_thread", return_value=("10", builder)), \
              patch.object(self.lane, "gate_verdict", return_value=(verdict, {"threadId": "gate"}, reply)), \
              patch.object(self.lane, "run", run), patch.object(self.lane, "t3", threads), \
-             patch.object(self.lane, "read_json", return_value={"number": 20, "state": "OPEN",
-                                                               "headRefName": "builder/fixture",
-                                                               "baseRefName": "main"}):
+             patch.dict(self.lane.PASS_PRS, {REPO: {
+                 pr["number"]: {**pr, "headRefName": "builder/fixture", "baseRefName": "main"}
+                 for pr in prs}}, clear=True):
             return self.lane.act_on_pr(REPO, 20, ledger), commands
 
     def items(self):

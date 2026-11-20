@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -8,6 +9,8 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import time
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -38,6 +41,16 @@ def load_runner():
 def load_ticket():
     path = ROOT / "ticket" if (ROOT / "ticket").is_file() else ROOT.parent / "bin" / "ticket"
     loader = importlib.machinery.SourceFileLoader("fixture_ticket", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_coordq():
+    """Return coordq as a module, so an eval runs the real dispatch path."""
+    path = ROOT / "coordq" if (ROOT / "coordq").is_file() else ROOT.parent / "bin" / "coordq"
+    loader = importlib.machinery.SourceFileLoader("fixture_coordq", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
@@ -124,8 +137,8 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    for kind, label, expected in [("standard", None, "morph/morph-dsv41flash"), ("risky", None, "morph/morph-kimik31"),
-                                  ("chore", "kimi", "morph/morph-kimik31"), ("chore", None, "morph/morph-dsv41flash")]:
+    for kind, label, expected in [("standard", None, "task/standard"), ("risky", None, "task/risky"),
+                                  ("chore", "cursor", "default"), ("chore", "kimi", "task/standard")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
         item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
@@ -147,13 +160,20 @@ def start_routing():
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
                                        print_brief=False, dry_run=False))
         exact(len(commands), 1)
-    morph = {"pi:morph-dsv41flash", "pi:morph-kimik31"}
+    # A ticket labelled before the router entry existed still starts.
+    exact(ticket.builder_alias("kimi"), "router")
+    exact(ticket.builder_alias("deepseek"), "router")
+    exact(ticket.builder_alias("cursor"), "cursor")
+    labels_cfg = {"labels": {"stage": ["todo"], "type": ["standard"], "priority": ["1"]}}
+    exact(ticket.label_problems(labels_cfg, {"stage": ["todo"], "type": ["standard"],
+                                             "priority": ["1"], "builder": ["kimi"], "reviewer": []}), [])
+    morph = {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}
     for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["cursor", "sol"])]:
         blocked = set(morph)
         for expected_id in walk:
             exact(lane.model_list.first_available("build", None, blocked, kind)["id"], expected_id)
             blocked.add(lane.model_list.identity(lane.model_list.first_available("build", None, blocked, kind)["selection"]))
-    exact(lane.model_list.first_available("fix")["selection"]["model"], "morph/morph-dsv41flash")
+    exact(lane.model_list.first_available("fix")["selection"]["model"], "task/standard")
     exact(lane.model_list.entries("fix")[-1]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
@@ -237,6 +257,11 @@ def start_routing():
             exact(events, ["pr-launch", "refresh"])
             exact(actions, [])
             exact(ledger, {})
+
+
+def pr_reads(lane, row):
+    lane.PASS_PRS.clear()
+    return lambda command, **_: [row] if command[:3] == ["gh", "pr", "list"] else row
 
 
 def dead_run_recovery():
@@ -447,8 +472,6 @@ def gate_pipeline():
 
         def command(cmd, timeout=150, target=target, changed=changed, actions=actions,
                     head=head, reply=reply, verdict=verdict, name=name):
-            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
-                return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
                 # The pre-merge guard: the base and head the review was taken
                 # against, read in one call immediately before the merge.
@@ -539,8 +562,8 @@ def gate_pipeline():
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "publish_decision", decision), \
-                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture",
-                                                baseRefName="other" if name == "retargeted-after-pass" else "main")), \
+                 patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture",
+                                                baseRefName="other" if name == "retargeted-after-pass" else "main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=live_state_only):
                 if name != "no-receipts-file":
@@ -564,27 +587,41 @@ def gate_pipeline():
 def merged_restart():
     import lane_driver as lane
     head = "a" * 40
-    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z", baseRefName="main"),
-              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z", baseRefName="main")]
+    now = time.time()
+
+    def days_ago(days):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - days * 86400))
+
+    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt=days_ago(2), baseRefName="main"),
+              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt=days_ago(4), baseRefName="main")]
+    gate_key = {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"}
+    passing = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
     for repo, key, receipts, reply, expected, board in [
-        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"},
-         f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS",
-         ["provides", "ff"], None),
-        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"},
-         f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS", ["provides"], "close-failed"),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, passing, ["provides", "ff"], None),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, passing, ["provides"], "close-failed"),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, passing, ["provides", "ff"], "ff-failed"),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, "", [], "running"),
         ("shyamsivakumar/mac-ops", "MO", {}, "", [], "owner"),
         ("shyamsivakumar/strategy-replay-workbench", "SRW", {}, "", [], "decisions"),
     ]:
         actions = []
+        searches = []
+        checklist = {"items": [
+            dict(item="scope", status="pass", detail="every file is named"),
+            dict(item="proof file", status="skipped", detail="there is no proof file to read"),
+            dict(item="cost note", status="skipped", required=False, detail="the report does not exist yet"),
+            dict(item="checks", status="fail", detail="a check failed")]}
 
-        def command(cmd, timeout=150, actions=actions, board=board):
+        def command(cmd, timeout=150, actions=actions, board=board, searches=searches):
             if cmd[:3] == ["gh", "pr", "list"]:
+                exact(cmd[cmd.index("--limit") + 1], "300")
+                searches.append(cmd[cmd.index("--search") + 1])
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:
                 exact(cmd[3:5], ["--pr", "20"])
                 actions.append("provides")
                 if board == "close-failed":
-                    raise subprocess.CalledProcessError(1, cmd)
+                    raise subprocess.CalledProcessError(1, cmd, output="refused: the close checklist failed")
                 return "closed"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
@@ -592,11 +629,14 @@ def merged_restart():
                 return "refs/heads/main"
             if cmd[0] == "git" and "--ff-only" in cmd:
                 actions.append("ff")
+                if board == "ff-failed":
+                    raise subprocess.CalledProcessError(1, cmd, output="not a fast-forward")
                 return "updated"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args, reply=reply):
-            return {"thread": {"status": "completed"}, "items": [{"type": "assistant_message", "text": reply}]}
+        def threads(tool, args, reply=reply, board=board):
+            status = "running" if board == "running" else "completed"
+            return {"thread": {"status": status}, "items": [{"type": "assistant_message", "text": reply}]}
 
         ledger = {}
         with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions, \
@@ -605,18 +645,32 @@ def merged_restart():
              patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
              patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": [dict(number=10, labels=[])]}}}), \
              patch.object(lane, "DRY", False), \
+             patch.object(lane.close_check, "run_check", lambda *args, checklist=checklist: checklist), \
              patch.object(lane, "run", command), patch.object(lane, "t3", threads):
             Path(scratch, "receipts.json").write_text(json.dumps(receipts))
             for _ in range(2):
                 lane.settle_merged_prs(repo, ledger)
                 exact(actions, expected)
+            exact(searches, [f"merged:>={days_ago(lane.SETTLE_LOOKBACK_DAYS)[:10]}"] * 2)
             item_id = f"lane-merged-unreviewed-{key}-20"
             owner_path = Path(scratch, "owner.json")
-            owner = [i["id"] for i in json.loads(owner_path.read_text())["items"]] if owner_path.exists() else []
-            exact(owner, [item_id] if board == "owner" else
+            owner = json.loads(owner_path.read_text())["items"] if owner_path.exists() else []
+            exact([i["id"] for i in owner], [item_id] if board == "owner" else
                   ["lane-close-failed-MO-20"] if board == "close-failed" else [])
             exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
                   [item_id] if board == "decisions" else [])
+            exact(sorted(k for k in ledger if k.startswith("after-merge:")),
+                  [] if board == "running" else [f"after-merge:{repo}#20:{head}"])
+            if board == "close-failed":
+                why = owner[0]["why"]
+                exact("proof file: skipped - there is no proof file to read" in why, True)
+                exact("checks: fail - a check failed" in why, True)
+                exact("scope: pass" in why or "cost note" in why, False)
+            if board == "owner":
+                exact("no gate attempt for this head has a recorded base" in owner[0]["why"], True)
+                exact("(ticket MO-10)" in owner[0]["title"], True)
+            if board == "ff-failed":
+                exact(ledger[f"after-merge:{repo}#20:{head}"], "closed")
 
 
 def merge_pass():
@@ -660,10 +714,11 @@ def merge_pass():
                 return "updated"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def read(cmd):
+        def read(cmd, **_):
             gh_calls.append(cmd)
-            return dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
-                        body="Refs #10", changedFiles=1)
+            row = dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
+                       body="Refs #10", changedFiles=1)
+            return [row] if cmd[:3] == ["gh", "pr", "list"] else row
 
         def threads(tool, args):
             return {"thread": {"status": "completed" if finished else "running"},
@@ -671,6 +726,7 @@ def merge_pass():
 
         ledger = {} if ledger is None else ledger
         output = io.StringIO()
+        lane.PASS_PRS.clear()
         with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board, \
              patch.dict(os.environ, {"COORDINATOR_OWNER_BOARD": str(Path(scratch) / "owner.json")}), \
              patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
@@ -765,7 +821,26 @@ def completion_boundary():
     ticket = load_ticket()
     head = "a" * 40
     proof = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
+    bare = f"CHECK: PASS {head}\nVERDICT: PASS"
+    # Replay of mac-ops#632, whose ticket has no Provides section. The brief now
+    # always asks for the PROVIDES line and says a ticket with no claims passes
+    # that check trivially, so the reply it prescribes is a complete PASS. Every
+    # brief mode asks for the line, so no reviewer can return a PASS without it.
+    briefs = {
+        "lane": ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX"}, 10, 20, head, "main", False, False),
+        "manual": ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX", "merge": "manual"}, 10, 20, head, "main", False, False),
+        "prompt": ticket.gate_brief("shyamsivakumar/mac-ops", {"key": "FIX"}, 10, 20, head, "main", False, False, prompt=True),
+        "ascend": ticket.gate_brief("ascend/fixture", {"key": "FIX"}, 10, 20, head, "main", False, True),
+        "reviewer": ticket.gate_brief("shyamsivakumar/fixture", {"key": "FIX"}, 10, 20, head, "main", False, False),
+    }
+    for brief in briefs.values():
+        exact(f"`PROVIDES: PASS {head}`" in brief, True)
+        exact("no Provides section has no claims, so it passes this check trivially" in brief, True)
+        exact("A PASS reply without the PROVIDES line is read as no verdict." in brief, True)
     merged = dict(state="MERGED", headRefOid=head, body="Refs #10", mergeCommit={"oid": "b" * 40})
+    # The bare reply is refused on a code pull request: `prompt_cases` below
+    # covers it with prompt "clear", so a reply missing PROVIDES on a ticket
+    # that does have claims is still no verdict.
     cases = [(merged, proof, True), (dict(merged, state="OPEN"), proof, False),
              (dict(merged, headRefOid="c" * 40), proof, False),
              (dict(merged, body="Refs #11"), proof, False),
@@ -773,7 +848,6 @@ def completion_boundary():
              (merged, proof.replace("PROVIDES: PASS", "PROVIDES: FAIL"), False),
              (merged, proof.replace("CHECK: PASS", "CHECK: FAIL"), False),
              (merged, proof.replace("VERDICT: PASS", "VERDICT: FAIL"), False)]
-    bare = f"CHECK: PASS {head}\nVERDICT: PASS"
     prompt_cases = [(bare, "hold", True), (bare, "clear", False), (bare, "unknown", False)]
     for pull, reply, allowed, prompt in ([(*case, "clear") for case in cases]
                                          + [(merged, r, a, s) for r, s, a in prompt_cases]):
@@ -825,8 +899,6 @@ def no_parking(status="interrupted"):
     actions = []
 
     def command(cmd, timeout=150):
-        if cmd == ["gh", "pr", "view", "20", "-R", repo, "--json", "state,mergedAt"]:
-            return json.dumps({"state": "OPEN", "mergedAt": None})
         if cmd == [lane.COORDQ, "list"]:
             return ""
         exact(cmd[0:2], [lane.COORDQ, "start"])
@@ -842,7 +914,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
-         patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+         patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
          patch.object(lane, "run", command), \
          patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
@@ -1599,7 +1671,7 @@ def api_budget():
     repo = "fixture/repo"
     ledger = {}
     commands = []
-    def read(command):
+    def read(command, fresh=False):
         commands.append(command)
         return {"issues": []} if command[0] == "ticket" else []
     with patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "read_json", side_effect=read):
@@ -1781,6 +1853,61 @@ def consolidation_guard():
     exact("never create a third ticket" in message, True)
 
 
+def worktree_base_ref():
+    """A worktree launch always names the ref it branches from.
+
+    T3 0.1.10 refuses a worktree launch with no baseRef, so a hand-built
+    payload that leaves it out is dropped after three attempts. coordq fills
+    the lane default at dispatch, keeps a caller's own baseRef and
+    startFromOrigin, and leaves every other strategy and tool alone.
+    """
+    import ast
+    import copy
+    queue_path = Path(__file__).resolve().parents[1] / "bin" / "coordq"
+    tree = ast.parse(queue_path.read_text())
+    function = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "worktree_base")
+    # The default is read from coordq and checked against the literal here, so
+    # the eval cannot agree with a wrong default.
+    constant = next(node for node in tree.body
+                    if isinstance(node, ast.Assign)
+                    and any(getattr(target, "id", None) == "DEFAULT_BASE_REF" for target in node.targets))
+    default_ref = ast.literal_eval(constant.value)
+    exact(default_ref, "origin/main")
+    namespace = {"DEFAULT_BASE_REF": default_ref}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(queue_path), "exec"), namespace)
+    fill = namespace["worktree_base"]
+    launch = "t3_thread_launch"
+    default = {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
+    # A worktree launch with no baseRef gets the lane default.
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree"}}),
+          {"workspaceStrategy": default})
+    # An empty baseRef is a missing one.
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "baseRef": ""}}),
+          {"workspaceStrategy": default})
+    # A caller's own baseRef and startFromOrigin are kept as given. The input
+    # is a copy, so a function that changed it in place would not also change
+    # the expected value.
+    own = {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture",
+                                 "startFromOrigin": False}}
+    exact(fill(launch, copy.deepcopy(own)), own)
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture"}}),
+          {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture"}})
+    # A caller's own startFromOrigin is kept when only the baseRef is filled.
+    exact(fill(launch, {"workspaceStrategy": {"type": "worktree", "startFromOrigin": False}}),
+          {"workspaceStrategy": {"type": "worktree", "baseRef": "origin/main",
+                                 "startFromOrigin": False}})
+    # A root or existing_worktree strategy is left alone.
+    for strategy in ({"type": "root"}, {"type": "existing_worktree", "worktreePath": "/fixture"}):
+        args = {"workspaceStrategy": strategy}
+        exact(fill(launch, copy.deepcopy(args)), args)
+    # No other tool gets a baseRef, and a launch with no strategy is left alone.
+    for tool in ("t3_thread_send", "t3_thread_list"):
+        args = {"workspaceStrategy": {"type": "worktree"}}
+        exact(fill(tool, copy.deepcopy(args)), args)
+    exact(fill(launch, {"message": "brief"}), {"message": "brief"})
+
+
 def gate_round_cap():
     """The convergence rule in the lane: three failed reviews, then one item.
 
@@ -1839,7 +1966,7 @@ def gate_round_cap():
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "gate_verdict", return_value=verdict), \
-                 patch.object(lane, "read_json", return_value=dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch.object(lane, "send", send):
                 return lane.act_on_pr(repo, number, ledger)
@@ -1958,6 +2085,19 @@ def gate_round_cap():
             at_cap(number, report)
             exact(round_item(number), True)
         exact(merged, [(30, heads[2])])
+        # A ledger key with no card on the board is not proof the card is
+        # there: the item is raised again, and the ledger key stays. A
+        # second pass finds the card and raises no second one.
+        missing = {f"rounds:{repo}#24": {"count": 3, "head": heads[2]},
+                   f"rounds-decision:{repo}#24": "lane-gate-rounds-shyamsivakumar-mac-ops-24"}
+        result = act(24, heads[3], missing, verdict=("absent", None, ""))
+        exact(result, "#24: no fix round, the decisions item was raised again")
+        exact(round_item(24), True)
+        exact(f"rounds-decision:{repo}#24" in missing, True)
+        result = act(24, heads[3], missing, verdict=("absent", None, ""))
+        exact(result, "#24: no fix round, the decisions item is on the board")
+        exact(sum(1 for item in json.loads(board.read_text())["items"]
+                  if item["id"] == "lane-gate-rounds-shyamsivakumar-mac-ops-24"), 1)
         # (d) round 1 FAIL with the none line is a normal fix round.
         sent.clear()
         with patch.object(lane, "merge_on_reviewed_base", merge):
@@ -1969,10 +2109,158 @@ def gate_round_cap():
             result, _ = at_cap(35, none_line)
         exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
         exact(merged, [(30, heads[2])])
+    gatekeep_round_cap()
+
+
+def gatekeep_round_cap():
+    """Gatekeep queues no gate for a pull request at the lane's round cap.
+
+    The lane counts the failed gate reviews of a pull request in its
+    ledger. Gatekeep reads that same count, so a pull request that used
+    its rounds is skipped instead of gated again: SRW#1338 was gated ten
+    times because every new head looked like a fresh candidate.
+    """
+    coordq = load_coordq()
+    repo = "shyamsivakumar/strategy-replay-workbench"
+    head = "3b7671c1" + "0" * 32
+    pr = {"draft": False, "number": 1338, "head": {"sha": head},
+          "body": f"Refs #1338\nBuilder check: PASS {head}\n",
+          "changed_files": 1, "base": {"ref": "main"}}
+    config = {"repos": {repo: {"key": "SRW", "projectId": "fixture"}}}
+
+    class Run:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([[pr]]))
+        # A pull request at the cap is skipped before any other read, so
+        # no other endpoint is asked for.
+        raise AssertionError(f"unexpected read for a capped pull request: {endpoint}")
+
+    def events(ledger):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
+            found = list(coordq.gate_candidates(config, coordq.lane_ledger()))
+        return found, errors.getvalue()
+
+    def gatekeep(ledger):
+        """One gatekeep run over a scratch queue, and what it queued."""
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             contextlib.redirect_stderr(io.StringIO()) as errors, \
+             contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
+            settings = Path(scratch) / "gatekeep-config.json"
+            settings.write_text(json.dumps(config))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+            queue = json.loads(Path(scratch, "queue.json").read_text())
+        return queue, errors.getvalue()
+
+    # A ticket that cannot be read costs only its pull request: the next
+    # pull request is still gated, and an exhausted API budget still stops
+    # the pass.
+    missing = {"draft": False, "number": 711, "head": {"sha": "d" * 40}, "title": "MO-1131 fix",
+               "body": f"Refs #1131\nBuilder check: PASS {'d' * 40}\n", "changed_files": 1,
+               "base": {"ref": "main"}}
+    second = {"draft": False, "number": 712, "head": {"sha": "e" * 40},
+              "body": f"Builder check: PASS {'e' * 40}\n", "changed_files": 1, "base": {"ref": "main"}}
+
+    def unreadable_run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([[missing, second]]))
+        if endpoint == f"repos/{repo}/issues/1131/comments?per_page=100":
+            failed = Run()
+            failed.returncode = 1
+            failed.stderr = "gh: Not Found (HTTP 404)"
+            return failed
+        if endpoint == f"repos/{repo}/commits/{'e' * 40}/statuses?per_page=100":
+            return Run("[[]]")
+        raise AssertionError(f"unexpected read: {endpoint}")
+
+    def unreadable_events(run_stub):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq.gh_gateway, "run", run_stub), \
+             patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
+             patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
+             patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
+             patch.object(coordq, "gate_args", return_value={}), \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            return list(coordq.gate_candidates(config, {})), errors.getvalue()
+
+    found, errors = unreadable_events(unreadable_run)
+    exact([(event["kind"], event["pr"]) for event in found],
+          [("skip", f"{repo}#711"), ("candidate", f"{repo}#712")])
+    reason = "Refs #1131 cannot be read (issue #1131 does not exist; a ticket key number used as an issue number?)"
+    exact(found[0]["reason"], reason)
+    exact(f"skip {repo}#711: {reason}" in errors, True)
+
+    def exhausted_run(argv, **kwargs):
+        if argv[-1] == f"repos/{repo}/issues/1131/comments?per_page=100":
+            raise coordq.gh_gateway.ApiBudgetExhausted("quota could not be read")
+        return unreadable_run(argv, **kwargs)
+
+    try:
+        unreadable_events(exhausted_run)
+    except coordq.gh_gateway.ApiBudgetExhausted:
+        pass
+    else:
+        raise AssertionError("an exhausted API budget must stop the pass")
+    # The SRW#1338 shape: ten failed rounds, a new head, no gate queued.
+    found, errors = events({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
+    exact([event["kind"] for event in found], ["skip"])
+    exact(found[0]["reason"], "at the gate round cap")
+    exact(f"skip {repo}#1338: at the gate round cap, no gate queued" in errors, True)
+    # The command that owns the run reads the ledger and passes it in, so
+    # the real gatekeep path queues no gate for the capped pull request.
+    queue, errors = gatekeep({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
+    exact(queue["items"], [])
+    exact(queue["gatekeepSkips"][f"{repo}#1338"]["reason"], "at the gate round cap")
+    exact(f"skip {repo}#1338: at the gate round cap, no gate queued" in errors, True)
+    # Three failed rounds is the cap itself, and three fix rounds count the
+    # same way the lane counts them.
+    for ledger in ({f"rounds:{repo}#1338": {"count": 3}},
+                   {f"fix:{repo}#1338:{head}": "sent",
+                    f"fix:{repo}#1338:{'b' * 40}": "sent",
+                    f"fix:{repo}#1338:{'c' * 40}": "sent"}):
+        found, _ = events(ledger)
+        exact([event["kind"] for event in found], ["skip"])
+    # Under the cap the pull request is still gated, and a ledger that
+    # cannot be read is no reason to stop the gate.
+    for ledger in ({f"rounds:{repo}#1338": {"count": 2}}, {},
+                   {"rounds:other/repo#1": {"count": 9}}):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")):
+            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
+            exact(coordq.gate_rounds_used(repo, 1338, coordq.lane_ledger()), False)
+    with tempfile.TemporaryDirectory() as scratch, \
+         patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "missing.json")):
+        exact(coordq.lane_ledger(), {})
+        exact(coordq.gate_rounds_used(repo, 1338, coordq.lane_ledger()), False)
+        Path(scratch, "corrupt.json").write_text("{not json")
+        with patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "corrupt.json")):
+            exact(coordq.lane_ledger(), {})
 
 
 def decisions_board_guard():
-    """A test run never writes the board Shyam reads.
+    """A test run never writes the board Shyam reads, and settled cards leave it.
 
     The lane raises one item on the decisions board when a pull request
     uses its review rounds. The board path comes from the environment, so
@@ -1980,6 +2268,12 @@ def decisions_board_guard():
     raises the item and checks that every write names the scratch file as
     its destination. The board Shyam reads is not compared before and
     after, because the coordinator may publish to it while this runs.
+
+    The same eval replays the settled cards this ticket names: four
+    gate-rounds cards whose pull requests are closed, and one close-failed
+    card whose ticket is closed. A gate-rounds card for an open pull
+    request stays, a prompt-merge card is still withdrawn, a dry run writes
+    nothing, and a card whose state cannot be read stays.
     """
     import lane_driver as lane
     targets = []
@@ -2000,6 +2294,83 @@ def decisions_board_guard():
         exact(targets, [str(board)] * 2)
         exact(len(items), 1)
         exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
+
+    repo = "shyamsivakumar/mac-ops"
+    settled = [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (602, 623, 625, 627)]
+    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544"]
+    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702"]
+    # The close-failed title is the one `close_failed_item` writes, and it
+    # names the ticket the close was for.
+    def close_failed_title(pr, ticket):
+        return (f"MO-{pr} is merged at head 12345678 but closing MO-{ticket} failed: "
+                "check why and close the ticket yourself.")
+    cards = [{"id": card} for card in settled + kept]
+    cards[settled.index("lane-close-failed-MO-661")]["title"] = close_failed_title(661, 660)
+    open_card = cards[len(settled) + 1]
+    open_card["title"] = close_failed_title(702, 701)
+    snapshot = {"repos": {repo: {"prs": [{"number": 700}]}}}
+    closed_prs = {602, 623, 625, 627, 544}
+    closed_tickets = {660}
+
+    def read(cmd, timeout=150):
+        kind, number = cmd[1], int(cmd[3])
+        if kind == "pr":
+            return json.dumps({"state": "CLOSED" if number in closed_prs else "OPEN",
+                               "mergedAt": None})
+        return json.dumps({"state": "CLOSED" if number in closed_tickets else "OPEN"})
+
+    taken = []
+
+    def withdraw(item_id):
+        taken.append(item_id)
+        return "wrote"
+
+    def reconcile(runner=read, dry=False):
+        taken.clear()
+        with patch.object(lane, "CFG", {repo: {"key": "MO", "projectId": "fixture"}}), \
+                patch.object(lane, "DRY", dry), \
+                patch.object(lane, "run", runner), \
+                patch.object(lane.alarms, "read_board", return_value=(b"", {"items": cards})), \
+                patch.object(lane, "withdraw_decision", withdraw):
+            return lane.reconcile_prompt_items(snapshot)
+
+    # The five cards this ticket names are withdrawn, and the prompt-merge
+    # card is still withdrawn. The open pull request and the open ticket keep
+    # their cards.
+    exact(reconcile(), len(settled))
+    exact(sorted(taken), sorted(settled))
+    # A dry run writes nothing and reads nothing.
+    exact(reconcile(dry=True), 0)
+    exact(taken, [])
+    # A state that did not come back is not a settled card.
+    def broken(cmd, timeout=150):
+        raise RuntimeError("gh failed")
+    exact(reconcile(runner=broken), 0)
+    exact(taken, [])
+    # A close-failed card whose title names no ticket stays.
+    open_card["title"] = "MO-702 is merged but the close failed."
+    exact(reconcile(), len(settled))
+    exact("lane-close-failed-MO-702" in taken, False)
+    open_card["title"] = close_failed_title(702, 701)
+    # A close-failed card whose ticket is still open stays.
+    closed_tickets.clear()
+    exact(reconcile(), len(settled) - 1)
+    exact("lane-close-failed-MO-661" in taken, False)
+    closed_tickets.add(660)
+    # A card this cleanup does not own is left alone.
+    cards.append({"id": "unrelated"})
+    exact(reconcile(), len(settled))
+    exact("unrelated" in taken, False)
+    # A merged-unreviewed card is withdrawn once the ticket it names is closed.
+    def unreviewed_title(pr, ticket):
+        return (f"MO-{pr} is merged at head 12345678 without a gate PASS the lane can tie to the merge, "
+                f"so its ticket stays open (ticket MO-{ticket}): check the merge and close the ticket yourself.")
+    cards[:] = [{"id": "lane-merged-unreviewed-MO-663", "title": unreviewed_title(663, 659)},
+                {"id": "lane-merged-unreviewed-MO-703", "title": unreviewed_title(703, 701)}]
+    closed_tickets.clear()
+    closed_tickets.add(659)
+    exact(reconcile(), 1)
+    exact(taken, ["lane-merged-unreviewed-MO-663"])
 
 
 def send_integrity():
@@ -2036,7 +2407,7 @@ def send_integrity():
             output = io.StringIO()
             with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
                  patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
-                 patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
                  patch.object(lane, "run", command), contextlib.redirect_stdout(output):
                 try:
                     result = lane.send("old", "brief", "fix", ledger, key, repo=repo, pr_number=385)
@@ -2130,7 +2501,7 @@ def root_workspace():
         pull = pr or dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main")
         with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
              patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
-             patch.object(lane, "read_json", return_value=pull), \
+             patch.object(lane, "read_json", side_effect=pr_reads(lane, pull)), \
              patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
             result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
                                worktree_only=worktree_only)
@@ -2646,10 +3017,49 @@ def stall():
     orphan = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
         {"number": 9, "title": "bot repair", "labels": []}]}}}
     from unittest.mock import mock_open
+    import datetime as dt
+    started = {f"ticket:{repo}#9:a1": "old"}
+    cooling = {"cont:old": [dt.datetime.now(dt.timezone.utc).isoformat(), "receipt"]}
     with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
          patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data=json.dumps(started))):
+        exact(lane.unstick(repo, dict(cooling)), "DRY unstick [9]")
+
+    # A receipt is the proof a builder was started. A fresh ticket with no
+    # receipt was never started, so nothing finished and unstick leaves it
+    # alone; a started ticket with no pull request is still swept.
+    fresh = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
+        {"number": 8, "title": "bot repair", "labels": []},
+        {"number": 9, "title": "bot repair", "labels": []}]}}}
+    with patch.object(lane, "SNAPSHOT", fresh), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data=json.dumps(started))):
+        exact(lane.unstick(repo, dict(cooling)), "DRY unstick [9]")
+    with patch.object(lane, "SNAPSHOT", fresh), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
          patch("builtins.open", mock_open(read_data="{}")):
-        exact(lane.unstick(repo, {}), "DRY unstick [9]")
+        exact(lane.unstick(repo, {}), "nothing ready")
+
+    # The brief the thread receives tells it to re-read the ticket's open
+    # pull requests before closing, so a pull request opened after the
+    # snapshot is not missed.
+    brief = lane.UNSTICK_BRIEF
+    exact("re-read its open pull requests" in brief, True)
+    exact("leave the issue untouched" in brief, True)
+    exact("Refs #<n>" in brief, True)
+    exact("{repo}" in brief, True)
+    exact("{list}" in brief, True)
+
+    # A matching pull request and an incomplete lookup are terminal: the
+    # thread reports the issue and moves on, so the disposition rule cannot
+    # send it back to close a ticket that has a pull request.
+    exact("Two outcomes end the work on an issue at once" in brief, True)
+    exact("The lookup is incomplete (the command fails, or the list reaches the limit)" in brief, True)
+    exact("report it and leave the issue alone" in brief, True)
+    exact("skipped: matching PR #<n>" in brief, True)
+    exact("skipped: incomplete PR lookup" in brief, True)
+    exact("Every confirmed orphan must end closed" in brief, True)
+    exact("Every issue must end closed" in brief, False)
 
 
 def alarm_mute_on_one_board():
@@ -3330,10 +3740,352 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+def router_build():
+    """A build or fix launch runs on the router, so a Morph rate limit falls back in-thread.
+
+    The router entry names the route its task type runs, and a payload that
+    still names a direct `pi` Morph model is mapped to the router entry
+    instead of refused.
+    """
+    import lane_driver as lane
+    queue = load_coordq()
+    for task_type, expected in [("standard", "task/standard"), ("rca", "task/rca"),
+                                ("risky", "task/risky"), ("design", "task/design"),
+                                ("chore", "task/standard"), ("fix", "task/standard")]:
+        resolved, refusal = queue.with_model({"taskType": task_type})
+        exact(refusal, None)
+        exact(resolved["modelSelection"], {"instanceId": "router", "model": expected})
+    # A payload that still names a direct `pi` Morph model is mapped, not refused.
+    for task_type, model, expected in [("standard", "morph/morph-dsv41flash", "task/standard"),
+                                       ("rca", "morph/morph-dsv41flash-1017", "task/rca"),
+                                       ("fix", "morph/morph-dsv41flash", "task/standard")]:
+        resolved, refusal = queue.with_model({"taskType": task_type,
+                                              "modelSelection": {"instanceId": "pi", "model": model}})
+        exact(refusal, None)
+        exact(resolved["modelSelection"], {"instanceId": "router", "model": expected})
+    # A router selection is accepted and resolved for the task type.
+    resolved, refusal = queue.with_model({"taskType": "rca",
+                                          "modelSelection": {"instanceId": "router", "model": "task/standard"}})
+    exact(refusal, None)
+    exact(resolved["modelSelection"], {"instanceId": "router", "model": "task/rca"})
+    # A route the entry does not configure is refused, not silently defaulted.
+    _, refusal = queue.with_model({"taskType": "standard",
+                                   "modelSelection": {"instanceId": "router", "model": "task/bogus"}})
+    exact(refusal is not None, True)
+    # A model of another instance is not mapped to the router.
+    _, refusal = queue.with_model({"taskType": "standard",
+                                   "modelSelection": {"instanceId": "cursor", "model": "morph/morph-kimik31"}})
+    exact(refusal is not None, True)
+    # The router entry is blocked only when every Morph identity it covers is.
+    router = lane.model_list.router_entry("build")
+    exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash"}), False)
+    exact(lane.model_list.entry_blocked(router, {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}), True)
+    exact(lane.model_list.selection_identities({"instanceId": "router", "model": "task/standard"}),
+          {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"})
+    # The installer still builds the hard route Kimi first.
+    exact(lane.model_list.pi_routes("hard"), ["morph/morph-dsv41flash", "morph/morph-dsv41flash-1017"])
+    # A review launch still refuses a builder model.
+    _, refusal = queue.with_model({"taskType": "review",
+                                   "modelSelection": {"instanceId": "pi", "model": "morph/morph-dsv41flash"}})
+    exact(refusal is not None, True)
+
+
+def router_blocked():
+    """A router entry with every Morph identity blocked falls to the next entry.
+
+    The shared provider store blocks one identity per Morph model, so the
+    router is out only when both are blocked; then the build list continues
+    on Cursor and a quick task still ends on Terra.
+    """
+    import lane_driver as lane
+    queue = load_coordq()
+    both = {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}
+    for list_name, task_type in [("build", "standard"), ("build", "rca"), ("fix", "fix")]:
+        exact(lane.model_list.first_available(list_name, None, both, task_type)["id"], "cursor")
+    # One blocked Morph model leaves the router in place.
+    exact(lane.model_list.first_available("build", None, {"pi:morph-dsv41flash"}, "standard")["id"], "router")
+    # A quick task still ends on Terra once Cursor is out too.
+    exact(lane.model_list.first_available("build", None, both | {"cursor:default"}, "quick")["id"], "terra")
+    # The CLI lookup behind `models.py first build` skips a blocked router too.
+    with patch.object(lane.model_list, "blocked_identities", return_value=both):
+        exact(lane.model_list.first_other("build")["id"], "cursor")
+    # A dead run on a usage limit skips the router entry, so Cursor gets the next attempt.
+    thread = {"providerInstanceId": "router", "model": "task/standard"}
+    exact(lane.dead_run_model(thread, True), {"instanceId": "cursor", "model": "default"})
+    exact(lane.dead_run_model(thread, False), {"instanceId": "router", "model": "task/standard"})
+    # The same payload resolves to Cursor from a temp providers-blocked.json.
+    with tempfile.TemporaryDirectory() as scratch:
+        store = Path(scratch) / lane.model_list.BLOCKED_FILE
+        store.write_text(json.dumps({"blocked": {key: {"expires_at": 4102444800} for key in both}}))
+
+        def from_store():
+            return {key for key, entry in lane.model_list.read_blocked_file(str(store))["blocked"].items()
+                    if lane.model_list.expiry(entry) > time.time()}
+
+        with patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(lane.model_list, "blocked_identities", side_effect=from_store):
+            exact(from_store(), both)
+            resolved, refusal = queue.with_model({"taskType": "standard"})
+    exact(refusal, None)
+    exact(resolved["modelSelection"], {"instanceId": "cursor", "model": "default"})
+
+
+def credit_block():
+    """A gate that fails on no credits blocks its provider for every caller.
+
+    The dispatch launch failure and gatekeep's dead-gate retry both read the
+    failure. Explicit exhaustion text blocks the provider for an hour and the
+    retry goes to the next reviewer. A rate limit or a transport error blocks
+    nothing.
+    """
+    import lane_driver as lane
+    coordq = load_coordq()
+    model_list = lane.model_list
+    review = model_list.entries("review")
+    first, second = review[0]["selection"], review[1]["selection"]
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    key = f"gate:{repo}#20:{head}"
+    outage = "You have no credits remaining"
+
+    def blocked(scratch):
+        file = Path(scratch) / model_list.BLOCKED_FILE
+        return model_list.read_blocked_file(str(file))["blocked"] if file.exists() else {}
+
+    def gatekeep(message):
+        run = {"runId": "r1", "status": "failed", "error": {"message": message}}
+        data = {"thread": {"status": "failed", "latestRunId": "r1", "providerInstanceId": first["instanceId"],
+                           "model": first["model"]}, "recentRuns": [run], "items": []}
+        args = {"title": "gate", "modelSelection": first}
+        event = {"kind": "gate", "pr": f"{repo}#20", "head": head, "key": key, "args": args, "builderModels": []}
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq, "gate_candidates", side_effect=lambda *a, **k: iter([event])), \
+             patch.object(coordq, "call", return_value=(0, json.dumps(data))), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [], "gatedHeads": {key: 1}}))
+            Path(scratch, "dispatch-receipts.json").write_text(json.dumps({key: "gate"}))
+            Path(scratch, "gatekeep-config.json").write_text(json.dumps({"repos": {}}))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(Path(scratch, "gatekeep-config.json")), dry_run=False))
+            queue = json.loads(Path(scratch, "queue.json").read_text())
+            return queue["items"], blocked(scratch), Path(scratch, "dispatch.log").read_text() if Path(scratch, "dispatch.log").exists() else ""
+
+    items, stored, log = gatekeep(outage)
+    identity = model_list.identity(first)
+    exact(list(stored), [identity])
+    exact(0 < stored[identity]["expires_at"] - time.time() <= 3600, True)
+    exact(f"blocked provider {identity} for 1h: no credits remaining" in log, True)
+    exact([item["args"]["modelSelection"] for item in items], [second])
+    for message in ("429 rate_limit_exceeded", "connect ECONNRESET", "Too many requests"):
+        items, stored, _ = gatekeep(message)
+        exact(stored, {})
+
+    def dispatch(message):
+        item = {"id": 1, "tool": "t3_thread_launch", "title": "gate", "priority": 5000, "attempts": 0,
+                "args": {"clientRequestId": key, "taskType": "review", "modelSelection": first}}
+
+        queue_held = threading.Event()
+        provider_held = threading.Event()
+        reached_queue = []
+
+        def call(tool, args, rules=None):
+            if tool == "t3_thread_list":
+                return 0, json.dumps({"total": 0, "threads": []})
+            queue_held.set()
+            return 1, message if args["modelSelection"] == first else "connect ECONNRESET"
+
+        def gatekeeper():
+            with model_list.blocked_lock():
+                provider_held.set()
+                queue_held.wait(10)
+                with coordq.Lock(True):
+                    reached_queue.append(True)
+
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "call", side_effect=call), \
+             patch.object(coordq, "read_rules", return_value=""), \
+             patch.object(coordq, "safe_refill"):
+            Path(scratch, "config.json").write_text(json.dumps({"cap": 3}))
+            Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [item], "reserved": {},
+                                                               "reservedThreads": {}}))
+            gate = threading.Thread(target=gatekeeper, daemon=True)
+            gate.start()
+            provider_held.wait(10)
+            run = threading.Thread(target=coordq.cmd_dispatch, args=(argparse.Namespace(dry_run=False),), daemon=True)
+            run.start()
+            run.join(10)
+            gate.join(10)
+            exact((run.is_alive(), gate.is_alive(), reached_queue), (False, False, [True]))
+            return blocked(scratch)
+
+    exact(list(dispatch(outage)), [identity])
+    exact(dispatch("429 rate_limit_exceeded"), {})
+
+
+def key_mint():
+    """Back-to-back opens against a list that never catches up.
+
+    GitHub's issue list can lag a create by a few seconds, so the list read
+    after a create can be missing the issue just made. The key is minted
+    from the list and from the keys the repo gave out, so the replay below
+    keeps the list stale on purpose: three opens must still give three
+    distinct keys, and the record must close the other ways to reuse one.
+    """
+    ticket = load_ticket()
+    from types import SimpleNamespace
+    repo = "fixture/repo"
+    config = {"repos": {repo: {"key": "MO"}},
+              "labels": {"stage": ["backlog"], "priority": [1], "type": ["standard"]}}
+    listed = [{"number": 1, "title": "MO-1 · first"}]
+    created = []
+    failure = [None]
+    record = Path("last-key-fixture_repo-MO.json")
+
+    def gh(args, stdin=None, fresh=False, optional=False):
+        if args[:2] == ["issue", "create"]:
+            if failure[0]:
+                raise ticket.GhError(failure[0], "fixture")
+            created.append(args[args.index("--title") + 1])
+            return f"https://github.com/{repo}/issues/{len(created) + 1}"
+        if args[:1] == ["api"]:
+            # The list never catches up: every read is the same page.
+            return json.dumps(listed)
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    def open_ticket(title):
+        args = SimpleNamespace(repo=repo, title=title, body="", body_file=None,
+                               label="", require_key=False, dry_run=False)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            ticket.cmd_open(args)
+        return json.loads(output.getvalue())
+
+    def refused(title):
+        with contextlib.redirect_stderr(io.StringIO()) as error:
+            try:
+                open_ticket(title)
+            except SystemExit as exit:
+                return exit.code, error.getvalue().strip()
+        raise AssertionError(f"the open of {title!r} was not refused")
+
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(ticket, "CACHE_DIR", directory), \
+         patch.object(ticket, "load_config", return_value=config), \
+         patch.object(ticket, "gh", side_effect=gh), \
+         patch.object(ticket, "builder_ids", return_value=[]), \
+         patch.object(ticket, "reviewer_ids", return_value=[]):
+        exact([open_ticket(f"ticket {n}")["key"] for n in (1, 2, 3)],
+              ["MO-2", "MO-3", "MO-4"])
+        exact(created, ["MO-2 · ticket 1", "MO-3 · ticket 2", "MO-4 · ticket 3"])
+        # The record sits beside the open lock, so the next open reads it.
+        exact(json.loads((Path(directory) / record).read_text()),
+              {"number": 4, "unconfirmed": [2, 3, 4], "pending": None})
+        # A key an earlier open gave out is refused by hand too, because the
+        # list has not shown it yet.
+        exact(refused("MO-3 · by hand"),
+              (2, "refused: MO-3 was given out by an earlier open and the issue list has not shown it yet"))
+        # A listed key past the record still wins: the mint goes one past the
+        # larger of the two sources, not one past the record alone.
+        listed.insert(0, {"number": 8, "title": "MO-8 · listed"})
+        exact(open_ticket("ticket 4")["key"], "MO-9")
+        # A failure that establishes rejection frees the key again, so the
+        # next open takes the same number instead of leaving a gap.
+        failure[0] = "rate_limit"
+        exact(refused("ticket 5"), (1, "gh failed (rate_limit): fixture"))
+        failure[0] = None
+        exact(open_ticket("ticket 5")["key"], "MO-10")
+        # A generic error does not establish rejection: `gh` can fail locally
+        # after GitHub has made the issue, so the key stays pending and the
+        # next open refuses instead of minting it again.
+        failure[0] = "error"
+        exact(refused("ticket 6"), (1, "gh failed (error): fixture"))
+        failure[0] = None
+        exact(json.loads((Path(directory) / record).read_text())["pending"], 11)
+        exact(refused("ticket 6")[0], 2)
+        # The recovery the refusal names: a human checks the repo, then clears
+        # `pending`.
+        state = json.loads((Path(directory) / record).read_text())
+        (Path(directory) / record).write_text(json.dumps({**state, "pending": None}))
+        # A new prefix starts at one instead of carrying the old sequence
+        # over, and switching back finds the old sequence again.
+        config["repos"][repo]["key"] = "NEW"
+        exact(open_ticket("ticket 7")["key"], "NEW-1")
+        config["repos"][repo]["key"] = "MO"
+        exact(open_ticket("ticket 8")["key"], "MO-12")
+        # A create whose answer was lost leaves the key pending, and the next
+        # open refuses instead of handing the key out again.
+        (Path(directory) / record).write_text(json.dumps(
+            {"number": 12, "unconfirmed": [12], "pending": 12}))
+        code, message = refused("ticket 9")
+        exact(code, 2)
+        exact(message.startswith("refused: the last open of fixture/repo did not finish, so MO-12 may exist"), True)
+        # A record that cannot be read is a refusal, not a reset to zero.
+        (Path(directory) / record).write_text("{")
+        exact(refused("ticket 10")[0], 2)
+        (Path(directory) / record).write_text(json.dumps({"number": "four"}))
+        exact(refused("ticket 11")[0], 2)
+        # The record is what makes it work: without it the stale list mints
+        # the same key again, so the eval would pass on a broken mint.
+        (Path(directory) / record).unlink()
+        with patch.object(ticket, "read_last_key",
+                          return_value={"number": 0, "unconfirmed": [], "pending": None}):
+            exact([open_ticket(f"again {n}")["key"] for n in (1, 2, 3)],
+                  ["MO-9", "MO-9", "MO-9"])
+
+def close_evidence():
+    check = load_ticket().close_check_module()
+    head = "a" * 40
+    ticket_body = "In: coordinator/bin/close_check.py."
+
+    def proof_item(repo, statuses, pr_body="Refs #7"):
+        pull = {"state": "MERGED", "headRefOid": head, "body": pr_body, "mergeCommit": {"oid": "c" * 40},
+                "title": "MO-1 · x", "changedFiles": 1}
+
+        def gh_json(args, timeout=60):
+            if args[0] == "pr":
+                return pull
+            if args[0] == "issue":
+                return {"body": ticket_body, "title": "MO-1 · x"}
+            if args[1].startswith(f"repos/{repo}/pulls/"):
+                return [{"filename": "coordinator/bin/close_check.py"}]
+            if args[1].startswith(f"repos/{repo}/commits/{head}/statuses"):
+                return statuses
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with patch.object(check, "gh_json", gh_json), \
+             patch.object(check, "report_state", return_value=("absent", "")):
+            items = check.run_check(repo, 7)["items"]
+        return {item["item"]: item for item in items}
+
+    srw = check.SRW_REPO
+    success = {"context": check.SRW_CHECK_CONTEXT, "state": "success"}
+    other = {"context": "other/check", "state": "success"}
+    items = proof_item(srw, [other, success])
+    exact(items["proof file"]["status"], "pass")
+    exact(items["proof file"]["detail"], f"{check.SRW_CHECK_CONTEXT} is success on {head}")
+    exact((items["checks"]["status"], items["checks"]["required"]), ("skipped", False))
+    for name, statuses in (("failure", [{"context": check.SRW_CHECK_CONTEXT, "state": "failure"}]),
+                           ("pending", [{"context": check.SRW_CHECK_CONTEXT, "state": "pending"}]),
+                           ("missing", [other]),
+                           ("superseded", [{"context": check.SRW_CHECK_CONTEXT, "state": "failure"}, success])):
+        exact((name, proof_item(srw, statuses)["proof file"]["status"]), (name, "fail"))
+    exact(proof_item(srw, [success, {"context": check.SRW_CHECK_CONTEXT, "state": "failure"}])["proof file"]["status"],
+          "pass")
+    elsewhere = "shyamsivakumar/fixture"
+    exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {head}")["proof file"]["status"], "pass")
+    exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {'b' * 40}")["proof file"]["status"], "fail")
+    exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "close-evidence": close_evidence}
 
 
 def main():
+    os.environ["COORD_JOURNAL_DIR"] = tempfile.mkdtemp(prefix="selftest-journal-")
     failed = False
     try:
         exact(["unexpected"], ["expected"])

@@ -15,6 +15,7 @@ from unittest.mock import patch
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -28,7 +29,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SUFFIXLESS_PYTHON = (
     "coordinator/overnight/overnight",
     "coordinator/bin/coord-watch",
+    "coordinator/bin/scorecard",
     "coordinator/pi/bin/coord-tick",
+)
+LOADED_SCRIPTS = (
+    "coordinator/bin/coordq",
+    "coordinator/bin/ticket",
 )
 
 DEFAULT_PROOF = "evidence/check-proof.md"
@@ -212,6 +218,138 @@ def git(*args):
     return subprocess.check_output(["git", "-C", str(ROOT), *args])
 
 
+def load_isolation():
+    """The fake `gh` and temp logs every suite this check launches runs under."""
+    loader = SourceFileLoader("gh_isolation", str(ROOT / "coordinator/bin/gh_isolation.py"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def live_log_counts(isolation):
+    """The live log rows a run would add: its own caller's rows, the skip
+    log's line count, and the usage log's total line count.
+
+    The live coordinator writes to both files while the check runs, so the
+    gh usage log is counted by the caller name the run's rows carry. The
+    skip log has no caller field, so its line count is compared as it is.
+    The total is reported and not compared: a row another caller wrote
+    while the run was going is the live coordinator's, and a row the run
+    leaked under another caller name shows up in the total.
+    """
+    usage = Path.home() / "Library/Logs/coordinator/gh-usage.jsonl"
+    skips = Path.home() / "Library/Logs/coordinator/skips.log"
+    rows = 0
+    total = 0
+    if usage.is_file():
+        for line in usage.read_text().splitlines():
+            if not line.strip():
+                continue
+            total += 1
+            try:
+                if json.loads(line).get("caller") == isolation.CALLER:
+                    rows += 1
+            except ValueError:
+                continue
+    lines = len(skips.read_text().splitlines()) if skips.is_file() else 0
+    return rows, lines, total
+
+
+# The suite this check runs discovers well over this many tests. A run that
+# imports a module badly, or fails to discover the suite at all, reports far
+# fewer, and would otherwise leave the live logs untouched and pass.
+MIN_TESTS = 600
+
+
+def check_isolation(run, isolation, env):
+    """A full run makes no real `gh` call and writes no live log row.
+
+    The two suites are the ones that reached GitHub and the live skip log
+    before the environment was set for them. Their own result is recorded
+    in the detail and does not decide this check: the check is about the
+    live files, and a suite that is already red on this machine is not a
+    finding about the isolation. What the run must do is discover the suite
+    and finish it, so a run that never got as far as the tests cannot pass
+    by leaving the live files alone.
+
+    Each suite runs under `env`, which names a temp root and nothing else,
+    so the entry point has to install the isolation itself. The check then
+    looks for the fake `gh` the entry point wrote into that root: an entry
+    point that lost its installer leaves the root empty, reaches the real
+    `gh` and the live logs, and fails here. Supplying the fake `gh` and the
+    temp log paths from this side would hide exactly that regression.
+
+    The fake `gh` writes every call it was not asked to answer to a file in
+    the same root, so a suite that captures the fake's stderr cannot hide
+    the refusal. A refusal is a failure of this check: it means the run
+    reached for a call the fake does not answer, and the isolation is not
+    complete.
+    """
+    before = live_log_counts(isolation)
+    results = {}
+    roots = {}
+    refused = []
+    for name, command, timeout in (
+        ("unittest", ["python3", "-m", "unittest"], 300),
+        ("selftest", ["python3", "coordinator/overnight/overnight", "selftest"], 120),
+    ):
+        # The root carries the run's own prefix, because the isolation tests
+        # read the log paths and expect the run's name in them.
+        root = Path(tempfile.mkdtemp(prefix=f"{isolation.CALLER}-check-{name}-",
+                                     dir=os.environ.get("TMPDIR")))
+        roots[name] = root
+        child_env = {**env, isolation.ROOT_VAR: str(root)}
+        results[name] = run(command, timeout=timeout, check=False, capture=True,
+                            child_env=child_env)
+        if not (root / "bin" / "gh").is_file():
+            raise AssertionError(
+                f"the {name} entry point did not install the isolation: no fake "
+                f"`gh` in {root}, so the run reached the real one")
+        refusals = root / "refusals.log"
+        if refusals.is_file():
+            refused.extend(refusals.read_text().splitlines())
+    # The tests for this feature must pass under the environment the check
+    # gives them. A run that is red here is a finding about the isolation,
+    # not the machine's own state, so it fails the check.
+    isolation_tests = run(
+        ["python3", "-m", "unittest", "tests.test_tick_external_call_bounds.IsolationTests"],
+        timeout=120, check=False, capture=True,
+        child_env={**env, isolation.ROOT_VAR: str(roots["unittest"])})
+    after = live_log_counts(isolation)
+    if after[:2] != before[:2]:
+        raise AssertionError(
+            f"the run wrote to the live logs: gh-usage rows for {isolation.CALLER} "
+            f"{before[0]} -> {after[0]}, skips.log lines {before[1]} -> {after[1]}")
+    if refused:
+        raise AssertionError(
+            f"the run needed a call the fake `gh` does not answer: {refused[0]}")
+    if isolation_tests.returncode != 0:
+        tail = (isolation_tests.stdout + isolation_tests.stderr).strip().splitlines()[-3:]
+        raise AssertionError(
+            f"the isolation tests failed under the check's own environment: "
+            f"{' | '.join(tail)}")
+    suite = results["unittest"]
+    selftest = results["selftest"]
+    ran = re.search(r"^Ran (\d+) tests? in ", suite.stdout + suite.stderr, re.MULTILINE)
+    if ran is None or int(ran.group(1)) < MIN_TESTS:
+        found = ran.group(1) if ran else "no test count"
+        raise AssertionError(
+            f"the suite did not run: {found} tests, expected at least {MIN_TESTS} "
+            f"(unittest exited {suite.returncode})")
+    if selftest.returncode != 0:
+        raise AssertionError(
+            f"the overnight selftest did not run: exited {selftest.returncode}")
+    for root in roots.values():
+        shutil.rmtree(root, ignore_errors=True)
+    return (f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
+            f"{before[1]}, unchanged after the run; gh-usage lines in total "
+            f"{before[2]} -> {after[2]}; both entry points installed the fake "
+            f"`gh` themselves; no call the fake `gh` refused; the isolation "
+            f"tests passed; {ran.group(1)} tests ran (unittest exited "
+            f"{suite.returncode}, selftest exited {selftest.returncode})")
+
+
 def imports(path):
     tree = ast.parse(path.read_bytes(), filename=str(path))
     names = set()
@@ -316,29 +454,117 @@ def check_lane_selection():
             issue("a/c", 9, 2), issue("a/c", 8), issue("a/c", 7),
             issue("a/d", 1), issue("a/e", 10, body="## Blocked by\n#3"),
             issue("a/e", 11, body="## Blocked by\n#2")]
+    # A stale stage:started label is a claim, not evidence: a/b#2 carries it
+    # with no live thread and no open pull request, so a/b#1 is a candidate.
     selected = module.lane_candidates(rows, {"a/d"})
     assert [(r["repository"]["nameWithOwner"], r["number"]) for r in selected] == [
-        ("a/c", 7), ("a/e", 11)]
+        ("a/b", 1), ("a/c", 7), ("a/e", 11)]
+    # A live lane thread still makes its repo busy.
+    assert module.lane_candidates([issue("a/b", 1)], {"a/b"}) == []
+    # An open, non-draft pull request that refs an open ticket makes its repo
+    # busy; one that refs another number does not.
+    assert module.lane_candidates([issue("a/b", 1)], set(), {"a/b": {1}}) == []
+    assert module.lane_candidates([issue("a/b", 1)], set(), {"a/b": {2}})
     assert module.lane_candidates([issue("a/b", 1)], set())
+    # The stale ticket is the one the refill logs, and only that one.
+    assert [row["number"] for row in module.stale_started(rows, {"a/d"}, {})] == [2]
+    assert module.stale_started(rows, {"a/b"}, {}) == []
+    assert module.stale_started(rows, set(), {"a/b": {2}}) == []
+    # A pull request body refs a ticket with Refs, Closes or Fixes.
+    assert module.PR_REF.findall("Refs #7, closes #8 and Fixes #9") == ["7", "8", "9"]
+    assert module.PR_REF.findall("refs #12") == ["12"]
+    assert module.PR_REF.findall("no ticket here") == []
     config = {"repos": {"a/b": {"key": "AB"}, "a/c": {"key": "AC"}}}
     snapshots = [
         (0, '{"threads":[{"threadId":"one","title":"AB-1 build"}],"nextCursor":1}'),
         (0, '{"threads":[{"threadId":"two","clientRequestId":"gate:a/c#2:head"}]}')]
     with tempfile.TemporaryDirectory() as scratch:
-        with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=snapshots):
+        asked = []
+
+        def threads(tool, args):
+            asked.append(args)
+            return snapshots[len(asked) - 1]
+
+        with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=threads):
             assert module.live_lane_repositories(config) == {"a/b", "a/c"}
+        # A thread that waits for an answer is still a builder in flight, so
+        # the lane read asks for it: the ticket CLI counts it as live.
+        assert all("waiting" in args["statuses"] for args in asked), asked
         config_path = Path(scratch) / "tickets.json"
         config_path.write_text(__import__("json").dumps(config))
+        # One repo, so a ticket number names one ticket and the log line is
+        # counted once.
+        one_repo = Path(scratch) / "one-repo.json"
+        one_repo.write_text(__import__("json").dumps({"repos": {"a/b": {"key": "AB"}}}))
         from types import SimpleNamespace
         snapshot = [[{"number": 1, "title": "busy", "labels": ["stage:started"],
                       "updated_at": "now"},
                      {"number": 2, "title": "todo", "labels": ["stage:todo"],
                       "updated_at": "now"}]]
-        with patch.object(module, "TICKETS_CONFIG", str(config_path)), \
+
+        def gateway(pulls, calls=None):
+            """The gateway answer for one pass: the issue snapshot for the
+            issue read, and `pulls` for the pull request read. The pull read
+            is recorded, so the check can see how it was asked for."""
+            def run(argv, **kwargs):
+                if "/pulls?" in argv[-1]:
+                    if calls is not None:
+                        calls.append((argv, kwargs))
+                    body = pulls if isinstance(pulls, str) else __import__("json").dumps(pulls)
+                    return SimpleNamespace(returncode=0, stdout=body)
+                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(snapshot))
+            return run
+
+        def board(pulls, calls=None):
+            logged = []
+            with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
+                    patch.object(module, "live_lane_repositories", return_value=set()), \
+                    patch.object(module, "log", side_effect=logged.append), \
+                    patch.object(module.gh_gateway, "run", side_effect=gateway(pulls, calls)):
+                return [row["number"] for row in module.board_candidates()], logged
+
+        # No open pull request: the stale started ticket is logged and does
+        # not block its repo, and the todo ticket is the candidate.
+        assert board([]) == ([2], ["refill: #1 is stage:started with no live thread or open PR"])
+        # An open, non-draft pull request that refs the started ticket is
+        # evidence, so nothing is logged and the repo stays busy.
+        assert board([{"number": 5, "draft": False, "body": "Refs #1"}]) == ([], [])
+        # A draft pull request is not a builder in flight.
+        assert board([{"number": 5, "draft": True, "body": "Refs #1"}]) == (
+            [2], ["refill: #1 is stage:started with no live thread or open PR"])
+        # A pull request that refs a number that is not an open ticket of the
+        # repo is not evidence for this repo.
+        assert board([{"number": 5, "draft": False, "body": "Refs #9"}]) == (
+            [2], ["refill: #1 is stage:started with no live thread or open PR"])
+        # The pull read is one fresh page, so a cached or paginated read can
+        # never hide a pull request that is open now.
+        calls = []
+        board([], calls)
+        assert len(calls) == 1
+        argv, kwargs = calls[0]
+        assert argv[-1].endswith("/pulls?state=open&per_page=100"), argv
+        assert "--paginate" not in argv and "--slurp" not in argv, argv
+        assert kwargs.get("fresh") is True, kwargs
+        # A pull request list that cannot be read stops the pass: a failed
+        # read, a body that is not a list, a page that is not a list of pull
+        # requests, and a list longer than the one page the pass may read.
+        for pulls in ("not json", {}, [None], [{"number": n} for n in range(100)]):
+            try:
+                board(pulls)
+            except (RuntimeError, ValueError):
+                pass
+            else:
+                raise AssertionError(f"unreadable pull request snapshot accepted: {pulls!r:.40}")
+        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
                 patch.object(module, "live_lane_repositories", return_value=set()), \
-                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
-                    returncode=0, stdout=__import__("json").dumps(snapshot))):
-            assert module.board_candidates() == []
+                patch.object(module.gh_gateway, "run", return_value=SimpleNamespace(
+                    returncode=1, stdout="", stderr="boom")):
+            try:
+                module.board_candidates()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("failed pull request read accepted")
         with patch.object(module, "DIR", scratch), patch.object(module, "call", return_value=(1, "failed")):
             try:
                 module.live_lane_repositories(config)
@@ -374,6 +600,10 @@ def main():
     modules = {module_name(path): path for path in python_files}
     dependencies = {name: imports(path) for name, path in modules.items()}
     affected = {module_name(ROOT / name) for name in changes if name.endswith(".py")}
+    loaded = [Path(name).name for name in LOADED_SCRIPTS if name in changes]
+    affected |= {name for name, path in modules.items()
+                 if path.parent == ROOT / "tests"
+                 and any(f'"{script}"' in path.read_text() for script in loaded)}
     while True:
         new = affected | {name for name, deps in dependencies.items() if any(dep == changed or dep.startswith(changed + ".") for dep in deps for changed in affected)}
         if new == affected:
@@ -391,20 +621,33 @@ def main():
     print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
     if args.plan:
         return
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    isolation = load_isolation()
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+           "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR")),
+           **isolation.environment()}
+    # The suites that prove the entry points install the isolation run under
+    # this environment instead: it carries no fake `gh` on PATH and no temp
+    # log path, so an entry point that lost its installer is not covered for
+    # by this side.
+    entry_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"]}
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
-    dirty = [line for line in git("status", "--porcelain").decode().splitlines()
+    dirty = [line for line in git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
              if line[3:].strip() != args.proof]
 
-    def run(command, cwd=ROOT, timeout=300):
+    def run(command, cwd=ROOT, timeout=300, check=True, capture=False, child_env=None):
         actual = [sys.executable if part == "python3" else part for part in command]
-        return subprocess.run(actual, cwd=cwd, env=env, check=True, timeout=timeout)
+        return subprocess.run(actual, cwd=cwd, env=child_env or env, check=check, timeout=timeout,
+                              capture_output=capture, text=capture)
 
     lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
     proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
     selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
     proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
+    proof.check("test isolation: no live gh call or log row",
+                "python3 -m unittest; " + shlex.join(selftest),
+                lambda: check_isolation(run, isolation, entry_env))
     for name in changed_python:
         command = ["python3", "-c",
                    "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]

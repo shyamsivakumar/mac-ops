@@ -63,6 +63,7 @@ REGISTRY_NAME = "heavy-jobs"
 CAPACITY_NAME = "capacity.json"
 CONFIG_NAME = "board_governor.json"
 HOST_HEADROOM_KEY = "min_headroom_bytes_by_host"
+FOREGROUND_BUILD_HOSTS_KEY = "foreground_build_hosts"
 MAX_HOST_HEADROOM_BYTES = 64 * GIB
 LEGACY_MARKER_NAME = "legacy-registry.json"
 PROTOCOL_RECORD_ID = "0" * 32
@@ -353,6 +354,47 @@ def _usable_headroom(value: Any) -> bool:
     return 0 < value <= MAX_HOST_HEADROOM_BYTES
 
 
+def _match_host_value(
+    hosts: Dict[str, Any], usable: Callable[[Any], bool]
+) -> Optional[Any]:
+    """Return the usable value configured for this host, or None.
+
+    Host names are matched without regard to case. Two configured names that
+    differ only by case are ambiguous and neither is used. Short-name fallback
+    is allowed only when either the configured name or the observed hostname
+    is unqualified.
+    """
+    try:
+        hostname = socket.gethostname().strip().lower()
+    except OSError:
+        return None
+    short_hostname = hostname.split(".")[0]
+    host_is_short = "." not in hostname
+    exact: Dict[str, Any] = {}
+    short: Dict[str, Any] = {}
+
+    def record(mapping: Dict[str, Any], key: str, value: Any) -> None:
+        if key in mapping:
+            mapping[key] = None
+        else:
+            mapping[key] = value
+
+    for name, value in hosts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        key = name.strip().lower()
+        record(exact, key, value)
+        if "." not in key or host_is_short:
+            record(short, key.split(".")[0], value)
+    candidates = (hostname, short_hostname)
+    for mapping in (exact, short):
+        for candidate in candidates:
+            value = mapping.get(candidate)
+            if usable(value):
+                return value
+    return None
+
+
 def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     """Return the headroom floor this host needs, or the default 6 GiB floor.
 
@@ -373,35 +415,26 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     hosts = value.get(HOST_HEADROOM_KEY)
     if not isinstance(hosts, dict):
         return MIN_HEADROOM_BYTES
-    try:
-        hostname = socket.gethostname().strip().lower()
-    except OSError:
-        return MIN_HEADROOM_BYTES
-    short_hostname = hostname.split(".")[0]
-    host_is_short = "." not in hostname
-    exact: Dict[str, Any] = {}
-    short: Dict[str, Any] = {}
+    headroom = _match_host_value(hosts, _usable_headroom)
+    return MIN_HEADROOM_BYTES if headroom is None else headroom
 
-    def record(mapping: Dict[str, Any], key: str, headroom: Any) -> None:
-        if key in mapping:
-            mapping[key] = None
-        else:
-            mapping[key] = headroom
 
-    for name, headroom in hosts.items():
-        if not isinstance(name, str) or not name.strip():
-            continue
-        key = name.strip().lower()
-        record(exact, key, headroom)
-        if "." not in key or host_is_short:
-            record(short, key.split(".")[0], headroom)
-    candidates = (hostname, short_hostname)
-    for mapping in (exact, short):
-        for candidate in candidates:
-            headroom = mapping.get(candidate)
-            if _usable_headroom(headroom):
-                return headroom
-    return MIN_HEADROOM_BYTES
+def is_foreground_build_host(config_path: Optional[Path] = None) -> bool:
+    """Return True when this host is listed in ``foreground_build_hosts``.
+
+    Names are matched by the same rules as ``min_headroom_bytes_by_host``. A
+    missing, unreadable, malformed, or unlisted host runs builds in background
+    mode.
+    """
+    path = host_config_path() if config_path is None else Path(config_path)
+    value = read_installed_config(path)
+    if value is None:
+        return False
+    names = value.get(FOREGROUND_BUILD_HOSTS_KEY)
+    if not isinstance(names, list):
+        return False
+    listed = {name: True for name in names if isinstance(name, str)}
+    return _match_host_value(listed, lambda flag: flag is True) is True
 
 
 def admission_block_reason(
@@ -3272,6 +3305,7 @@ def watchdog_loop(
 ) -> int:
     """Watch a job's registry record and heartbeat, terminating its workload when they fail."""
     cached = None
+    last_record = None
     while True:
         try:
             record = _record(registry, job_id)
@@ -3280,6 +3314,17 @@ def watchdog_loop(
             if cached is None:
                 return 1
             if not _job_directory_absent(registry, job_id):
+                try:
+                    if _limit_action(last_record, clock_ns(), boot_reader) is not None:
+                        if terminate(
+                            cached["workload"],
+                            reason="watchdog-registry-failure-limit",
+                            table_reader=table_reader,
+                            boot_reader=boot_reader,
+                        ):
+                            return 1
+                except Exception:
+                    pass
                 sleep(WATCHDOG_INTERVAL)
                 continue
             try:
@@ -3294,6 +3339,7 @@ def watchdog_loop(
                 pass
             sleep(WATCHDOG_INTERVAL)
             continue
+        last_record = record
         if cached is None:
             cached = {
                 "task_key": record.get("task_key"),
@@ -3577,7 +3623,11 @@ def run_supervisor(
         task_id = task_id or inferred_id
     command, project_key = _project_build_args(argv, os.getcwd())
     command_basename = os.path.basename(command[0])
-    if command_basename == "xcodebuild" and role != "review":
+    if (
+        command_basename == "xcodebuild"
+        and role != "review"
+        and not is_foreground_build_host()
+    ):
         taskpolicy = "/usr/sbin/taskpolicy"
         if not os.path.isfile(taskpolicy) or not os.access(taskpolicy, os.X_OK):
             raise HeavyError("taskpolicy is required for ordinary xcodebuild jobs")

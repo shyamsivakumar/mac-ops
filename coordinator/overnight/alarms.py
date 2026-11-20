@@ -47,6 +47,12 @@ import re
 import sys
 from pathlib import Path
 
+for _dir in (Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent / "bin"):
+    if (_dir / "journal.py").is_file() and str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
+
+import journal
+
 # How long a key stays quiet after it was answered or routed.
 MUTE_SECONDS = 4 * 60 * 60
 # The key of the mute state inside the state file.
@@ -349,6 +355,25 @@ def change_board(board, alarm_id, action, item):
     return board, changed
 
 
+def alarm_shape(entry):
+    if entry is None:
+        return None
+    return entry.get("group"), cause_of(entry.get("cause") or entry.get("title"))
+
+
+def alarm_event(board, alarm_id, action, item):
+    held = next((e for e in board["items"]
+                 if isinstance(e, dict) and e.get("id") == alarm_id), None)
+    if action == "raise" and item is not None:
+        return ("alarm_raised", item.get("group")) if alarm_shape(held) != alarm_shape(item) else None
+    return ("alarm_withdrawn", held.get("group")) if held is not None else None
+
+
+def journal_alarm(path, alarm_id, event):
+    if event is not None:
+        journal.emit(event[0], "alarms", alarm=alarm_id, board=str(path), group=event[1])
+
+
 def write_alarm(path, alarm_id, action, item, create=False):
     """Read, change and replace the board under the caller's lock."""
     _, board = read_board(path)
@@ -358,8 +383,12 @@ def write_alarm(path, alarm_id, action, item, create=False):
         board = {"items": []}
     if board is None:
         return False
+    event = alarm_event(board, alarm_id, action, item)
     board, _ = change_board(board, alarm_id, action, item)
-    return write_board(path, board)
+    if not write_board(path, board):
+        return False
+    journal_alarm(path, alarm_id, event)
+    return True
 
 
 def swap_alarm(path, alarm_id, action, item):
@@ -372,6 +401,7 @@ def swap_alarm(path, alarm_id, action, item):
     before, board = read_board(path)
     if board is None:
         return "failed"
+    event = alarm_event(board, alarm_id, action, item)
     board, _ = change_board(board, alarm_id, action, item)
     try:
         if path.read_bytes() != before:
@@ -389,6 +419,7 @@ def swap_alarm(path, alarm_id, action, item):
         ]
         if action == "raise" and not present:
             return "retry"
+        journal_alarm(path, alarm_id, event)
         return "wrote"
     except OSError:
         return "failed"

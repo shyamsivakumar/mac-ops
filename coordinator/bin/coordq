@@ -13,6 +13,7 @@ from gate_bar import GATE_BAR
 import prompt_paths
 from tick_health import tick_alarm
 import gh_gateway
+import journal
 
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
@@ -25,7 +26,14 @@ T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 # on without end.
 T3MCP_TIMEOUT = 60
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
+# A lane thread that waits for an answer is still a builder in flight: the
+# ticket CLI counts `waiting` as live, so the lane rule has to as well, or a
+# second builder can start on the same repo while the first one waits. The
+# cap keeps its own list, so this does not change how many slots are used.
+LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
+PROVIDER_BLOCK_SECONDS = 3600
+JOURNAL_TITLE_LIMIT = 120
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
 # carries this prefix and reconcile knows the thread may not be listed live yet.
@@ -79,6 +87,17 @@ STUCK_FILE = "gatekeep-stuck.txt"
 # A gate that dies without a verdict moves once to the next reviewer, and a
 # head whose moved gate dies too is given up until its head changes.
 GATE_RETRY_LIMIT = 1
+# The failed gate reviews one pull request gets before it goes to Shyam.
+# The lane owns this rule (lane_driver.GATE_ROUND_CAP) and counts the rounds
+# in its ledger; gatekeep reads that same ledger, so a pull request at the cap
+# is not gated again. The number is repeated here because the lane driver is
+# not on gatekeep's path in the installed layout.
+GATE_ROUND_CAP = 3
+# The lane's ledger, where the failed gate reviews of a pull request are
+# counted. The path comes from the environment, so a test reads a scratch
+# ledger and never the live one.
+LANE_LEDGER = os.environ.get(
+    "COORDQ_LANE_LEDGER", os.path.expanduser("~/Code/coordinator/loop/lanes-ledger.json"))
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
 # every action the queue has taken, with the item that took it and what
@@ -98,6 +117,34 @@ def path(name):
 def die(message):
     print(message, file=sys.stderr)
     sys.exit(1)
+
+
+def journal_title(title):
+    return str(title or "")[:JOURNAL_TITLE_LIMIT]
+
+
+def refuse_start(message, args, tool, label):
+    journal.emit("refused", "coordq", thread=args.get("threadId"), tool=tool, title=label, reason=message,
+                 **journal.parse_request_id(args.get("clientRequestId")))
+    die(message)
+
+
+def journal_item(event, item, **fields):
+    args = item.get("args") or {}
+    row = {"item": item["id"], "thread": args.get("threadId"), "tool": item.get("tool"),
+           "title": journal_title(item.get("title")),
+           **journal.parse_request_id(args.get("clientRequestId")), **fields}
+    journal.emit(event, "coordq", **row)
+
+
+def note_slots(queue, live_count):
+    triple = [live_count, len(queue["reserved"]), cap()]
+    if queue.get("journalSlots") == triple:
+        return
+    queue["journalSlots"] = triple
+    save(queue)
+    journal.emit("slots", "coordq", live=triple[0], reserved=triple[1], cap=triple[2],
+                 over_cap=triple[0] + triple[1] > triple[2])
 
 
 def log(message):
@@ -192,17 +239,21 @@ def with_model(args):
         entry = model_list.first_available(task_list(task_type), task_type=task_type)
         if entry is None:
             return None, f"refused: every model for taskType {task_type!r} is blocked"
-        resolved["modelSelection"] = entry["selection"]
+        resolved["modelSelection"] = model_list.selection_for(entry, task_type)
     else:
         list_name = task_list(task_type)
         allowed = model_list.find(resolved["modelSelection"], (list_name,))
         if allowed is None:
+            # A caller that still names a direct `pi` Morph model goes through
+            # the router entry, so its launch keeps the in-thread fallback.
+            allowed = model_list.router_covers(list_name, resolved["modelSelection"])
+        if allowed is None:
             return None, (f"refused: taskType {task_type!r} runs on a model from the {list_name} list, "
                           f"but the payload names {resolved['modelSelection']!r}")
-        if model_list.is_blocked(allowed["selection"]):
+        if model_list.entry_blocked(allowed):
             return None, (f"refused: {model_list.identity(allowed['selection'])} is blocked, "
                           f"so taskType {task_type!r} cannot run on it")
-        resolved["modelSelection"] = allowed["selection"]
+        resolved["modelSelection"] = model_list.selection_for(allowed, task_type)
     return resolved, None
 
 
@@ -221,9 +272,37 @@ def queued_launch_args(tool, args):
         return {**{k: v for k, v in args.items() if k != "modelSelection"},
                 "taskType": LEGACY_ROUTE_TASK_TYPES[selection["model"]]}
     for list_name, task_type in (("review", "review"), ("build", "worker"), ("fix", "fix")):
-        if model_list.find(args["modelSelection"], (list_name,)):
+        if (model_list.find(args["modelSelection"], (list_name,))
+                or model_list.router_covers(list_name, args["modelSelection"])):
             return {**args, "taskType": task_type}
     return args
+
+
+# The ref a worktree launch branches from when the caller names none. The lane
+# rule is that a builder branches from the fetched origin/main, never from a
+# local main, and coordq sees only a projectId at send time, so it cannot look
+# up a repository's default branch here.
+DEFAULT_BASE_REF = "origin/main"
+
+
+def worktree_base(tool, args):
+    """A worktree launch always names the ref it branches from.
+
+    T3 0.1.10 refuses a worktree launch with no baseRef, and a hand-built
+    payload that leaves it out is dropped after three attempts. The default is
+    filled here, where every dispatch passes, so an item already in the queue
+    gets it too. A caller's own baseRef and startFromOrigin are kept as given,
+    and a root or existing_worktree strategy is left alone."""
+    if tool != "t3_thread_launch":
+        return args
+    strategy = args.get("workspaceStrategy")
+    if not isinstance(strategy, dict) or strategy.get("type") != "worktree":
+        return args
+    if strategy.get("baseRef"):
+        return args
+    filled = {**strategy, "baseRef": DEFAULT_BASE_REF}
+    filled.setdefault("startFromOrigin", True)
+    return {**args, "workspaceStrategy": filled}
 
 
 def is_gate_model(selection):
@@ -262,6 +341,7 @@ def call(tool, args, rules=None):
             if rules is None:
                 return 1, "agent rules were not loaded"
             args = with_rules(args, rules)
+    args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
@@ -575,6 +655,8 @@ def reconcile_reservations(queue, active, statuses=None, snapshot=None):
             log(f"EXPIRED reservation #{key} after {int(RESERVATION_TIMEOUT)}s")
         elif finished:
             log(f"released reservation #{key}: thread {thread} is {known[thread]}")
+            journal.emit("thread_ended", "coordq", item=int(key.split(":")[0]), thread=thread,
+                         status=known[thread])
         reserved.pop(key)
         threads.pop(key, None)
         released += 1
@@ -589,6 +671,14 @@ def undispatchable_tool(item):
     return None
 
 
+pending_blocks = []
+
+
+def flush_provider_blocks():
+    while pending_blocks:
+        block_quota_provider(*pending_blocks.pop(0))
+
+
 def drain():
     statuses = {}
     while True:
@@ -601,6 +691,7 @@ def drain():
                 queue.setdefault("failed", []).append(item)
                 release_action_key(queue, item)
                 log(f"DROPPED #{item['id']} after {item['attempts']} attempts: {item.get('last_error', 'unknown error')}")
+                journal_item("dropped", item, tries=item["attempts"], error=item.get("last_error"))
                 continue
             tool = undispatchable_tool(item)
             if tool is None:
@@ -609,6 +700,7 @@ def drain():
             dropped.add(item["id"])
             release_action_key(queue, item)
             log(f"REFUSED #{item['id']}: {tool_refusal(tool)}")
+            journal_item("refused", item, reason=tool_refusal(tool))
         if dropped:
             queue["items"] = [i for i in queue["items"] if i["id"] not in dropped]
             save(queue)
@@ -625,6 +717,7 @@ def drain():
         reconcile_reservations(queue, active, statuses)
         if prune_messages(queue, active):
             save(queue)
+        note_slots(queue, max(n, len(active)))
         if not ready:
             return
         n = max(n, len(active))
@@ -732,6 +825,8 @@ def drain():
             save(queue)
             log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})"
                 + (f" key {item['actionKey']}" if item.get("actionKey") else ""))
+            journal_item("launched", item, thread=started_thread(queue, item, reservation) or None,
+                         live=n, reserved=len(queue["reserved"]), cap=cap())
         else:
             queue["reserved"].pop(reservation, None)
             queue["reservedThreads"].pop(reservation, None)
@@ -741,6 +836,7 @@ def drain():
             item["last_error"] = out[:200]
             if request_id and request_id.startswith("gate:"):
                 key = ":".join(request_id.split(":")[:3])
+                pending_blocks.append((item["args"]["modelSelection"], {"error": out}, key))
                 model = failed_gate_reviewer(queue, key, item["args"]["modelSelection"], out)
                 if model:
                     item["args"]["modelSelection"] = model
@@ -751,6 +847,7 @@ def drain():
                     item["attempts"] = MAX_ATTEMPTS
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
+            journal_item("launch_failed", item, tries=item["attempts"], error=out[:200])
 
 
 def action_key_record(queue, key):
@@ -820,8 +917,9 @@ def action_key_state(queue, item_id, state=None):
 def cmd_start(a):
     args = json.loads(a.args)
     tool = a.tool or tool_for(args)
+    label = journal_title(a.title or args.get("title") or args.get("threadId"))
     if tool not in DISPATCHABLE_TOOLS:
-        die(f"refused: {tool_refusal(tool)}")
+        refuse_start(f"refused: {tool_refusal(tool)}", args, tool, label)
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
@@ -829,14 +927,14 @@ def cmd_start(a):
         requested = args
         args, refusal = with_model(args)
         if refusal:
-            die(refusal)
+            refuse_start(refusal, requested, tool, label)
         if not requested.get("modelSelection"):
             args = requested
         if wants_rules(args, task_type):
             try:
                 read_rules()
             except RuntimeError as e:
-                die(f"refused: {e}")
+                refuse_start(f"refused: {e}", args, tool, label)
     # The thread list is read before the writer lock is taken: a slow t3 call
     # under it would hold every other start for its length. The started-message
     # records it speaks for are snapshotted first, because a record added since
@@ -851,9 +949,9 @@ def cmd_start(a):
             if record is not None:
                 where = (f"as coordq #{record['id']}" if record.get("id") is not None
                          else "with an unreadable queue item")
-                die(f"refused: the action key {key} is already "
-                    f"{action_key_state(queue, record.get('id'), record.get('state'))} "
-                    f"{where}")
+                refuse_start(f"refused: the action key {key} is already "
+                             f"{action_key_state(queue, record.get('id'), record.get('state'))} "
+                             f"{where}", args, tool, label)
         explicit = a.title or args.get("title") or ""
         item = {"id": queue["next"], "tool": tool, "args": args,
                 "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
@@ -878,15 +976,19 @@ def cmd_start(a):
         if request_id.startswith("gate:"):
             heads = queue.setdefault("gatedHeads", {})
             if request_id in heads:
-                die(f"refused: a gate for this head is already recorded as "
-                    f"{gate_label(gate_state(heads[request_id]))}")
+                refuse_start(f"refused: a gate for this head is already recorded as "
+                             f"{gate_label(gate_state(heads[request_id]))}", args, tool, label)
             heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
         save(queue)
+        journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool, title=label,
+                     taskType=args.get("taskType"), modelSelection=args.get("modelSelection"),
+                     **journal.parse_request_id(request_id))
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
             print(f"queued #{item['id']}")
         else:
             print(f"started #{item['id']}")
+    flush_provider_blocks()
 
 
 def last_refill():
@@ -939,7 +1041,7 @@ def live_lane_repositories(config):
         receipts = {}
     cursor = None
     while True:
-        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+        args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES,
                 "includeSubagents": False}
         if cursor is not None:
             args["cursor"] = cursor
@@ -966,7 +1068,72 @@ def live_lane_repositories(config):
         cursor = next_cursor
 
 
-def lane_candidates(rows, occupied):
+# A pull request body refs a ticket with one of these words. The lane's own
+# briefs write `Refs #n`, and a builder that closes its ticket writes
+# `Closes #n` or `Fixes #n`; all three are evidence that a builder is in
+# flight for that ticket.
+PR_REF = re.compile(r"(?i)\b(?:refs|closes|fixes)\s+#(\d+)")
+# One page of open pull requests is the whole read allowance a repo gets in a
+# pass. A repo with more open pull requests than this cannot be read within
+# that allowance, so the pass stops instead of spending a second call.
+PR_PAGE = 100
+
+
+def open_pr_refs(repo):
+    """The ticket numbers the open, non-draft pull requests of one repo ref.
+
+    One read per repo per pass, through the gateway like the issue read, so
+    the refill's GitHub budget stays known. The read is fresh: a pull request
+    opened after a cached read would be invisible for the cache's two
+    minutes, and a ticket could start while its own pull request is open. A
+    draft pull request is not a builder in flight, so it is skipped.
+    """
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls?state=open&per_page={PR_PAGE}"],
+                         timeout=40, limit=FLOOR, fresh=True)
+    if run.returncode:
+        raise RuntimeError(f"open pull request snapshot failed for {repo}")
+    pulls = json.loads(run.stdout)
+    if not isinstance(pulls, list) or not all(isinstance(pull, dict) for pull in pulls):
+        raise RuntimeError(f"open pull request snapshot is not a list for {repo}")
+    if len(pulls) >= PR_PAGE:
+        raise RuntimeError(f"open pull request list is longer than one page for {repo}")
+    refs = set()
+    for pull in pulls:
+        if pull.get("draft"):
+            continue
+        refs.update(int(number) for number in PR_REF.findall(str(pull.get("body") or "")))
+    return refs
+
+
+def stale_started(rows, occupied, pr_refs):
+    """The stage:started tickets with no live lane thread and no open pull
+    request that refs them.
+
+    A label is a claim; the thread and the pull request are the evidence. The
+    refill logs one line per ticket per pass and changes nothing, so a person
+    or the lane decides what the label means.
+    """
+    stale = []
+    for row in rows:
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        repo = row["repository"]["nameWithOwner"]
+        if "stage:started" not in names or repo in occupied:
+            continue
+        if row["number"] in pr_refs.get(repo, ()):
+            continue
+        stale.append(row)
+    return stale
+
+
+def lane_candidates(rows, occupied, pr_refs=None):
+    """The stage:todo tickets the refill may start, in board order.
+
+    A repo is busy when a live lane thread works it, or when an open,
+    non-draft pull request refs one of its open tickets. A `stage:started`
+    label alone is not evidence of a builder in flight, so a stale label no
+    longer makes its repo busy.
+    """
     def order(row):
         names = [label["name"] if isinstance(label, dict) else str(label)
                  for label in row.get("labels") or []]
@@ -978,12 +1145,12 @@ def lane_candidates(rows, occupied):
         return (min(priorities, default=999), tuple(blockers), row["number"],
                 row["repository"]["nameWithOwner"])
 
+    pr_refs = pr_refs or {}
     busy = set(occupied)
     for row in rows:
-        names = [label["name"] if isinstance(label, dict) else str(label)
-                 for label in row.get("labels") or []]
-        if "stage:started" in names:
-            busy.add(row["repository"]["nameWithOwner"])
+        repo = row["repository"]["nameWithOwner"]
+        if row["number"] in pr_refs.get(repo, ()):
+            busy.add(repo)
     selected = []
     for row in sorted(rows, key=order):
         repo = row["repository"]["nameWithOwner"]
@@ -998,6 +1165,7 @@ def board_candidates():
         cfg = json.load(f)
     occupied = live_lane_repositories(cfg)
     rows = []
+    pr_refs = {}
     for repo in cfg["repos"]:
         run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
                               f"repos/{repo}/issues?state=open&per_page=100"],
@@ -1009,7 +1177,10 @@ def board_candidates():
                 if "pull_request" not in row:
                     rows.append({**row, "repository": {"nameWithOwner": repo},
                                  "updatedAt": row["updated_at"]})
-    return lane_candidates(rows, occupied)
+        pr_refs[repo] = open_pr_refs(repo)
+    for row in stale_started(rows, occupied, pr_refs):
+        log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
+    return lane_candidates(rows, occupied, pr_refs)
 
 
 def ticket_start(repo, number, dry_run):
@@ -1252,6 +1423,7 @@ def cmd_dispatch(a):
             log("lock held by another run, skipping")
             return
         drain()
+    flush_provider_blocks()
     safe_refill(a)
 
 
@@ -1324,18 +1496,28 @@ def cmd_status(a):
 
 
 OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
+SINGLE_OBJECT = re.compile(r"repos/[^/]+/[^/]+/(?:(?:issues|pulls)/\d+|git/ref/.+)$")
+
+
+class GhReadError(RuntimeError):
+    def __init__(self, endpoint, stderr):
+        super().__init__(f"GitHub request failed: {endpoint}")
+        self.stderr = stderr or ""
 
 
 def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
     `optional` is what the floor applies to: the polling reads that run on
-    a timer, and not an explicit `gate` an operator asked for."""
-    run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
+    a timer, and not an explicit `gate` an operator asked for. A single
+    object is one unpaginated GET, so it takes the gateway's conditional
+    path and an unchanged object costs a free 304."""
+    command = ["gh", "api", endpoint] if SINGLE_OBJECT.match(endpoint) else ["gh", "api", "--paginate", "--slurp", endpoint]
+    run = gh_gateway.run(command,
                          timeout=40, limit=FLOOR if optional else None,
                          fresh=fresh or bool(OPEN_PULLS.match(endpoint)))
     if run.returncode:
-        raise RuntimeError(f"GitHub request failed: {endpoint}")
+        raise GhReadError(endpoint, run.stderr)
     pages = json.loads(run.stdout)
     rows = []
     for page in pages if isinstance(pages, list) else [pages]:
@@ -1477,9 +1659,26 @@ def quota_failure(value):
         text = error
     else:
         return False
-    return any(word in text.lower() for word in (
+    return next((word for word in (
         "spend limit", "usage limit", "quota exhausted", "quota exceeded",
-        "insufficient_quota", "exceeded your current quota"))
+        "insufficient_quota", "exceeded your current quota",
+        "no credits remaining", "credit balance") if word in text.lower()), False)
+
+
+def block_quota_provider(selection, failure, key):
+    word = quota_failure(failure)
+    if not word:
+        return
+    model_list.block_provider(selection, time.time() + PROVIDER_BLOCK_SECONDS)
+    provider = model_list.identity(selection)
+    log(f"blocked provider {provider} for 1h: {word}")
+    journal.emit("provider_blocked", "coordq", provider=provider, reason=word,
+                 seconds=PROVIDER_BLOCK_SECONDS, **journal.parse_request_id(key))
+
+
+def thread_selection(data):
+    thread = data.get("thread") or {}
+    return {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
 
 
 def fallback_reviewer(queue, key, current, models=()):
@@ -1615,19 +1814,72 @@ def gate_proof(settings, repo, issue, head):
     return state, text, path
 
 
-def gate_candidates(config):
+def lane_ledger():
+    """The lane's ledger, or {} when it cannot be read.
+
+    The ledger is the lane's own record of the failed gate reviews of a
+    pull request. A ledger that cannot be read is no reason to stop the
+    gate: the pull request is gated as before, and the lane still holds
+    the round cap on its own side.
+    """
+    try:
+        with open(LANE_LEDGER) as handle:
+            ledger = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return ledger if isinstance(ledger, dict) else {}
+
+
+def gate_rounds_used(repo, number, ledger):
+    """True when the lane's ledger says a pull request used its rounds.
+
+    The count is the lane's: the failed reviews it recorded for the pull
+    request, and the fix rounds it already sent, whichever is larger. A
+    pull request at or over the cap is re-cut into smaller pull requests
+    or taken over by Shyam, so gatekeep queues no gate for it.
+    """
+    state = ledger.get(f"rounds:{repo}#{number}")
+    if not isinstance(state, dict):
+        state = {}
+    try:
+        count = int(state.get("count", 0))
+    except (TypeError, ValueError):
+        count = 0
+    prefix = f"fix:{repo}#{number}:"
+    count = max(count, sum(1 for key in ledger if key.startswith(prefix)))
+    return count >= GATE_ROUND_CAP
+
+
+def unreadable_ticket_reason(error, issue, body, title):
+    if "HTTP 404" not in error.stderr:
+        return error.stderr.strip().splitlines()[0] if error.stderr.strip() else "request failed"
+    reason = f"issue #{issue} does not exist"
+    if re.search(rf"\b[A-Z][A-Za-z0-9]*-{issue}\b", f"{title}\n{body}"):
+        reason += "; a ticket key number used as an issue number?"
+    return reason
+
+
+def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
     Every event carries the pull request it belongs to, so the caller can
     count the skips of a pull request and report the ones it cannot gate.
+
+    `rounds` is the lane's ledger, read once by the caller that owns the
+    run (`cmd_gatekeep`). A caller that passes none reads no ledger, so a
+    test of the gate path never touches the live one.
     """
-    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
-                               timeout=40, limit=FLOOR)
-    if login_run.returncode:
-        raise RuntimeError("cannot identify authenticated GitHub user")
-    login = login_run.stdout.strip()
+    def read_login():
+        login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
+                                   timeout=40, limit=FLOOR)
+        if login_run.returncode:
+            raise RuntimeError("cannot identify authenticated GitHub user")
+        return login_run.stdout.strip()
+
+    login = gh_gateway.cached_login(DIR, read_login)
     receipts = load_receipts()
     queue = load()
+    rounds = rounds or {}
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
@@ -1635,6 +1887,15 @@ def gate_candidates(config):
             if pr["draft"]:
                 continue
             head, number = pr["head"]["sha"], pr["number"]
+            # The lane's round count is read before anything else, so a
+            # pull request that used its reviews is skipped instead of
+            # gated again on every new head (SRW#1338 was gated ten times).
+            if gate_rounds_used(repo, number, rounds):
+                print(f"skip {repo}#{number}: at the gate round cap, no gate queued",
+                      file=sys.stderr)
+                yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                       "reason": "at the gate round cap"}
+                continue
             gated_key = f"gate:{repo}#{number}:{head}"
             if gated_key in queue.get("gatedHeads", {}):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
@@ -1645,7 +1906,16 @@ def gate_candidates(config):
             refs = re.findall(r"\bRefs #(\d+)\b", body)
             for issue in dict.fromkeys(refs):
                 ledger = []
-                for comment in gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100"):
+                try:
+                    comments = gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100")
+                except GhReadError as e:
+                    reason = unreadable_ticket_reason(e, issue, body, pr.get("title") or "")
+                    print(f"skip {repo}#{number}: Refs #{issue} cannot be read ({reason})",
+                          file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                           "reason": f"Refs #{issue} cannot be read ({reason})"}
+                    break
+                for comment in comments:
                     if comment["user"]["login"] != login:
                         continue
                     for match in re.finditer(r"<!-- coordinator-ticket (\{.*?\}) -->", comment["body"]):
@@ -1752,7 +2022,7 @@ def cmd_gatekeep(a):
         seen = set()
         stuck = []
         attempted = set()
-        for event in gate_candidates(config):
+        for event in gate_candidates(config, lane_ledger()):
             if event["kind"] == "skip":
                 pr = event["pr"]
                 previous = counts.get(pr)
@@ -1768,6 +2038,8 @@ def cmd_gatekeep(a):
                 continue
             observed = load()
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) else None
+            if dead is not None and not a.dry_run:
+                block_quota_provider(thread_selection(dead[1]), dead[1], key)
             with model_list.blocked_lock(), Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
@@ -1801,9 +2073,7 @@ def cmd_gatekeep(a):
                             heads[key] = {**state, "givenUp": True}
                             save(queue)
                         continue
-                    current = {"instanceId": thread.get("providerInstanceId"),
-                               "model": thread.get("model")}
-                    model = failed_gate_reviewer(queue, key, current, data, event.get("builderModels", []))
+                    model = failed_gate_reviewer(queue, key, thread_selection(data), data, event.get("builderModels", []))
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
@@ -1834,6 +2104,8 @@ def cmd_gatekeep(a):
                 if retry_of:
                     heads[key]["retryOf"] = retry_of
                 save(queue)
+                journal.emit("gate_queued", "gatekeep", item=item["id"],
+                             reviewer=args["modelSelection"]["model"], **journal.parse_request_id(key))
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
@@ -2079,10 +2351,13 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
-    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
-    if login_run.returncode:
-        die("refused: the authenticated GitHub user is unknown")
-    login = login_run.stdout.strip()
+    def read_login():
+        login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
+        if login_run.returncode:
+            die("refused: the authenticated GitHub user is unknown")
+        return login_run.stdout.strip()
+
+    login = gh_gateway.cached_login(DIR, read_login)
     # An explicit gate is a required read: the floor applies to polling.
     found = gate_request(repo, pr, settings, config, load_receipts(), login,
                          optional=False, fresh=True)
