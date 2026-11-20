@@ -224,7 +224,7 @@ def coverage_of(first, start, end):
     return "full" if first <= start else "partial"
 
 
-def build(day, live, backfill, bad_lines, github, today, repos):
+def build(day, live, backfill, bad_lines, github, window_closed, repos):
     start, end = day_bounds(day)
     live_day = [row for row in live if start <= row["ts"] < end]
     backfill_day = [row for row in backfill if start <= row["ts"] < end]
@@ -284,7 +284,6 @@ def build(day, live, backfill, bad_lines, github, today, repos):
     closed_refs = {ref(repo, issue["number"]) for repo, issues in (github["closed"] if gh_ok else {}).items()
                    for issue in issues}
 
-    window_closed = (today - day).days >= REVERT_DAYS
     if not window_closed:
         change_failure = unknown("window open")
     elif not gh_ok:
@@ -466,11 +465,12 @@ def cmd_report(args):
     live, backfill, bad = load_journal(directory)
     repos = configured_repos()
     start, end = day_bounds(day)
+    window_closed = today_ts() >= end + REVERT_DAYS * 86400
     if args.no_github:
         github = {"error": "GitHub reads skipped (--no-github)", "calls": 0}
     else:
-        github = fetch_github(repos, start, end, (today - day).days >= REVERT_DAYS)
-    report = build(day, live, backfill, bad, github, today, repos)
+        github = fetch_github(repos, start, end, window_closed)
+    report = build(day, live, backfill, bad, github, window_closed, repos)
     report["baseline"] = baseline(args.out_dir, day, args.baseline_days)
     if "error" in github and not args.no_github:
         print(summary(report))
