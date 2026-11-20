@@ -2561,6 +2561,37 @@ def root_workspace():
                                        baseRefName="main"))
     exact(result, "skip #512: PR is merged or closed")
     exact(actions, [])
+    # An idle thread on another model gives its worktree to one send of a
+    # pass, and only while the worktree is on the head branch of the pull
+    # request and not on a herdr branch.
+    def reroute(branch, sends=1):
+        launches = []
+        def command(cmd, timeout=150):
+            if cmd[0] == "git":
+                if "--abbrev-ref" in cmd:
+                    return branch + "\n"
+                if "rev-parse" in cmd:
+                    return worktree_git
+                return "abc123\trefs/heads/builder/fixture"
+            launches.append(json.loads(cmd[2])["workspaceStrategy"])
+            return "receipt"
+        idle = {"providerInstanceId": "fixture-other", "model": "fixture-other", "status": "completed",
+                "worktreePath": worktree}
+        pull = dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main")
+        lane.PASS_WORKTREES.clear()
+        with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
+             patch.object(lane, "DRY", False), patch.object(lane, "t3", lambda tool, args: {"thread": idle}), \
+             patch.object(lane, "read_json", side_effect=pr_reads(lane, pull)), \
+             patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
+            for number in range(sends):
+                lane.send("old", "brief", "MO#512 check", {}, f"{key}{number}", repo=repo, pr_number=512)
+        return launches
+    own = {"type": "existing_worktree", "worktreePath": worktree}
+    fresh = {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}
+    exact(reroute("builder/fixture"), [own])
+    exact(reroute("herdr/board-stuck-lane"), [fresh])
+    exact(reroute("builder/other"), [fresh])
+    exact(reroute("builder/fixture", sends=2), [own, fresh])
 
 
 def cycle_health():
