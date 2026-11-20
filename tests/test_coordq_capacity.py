@@ -1,9 +1,11 @@
 import argparse
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.test_gatekeep_backstop_reviewer import load_coordq
@@ -354,3 +356,35 @@ class CapacityTests(unittest.TestCase):
         from pathlib import Path
         log = Path(self.tmp.name, "dispatch.log").read_text()
         self.assertIn("reservation #7 retained", log)
+
+
+class QueueCrashSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.q = load_coordq()
+        self.q.DIR = self.tmp.name
+        env = patch.dict(os.environ, {"COORD_JOURNAL_DIR": self.tmp.name + "/j"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_a_truncated_queue_falls_back_and_stops_dispatch(self):
+        Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')
+        Path(self.tmp.name, "queue.json.prev").write_text('{"next":5,"items":[]}')
+        self.assertEqual(self.q.load()["next"], 5)
+        self.assertTrue(Path(self.tmp.name, "dispatch.stopped").exists())
+
+    def test_dispatch_and_refill_refuse_while_stopped(self):
+        Path(self.tmp.name, "dispatch.stopped").write_text("")
+        with patch.object(self.q, "drain") as drain, patch.object(
+                self.q, "board_candidates") as candidates:
+            self.q.cmd_dispatch(argparse.Namespace(dry_run=False))
+            self.q.refill(argparse.Namespace(dry_run=False))
+        drain.assert_not_called()
+        candidates.assert_not_called()
+
+    def test_save_keeps_the_previous_queue(self):
+        self.q.save({"next": 1, "items": []})
+        self.q.save({"next": 2, "items": []})
+        prev = json.loads(Path(self.tmp.name, "queue.json.prev").read_text())
+        self.assertEqual(prev["next"], 1)
