@@ -7,6 +7,8 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime as local_datetime, timedelta
+from zoneinfo import ZoneInfo
 
 for _dir in (Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent / "bin"):
     if (_dir / "models.py").is_file() and str(_dir) not in sys.path:
@@ -34,6 +36,9 @@ import prompt_paths
 LANE_CALLER = "lane_driver"
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
+SCORECARD = "/Users/shyamsivakumar/.local/bin/scorecard"
+SCORECARD_TIMEOUT = 120
+SCORECARD_TRIES = 3
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
@@ -2286,6 +2291,26 @@ def save_ledger(ledger):
         raise
 
 
+def daily_scorecard(ledger):
+    now = local_datetime.now(ZoneInfo("America/Los_Angeles"))
+    if (now.hour, now.minute) < (0, 10):
+        return
+    day = str(now.date() - timedelta(days=1))
+    state = ledger.get(f"scorecard:{day}") or {"tries": 0, "done": False}
+    if state["done"] or state["tries"] >= SCORECARD_TRIES:
+        return
+    state["tries"] += 1
+    try:
+        result = subprocess.run([SCORECARD, "--date", day], capture_output=True, text=True,
+                                timeout=SCORECARD_TIMEOUT)
+        failure = None if result.returncode == 0 else f"exit {result.returncode}: {result.stderr.strip()[-200:]}"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        failure = str(exc)
+    state["done"] = failure is None
+    ledger[f"scorecard:{day}"] = state
+    print(f"SCORECARD {day} " + ("written" if failure is None else f"try {state['tries']} failed: {failure}"))
+
+
 def main():
     global CFG
     STALL_EVENTS.clear()
@@ -2301,6 +2326,7 @@ def main():
             stale = reconcile_prompt_items(SNAPSHOT)
             if stale:
                 print(f"BOARD removed {stale} settled merge ask(s)")
+            daily_scorecard(ledger)
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
         if ledger.get("_item_failures", 0):
