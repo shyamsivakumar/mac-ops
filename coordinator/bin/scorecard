@@ -103,39 +103,43 @@ def data_of(row):
 
 class GitHub:
     def __init__(self, repos):
-        self.repos = repos
+        self.repos = set(repos)
+        self.owners = sorted({repo.split("/")[0] for repo in repos})
         self.calls = 0
 
-    def search(self, kind, repo, flags, fields):
+    def search(self, kind, flags, fields, query=()):
         if self.calls >= CALL_LIMIT:
             raise Unavailable(f"the {CALL_LIMIT} call limit for one report was reached")
         self.calls += 1
-        argv = ["gh", "search", kind, "--repo", repo, *flags, "--limit", "1000", "--json", fields]
+        argv = ["gh", "search", kind, *query, *flags, "--limit", "1000", "--json", fields + ",repository"]
+        for owner in self.owners:
+            argv += ["--owner", owner]
         result = gh_gateway.run(argv, timeout=90, caller_name=CALLER)
         if result.returncode:
-            raise Unavailable(f"gh search {kind} {repo} failed: {result.stderr.strip()[:120]}")
+            raise Unavailable(f"gh search {kind} failed: {result.stderr.strip()[:120]}")
         rows = json.loads(result.stdout)
         if len(rows) >= 1000:
-            raise Unavailable(f"gh search {kind} {repo} hit the 1000 result limit")
-        return rows
-
-    def range_flag(self, start, end):
-        return "..".join(datetime.fromtimestamp(ts, TZ).isoformat() for ts in (start, end))
+            raise Unavailable(f"gh search {kind} hit the 1000 result limit")
+        grouped = {repo: [] for repo in self.repos}
+        for row in rows:
+            name = row["repository"]["nameWithOwner"]
+            if name in grouped:
+                grouped[name].append(row)
+        return grouped
 
     def merged_prs(self, start, end):
-        span = self.range_flag(start, end)
-        return {repo: self.search("prs", repo, ["--merged", "--merged-at", span], "number,title,closedAt")
-                for repo in self.repos}
+        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,closedAt")
 
     def closed_issues(self, start, end):
-        span = self.range_flag(start, end)
-        return {repo: self.search("issues", repo, ["--state", "closed", "--closed", span], "number,title,closedAt")
-                for repo in self.repos}
+        return self.search("issues", ["--state", "closed", "--closed", span(start, end)], "number,title,closedAt")
 
-    def reverts(self, repo, start, end):
-        return self.search("prs", repo, ["--match", "title", "--merged", "--merged-at",
-                                         self.range_flag(start, end), "Revert"],
-                           "number,title,body,closedAt")
+    def reverts(self, start, end):
+        return self.search("prs", ["--match", "title", "--merged", "--merged-at", span(start, end)],
+                           "number,title,body,closedAt", query=["Revert"])
+
+
+def span(start, end):
+    return "..".join(datetime.fromtimestamp(ts, TZ).isoformat() for ts in (start, end))
 
 
 def fetch_github(repos, start, end, revert_window_closed):
@@ -143,13 +147,7 @@ def fetch_github(repos, start, end, revert_window_closed):
     try:
         merged = github.merged_prs(start, end)
         closed = github.closed_issues(start, end)
-        reverted = None
-        if revert_window_closed:
-            reverted = {}
-            window_end = end + REVERT_DAYS * 86400
-            for repo, prs in merged.items():
-                if prs:
-                    reverted[repo] = github.reverts(repo, start, window_end)
+        reverted = github.reverts(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
         return {"merged": merged, "closed": closed, "reverts": reverted, "calls": github.calls}
     except (Unavailable, ValueError) as exc:
         return {"error": f"GitHub read failed: {exc}", "calls": github.calls}
