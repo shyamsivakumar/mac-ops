@@ -269,26 +269,47 @@ def check_isolation(run, isolation, env):
     and finish it, so a run that never got as far as the tests cannot pass
     by leaving the live files alone.
 
+    Each suite runs under `env`, which names a temp root and nothing else,
+    so the entry point has to install the isolation itself. The check then
+    looks for the fake `gh` the entry point wrote into that root: an entry
+    point that lost its installer leaves the root empty, reaches the real
+    `gh` and the live logs, and fails here. Supplying the fake `gh` and the
+    temp log paths from this side would hide exactly that regression.
+
     The fake `gh` writes every call it was not asked to answer to a file in
-    the run's temp directory, so a suite that captures the fake's stderr
-    cannot hide the refusal. A refusal is a failure of this check: it means
-    the run reached for a call the fake does not answer, and the isolation
-    is not complete.
+    the same root, so a suite that captures the fake's stderr cannot hide
+    the refusal. A refusal is a failure of this check: it means the run
+    reached for a call the fake does not answer, and the isolation is not
+    complete.
     """
     before = live_log_counts(isolation)
-    suite = run(["python3", "-m", "unittest"], timeout=300, check=False, capture=True)
-    selftest = run(["python3", "coordinator/overnight/overnight", "selftest"],
-                   timeout=120, check=False, capture=True)
+    results = {}
+    refused = []
+    for name, command, timeout in (
+        ("unittest", ["python3", "-m", "unittest"], 300),
+        ("selftest", ["python3", "coordinator/overnight/overnight", "selftest"], 120),
+    ):
+        root = Path(tempfile.mkdtemp(prefix=f"check-{name}-", dir=os.environ.get("TMPDIR")))
+        child_env = {**env, isolation.ROOT_VAR: str(root)}
+        results[name] = run(command, timeout=timeout, check=False, capture=True,
+                            child_env=child_env)
+        if not (root / "bin" / "gh").is_file():
+            raise AssertionError(
+                f"the {name} entry point did not install the isolation: no fake "
+                f"`gh` in {root}, so the run reached the real one")
+        refusals = root / "refusals.log"
+        if refusals.is_file():
+            refused.extend(refusals.read_text().splitlines())
     after = live_log_counts(isolation)
     if after[:2] != before[:2]:
         raise AssertionError(
             f"the run wrote to the live logs: gh-usage rows for {isolation.CALLER} "
             f"{before[0]} -> {after[0]}, skips.log lines {before[1]} -> {after[1]}")
-    refusals = Path(env["COORDINATOR_GH_REFUSALS"])
-    refused = refusals.read_text().splitlines() if refusals.is_file() else []
     if refused:
         raise AssertionError(
             f"the run needed a call the fake `gh` does not answer: {refused[0]}")
+    suite = results["unittest"]
+    selftest = results["selftest"]
     ran = re.search(r"^Ran (\d+) tests? in ", suite.stdout + suite.stderr, re.MULTILINE)
     if ran is None or int(ran.group(1)) < MIN_TESTS:
         found = ran.group(1) if ran else "no test count"
@@ -300,7 +321,8 @@ def check_isolation(run, isolation, env):
             f"the overnight selftest did not run: exited {selftest.returncode}")
     return (f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
             f"{before[1]}, unchanged after the run; gh-usage lines in total "
-            f"{before[2]} -> {after[2]}; no call the fake `gh` refused; "
+            f"{before[2]} -> {after[2]}; both entry points installed the fake "
+            f"`gh` themselves; no call the fake `gh` refused; "
             f"{ran.group(1)} tests ran (unittest exited {suite.returncode}, "
             f"selftest exited {selftest.returncode})")
 
@@ -488,14 +510,20 @@ def main():
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
            "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR")),
            **isolation.environment()}
+    # The suites that prove the entry points install the isolation run under
+    # this environment instead: it carries no fake `gh` on PATH and no temp
+    # log path, so an entry point that lost its installer is not covered for
+    # by this side.
+    entry_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"]}
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
     dirty = [line for line in git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
              if line[3:].strip() != args.proof]
 
-    def run(command, cwd=ROOT, timeout=300, check=True, capture=False):
+    def run(command, cwd=ROOT, timeout=300, check=True, capture=False, child_env=None):
         actual = [sys.executable if part == "python3" else part for part in command]
-        return subprocess.run(actual, cwd=cwd, env=env, check=check, timeout=timeout,
+        return subprocess.run(actual, cwd=cwd, env=child_env or env, check=check, timeout=timeout,
                               capture_output=capture, text=capture)
 
     lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
@@ -504,7 +532,7 @@ def main():
     proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
     proof.check("test isolation: no live gh call or log row",
                 "python3 -m unittest; " + shlex.join(selftest),
-                lambda: check_isolation(run, isolation, env))
+                lambda: check_isolation(run, isolation, entry_env))
     for name in changed_python:
         command = ["python3", "-c",
                    "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]
