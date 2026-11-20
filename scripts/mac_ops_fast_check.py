@@ -317,10 +317,26 @@ def check_lane_selection():
             issue("a/c", 9, 2), issue("a/c", 8), issue("a/c", 7),
             issue("a/d", 1), issue("a/e", 10, body="## Blocked by\n#3"),
             issue("a/e", 11, body="## Blocked by\n#2")]
+    # A stale stage:started label is a claim, not evidence: a/b#2 carries it
+    # with no live thread and no open pull request, so a/b#1 is a candidate.
     selected = module.lane_candidates(rows, {"a/d"})
     assert [(r["repository"]["nameWithOwner"], r["number"]) for r in selected] == [
-        ("a/c", 7), ("a/e", 11)]
+        ("a/b", 1), ("a/c", 7), ("a/e", 11)]
+    # A live lane thread still makes its repo busy.
+    assert module.lane_candidates([issue("a/b", 1)], {"a/b"}) == []
+    # An open, non-draft pull request that refs an open ticket makes its repo
+    # busy; one that refs another number does not.
+    assert module.lane_candidates([issue("a/b", 1)], set(), {"a/b": {1}}) == []
+    assert module.lane_candidates([issue("a/b", 1)], set(), {"a/b": {2}})
     assert module.lane_candidates([issue("a/b", 1)], set())
+    # The stale ticket is the one the refill logs, and only that one.
+    assert [row["number"] for row in module.stale_started(rows, {"a/d"}, {})] == [2]
+    assert module.stale_started(rows, {"a/b"}, {}) == []
+    assert module.stale_started(rows, set(), {"a/b": {2}}) == []
+    # A pull request body refs a ticket with Refs, Closes or Fixes.
+    assert module.PR_REF.findall("Refs #7, closes #8 and Fixes #9") == ["7", "8", "9"]
+    assert module.PR_REF.findall("refs #12") == ["12"]
+    assert module.PR_REF.findall("no ticket here") == []
     config = {"repos": {"a/b": {"key": "AB"}, "a/c": {"key": "AC"}}}
     snapshots = [
         (0, '{"threads":[{"threadId":"one","title":"AB-1 build"}],"nextCursor":1}'),
@@ -330,16 +346,49 @@ def check_lane_selection():
             assert module.live_lane_repositories(config) == {"a/b", "a/c"}
         config_path = Path(scratch) / "tickets.json"
         config_path.write_text(__import__("json").dumps(config))
+        # One repo, so a ticket number names one ticket and the log line is
+        # counted once.
+        one_repo = Path(scratch) / "one-repo.json"
+        one_repo.write_text(__import__("json").dumps({"repos": {"a/b": {"key": "AB"}}}))
         from types import SimpleNamespace
         snapshot = [[{"number": 1, "title": "busy", "labels": ["stage:started"],
                       "updated_at": "now"},
                      {"number": 2, "title": "todo", "labels": ["stage:todo"],
                       "updated_at": "now"}]]
-        with patch.object(module, "TICKETS_CONFIG", str(config_path)), \
+        logged = []
+        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
                 patch.object(module, "live_lane_repositories", return_value=set()), \
+                patch.object(module, "open_pr_refs", return_value=set()), \
+                patch.object(module, "log", side_effect=logged.append), \
+                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(snapshot))):
+            # The stale started ticket is logged and does not block its repo;
+            # the todo ticket is the candidate.
+            assert [row["number"] for row in module.board_candidates()] == [2]
+            assert logged == ["refill: #1 is stage:started with no live thread or open PR"]
+        # An open pull request that refs the started ticket is evidence, so
+        # nothing is logged and the repo stays busy.
+        logged = []
+        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
+                patch.object(module, "live_lane_repositories", return_value=set()), \
+                patch.object(module, "open_pr_refs", return_value={1}), \
+                patch.object(module, "log", side_effect=logged.append), \
                 patch.object(module.subprocess, "run", return_value=SimpleNamespace(
                     returncode=0, stdout=__import__("json").dumps(snapshot))):
             assert module.board_candidates() == []
+            assert logged == []
+        # A pull request list that cannot be read stops the pass.
+        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
+                patch.object(module, "live_lane_repositories", return_value=set()), \
+                patch.object(module, "open_pr_refs", side_effect=RuntimeError("no pull list")), \
+                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(snapshot))):
+            try:
+                module.board_candidates()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("failed pull request snapshot accepted")
         with patch.object(module, "DIR", scratch), patch.object(module, "call", return_value=(1, "failed")):
             try:
                 module.live_lane_repositories(config)
