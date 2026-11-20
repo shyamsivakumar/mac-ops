@@ -11,13 +11,13 @@ character repeated 40 times, or a character repeated 8 times followed by a
 character repeated 32 times. No real sha looks like that, so the rule needs no
 time window and no repo or pull request filter.
 
-The journal's writers (coordinator/bin/journal.py) append under `flock` on
-the journal file itself, so this script takes the same exclusive `flock` on
-the journal before it reads, and holds it until the rewritten file is in
-place. The rewrite replaces the file, so a writer that opened the old file
-and was waiting on the lock would append to the replaced copy. After
-releasing the lock the script reads whatever landed there and appends it to
-the new journal.
+The journal's writers (coordinator/bin/journal.py) append with `O_APPEND` under
+`flock` on the journal file itself. This script takes the same exclusive
+`flock`, reads the journal, writes the backup and the quarantine file, then
+rewrites the same file in place (seek to 0, write the kept rows, truncate)
+before it releases the lock. The file is never replaced, so a writer that is
+waiting on the lock appends to the same file after the rewrite and no event is
+lost.
 
 The default is a dry run that prints counts only. `--apply` writes.
 
@@ -30,14 +30,9 @@ import fcntl
 import json
 import os
 import re
-import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
-
-SETTLE_SECONDS = 1.0
-
 
 FIXTURE_SHA = re.compile(r"^([0-9a-f])\1{39}$|^([0-9a-f])\2{7}([0-9a-f])\3{31}$")
 
@@ -64,32 +59,24 @@ def summarize(taken):
     return ", ".join(f"{event}={count}" for event, count in sorted(by_event.items()))
 
 
-def apply_rewrite(journal, fd, kept, taken):
-    stamp = time.strftime("%Y%m%dT%H%M%S")
-    backup = journal.with_name(f"{journal.name}.bak-{stamp}")
-    shutil.copy2(journal, backup)
-    quarantine = journal.with_name(f"{journal.stem}.quarantine.jsonl")
-    with open(quarantine, "ab") as out:
-        out.write(b"".join(taken))
+def write_synced(path, data, mode="wb"):
+    with open(path, mode) as out:
+        out.write(data)
         out.flush()
         os.fsync(out.fileno())
-    size = os.fstat(fd).st_size
-    with tempfile.NamedTemporaryFile(
-        dir=journal.parent, prefix=f".{journal.name}.", delete=False
-    ) as tmp:
-        tmp.write(b"".join(kept))
-        tmp.flush()
-        os.fsync(tmp.fileno())
-    shutil.copymode(journal, tmp.name)
-    os.replace(tmp.name, journal)
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    time.sleep(SETTLE_SECONDS)
-    os.lseek(fd, size, os.SEEK_SET)
-    late = os.read(fd, 1 << 24)
-    if late:
-        with open(journal, "ab") as out:
-            out.write(late)
-    return backup, quarantine, late.count(b"\n")
+
+
+def apply_rewrite(journal, stream, lines, kept, taken):
+    backup = journal.with_name(f"{journal.name}.bak-{time.strftime('%Y%m%dT%H%M%S')}")
+    write_synced(backup, b"".join(lines))
+    quarantine = journal.with_name(f"{journal.stem}.quarantine.jsonl")
+    write_synced(quarantine, b"".join(taken), "ab")
+    stream.seek(0)
+    stream.write(b"".join(kept))
+    stream.truncate()
+    stream.flush()
+    os.fsync(stream.fileno())
+    return backup, quarantine
 
 
 def main():
@@ -98,10 +85,9 @@ def main():
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
 
-    fd = os.open(args.journal, os.O_RDONLY)
-    fcntl.flock(fd, fcntl.LOCK_EX)
-    with os.fdopen(os.dup(fd), "rb") as stream:
-        lines = stream.readlines()
+    stream = open(args.journal, "r+b")
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    lines = stream.readlines()
     kept, taken = split_lines(lines)
     print(f"journal: {args.journal}")
     print(f"rows: {len(lines)}  matched: {len(taken)}  kept: {len(kept)}")
@@ -109,11 +95,10 @@ def main():
     if not args.apply:
         print("dry run: nothing written (pass --apply to rewrite)")
         return 0
-    backup, quarantine, late = apply_rewrite(args.journal, fd, kept, taken)
+    backup, quarantine = apply_rewrite(args.journal, stream, lines, kept, taken)
     print(f"backup: {backup}")
     print(f"quarantine: {quarantine} (+{len(taken)} rows)")
-    print(f"rows appended during the rewrite and carried over: {late}")
-    os.close(fd)
+    stream.close()
     return 0
 
 
