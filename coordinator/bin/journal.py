@@ -13,15 +13,11 @@ against GitHub catches the missing line.
 
 import fcntl
 import functools
-import hashlib
 import json
 import os
-import pathlib
 import re
 import sys
 import time
-
-_COORDINATOR_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 VERSION = 1
 COMMON = (
@@ -60,26 +56,16 @@ def journal_path(now):
 
 
 @functools.lru_cache(maxsize=1)
-def installed_sha():
+def installation_receipt():
     path = os.path.expanduser("~/.local/state/mac-ops/coordinator-installation.json")
     if not os.path.exists(path):
-        return None
+        return {}
     with open(path) as fh:
-        return json.load(fh).get("source_sha")
+        return json.load(fh)
 
 
-def manifest_hash(arm):
-    root = pathlib.Path(_COORDINATOR_DIR)
-    path = root / "config" / "factory.json"
-    if not path.exists():
-        return None
-    names = json.loads(path.read_text())["arms"].get(arm)
-    if names is None:
-        return None
-    digest = hashlib.sha256()
-    for name in names:
-        digest.update((root / name).read_bytes())
-    return digest.hexdigest()
+def installed_sha():
+    return installation_receipt().get("source_sha")
 
 
 def emit(event, actor, **fields):
@@ -89,7 +75,7 @@ def emit(event, actor, **fields):
         row[key] = fields.pop(key, None)
     row["data"] = {**(fields.pop("data", None) or {}), **fields}
     row["data"]["sha"] = installed_sha()
-    row["data"]["manifest"] = manifest_hash(row["arm"] or "control")
+    row["data"]["manifest"] = installation_receipt().get("manifest", {}).get(row["arm"] or "control")
     line = json.dumps(row, default=str, separators=(",", ":")) + "\n"
     try:
         os.makedirs(journal_dir(), exist_ok=True)
