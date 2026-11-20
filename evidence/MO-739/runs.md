@@ -1,6 +1,6 @@
 # MO-739 runs
 
-Code commit: 875b13f23e6682cd0c240eedc0da27fdfde49ab3. No `--apply` was run on real worktrees.
+Code commit: 06aacbb2bc743bb33180ad36bc02f8774069b4e1. No `--apply` was run on real worktrees.
 
 ## Dry run on this Mac, before and after
 
@@ -35,3 +35,17 @@ merged removed [] exists=False
 ## Existing checks
 
 See `check-proof.md` (`scripts/mac_ops_fast_check.py`). The repo has no separate cleaner test.
+
+## Round 2 (gate fix): upstream-branch matching only for MERGED PRs
+
+CLOSED rows count only with headRefName equal to the local branch and headRefOid equal to HEAD. MERGED rows may come from the local or upstream branch with the contained-commits rule. Fixture rerun with a new case: a worktree whose branch tracks an abandoned, closed, unmerged PR branch at the same commit.
+
+```
+abandoned look ['github_pr_not_closed_for_head'] exists=True
+dirty look ['worktree_dirty'] exists=True
+extra look ['github_pr_not_closed_for_head'] exists=True
+merged removed [] exists=False
+1 removed log lines
+```
+
+The new abandoned case is kept. The previous code (875b13f) removed it in the same fixture. merged is removed; extra and dirty are kept as before. Fast check rerun on 06aacbb2bc743bb33180ad36bc02f8774069b4e1: see check-proof.md.
