@@ -567,6 +567,7 @@ def gate_pipeline():
                  patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture",
                                                 baseRefName="other" if name == "retargeted-after-pass" else "main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
+                 patch.object(lane.gate_findings, "record", return_value={"findings": {}, "reviews": {}}), \
                  patch("builtins.open", side_effect=live_state_only):
                 if name != "no-receipts-file":
                     Path(scratch, "receipts.json").write_text(json.dumps(receipts))
@@ -919,6 +920,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
          patch.object(lane, "run", command), \
          patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": status}}), \
+         patch.object(lane.gate_findings, "record", return_value={"findings": {}, "reviews": {}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
