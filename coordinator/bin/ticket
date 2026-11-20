@@ -433,17 +433,58 @@ def keys_in_use(rcfg, issues):
     return used
 
 
-def mint_key(rcfg, issues):
-    """The next free key for the repo: one past the repo's highest key.
+def mint_key(rcfg, issues, last=0):
+    """The next free key for the repo: one past the highest key it has given out.
 
     The key prefix comes from tickets.json and the number from the repo's
     own issues, so a minted key never collides with a ticket that exists.
+    The issue list can lag a create by a few seconds, so the number is also
+    read from the last key this repo gave out, which is written under the
+    open lock: a list that has not caught up cannot hand out a key twice.
     """
     used = keys_in_use(rcfg, issues)
-    number = max(used) + 1 if used else 1
+    number = max([last, *used]) + 1
     while number in used:
         number += 1
     return f"{rcfg['key']}-{number}"
+
+
+def last_key_path(repo):
+    """Where the last key this repo gave out is kept, beside the open lock."""
+    return os.path.join(CACHE_DIR, f"last-key-{repo.replace('/', '_')}.json")
+
+
+def read_last_key(repo):
+    """The highest key number this repo has given out, or 0 when none is recorded."""
+    try:
+        with open(last_key_path(repo)) as f:
+            return int(json.load(f)["number"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+
+
+def write_last_key(repo, key, last=0):
+    """Record the key this open gave out, so a lagging list cannot mint it again.
+
+    The record only ever rises: an open that names an older key by hand must
+    not lower it, or the next mint would land on a key already given out.
+    """
+    match = TITLE_KEY.match(key)
+    if not match:
+        return
+    number = int(match.group(2))
+    if number <= last:
+        return
+    path = last_key_path(repo)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"key": key, "number": number}, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        # The issue exists, so the open succeeded: a record that cannot be
+        # written is a warning, not a failed open.
+        print(f"warning: the last key {key} of {repo} was not recorded: {e}", file=sys.stderr)
 
 
 def with_open_lock(repo):
@@ -482,6 +523,7 @@ def cmd_open(a):
     try:
         lock = with_open_lock(repo)
         issues = repo_issues(repo)
+        last = read_last_key(repo)
         match = TITLE_KEY.match(title)
         if match:
             if match.group(1) != rcfg["key"]:
@@ -493,7 +535,7 @@ def cmd_open(a):
         else:
             if a.require_key:
                 die(f"refused: missing key in title (the title must start with {rcfg['key']}-<n>)", 2)
-            key = mint_key(rcfg, issues)
+            key = mint_key(rcfg, issues, last)
             title = f"{key}{KEY_SEPARATOR}{title}"
         duplicate = next((i for i in issues if i["title"].strip() == title), None)
         if duplicate is not None:
@@ -505,6 +547,9 @@ def cmd_open(a):
         if labels:
             args += ["--label", ",".join(labels)]
         url = gh(args).strip()
+        # The create is done, so the key is given out: record it before
+        # anything else can read a list that has not caught up with it.
+        write_last_key(repo, key, last)
     except Refuse as e:
         die(f"refused: {e}", 2)
     except GhError as e:
