@@ -1,6 +1,35 @@
+import os
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 from tests.test_gatekeep_backstop_reviewer import load_coordq
+
+SAVED_COORDQ_DIR = None
+TEMP_COORDQ_DIR = None
+
+
+def setUpModule():
+    """Point coordq at a temporary queue for the length of this module.
+
+    `coordq` reads `COORDQ_DIR` when it is loaded, and the live queue's
+    blocked-provider list is this machine's state, not the repository's
+    model list. A provider blocked here would otherwise be read as the
+    repository's own answer and fail a test that is about the split.
+    """
+    global SAVED_COORDQ_DIR, TEMP_COORDQ_DIR
+    SAVED_COORDQ_DIR = os.environ.get("COORDQ_DIR")
+    TEMP_COORDQ_DIR = tempfile.mkdtemp(prefix="coordq-vendor-split-")
+    os.environ["COORDQ_DIR"] = TEMP_COORDQ_DIR
+
+
+def tearDownModule():
+    if SAVED_COORDQ_DIR is None:
+        os.environ.pop("COORDQ_DIR", None)
+    else:
+        os.environ["COORDQ_DIR"] = SAVED_COORDQ_DIR
+    if TEMP_COORDQ_DIR:
+        shutil.rmtree(TEMP_COORDQ_DIR, ignore_errors=True)
 
 
 def review_selection(q, entry_id):

@@ -15,6 +15,7 @@ from unittest.mock import patch
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -213,6 +214,97 @@ def git(*args):
     return subprocess.check_output(["git", "-C", str(ROOT), *args])
 
 
+def load_isolation():
+    """The fake `gh` and temp logs every suite this check launches runs under."""
+    loader = SourceFileLoader("gh_isolation", str(ROOT / "coordinator/bin/gh_isolation.py"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def live_log_counts(isolation):
+    """The live log rows a run would add: its own caller's rows, the skip
+    log's line count, and the usage log's total line count.
+
+    The live coordinator writes to both files while the check runs, so the
+    gh usage log is counted by the caller name the run's rows carry. The
+    skip log has no caller field, so its line count is compared as it is.
+    The total is reported and not compared: a row another caller wrote
+    while the run was going is the live coordinator's, and a row the run
+    leaked under another caller name shows up in the total.
+    """
+    usage = Path.home() / "Library/Logs/coordinator/gh-usage.jsonl"
+    skips = Path.home() / "Library/Logs/coordinator/skips.log"
+    rows = 0
+    total = 0
+    if usage.is_file():
+        for line in usage.read_text().splitlines():
+            if not line.strip():
+                continue
+            total += 1
+            try:
+                if json.loads(line).get("caller") == isolation.CALLER:
+                    rows += 1
+            except ValueError:
+                continue
+    lines = len(skips.read_text().splitlines()) if skips.is_file() else 0
+    return rows, lines, total
+
+
+# The suite this check runs discovers well over this many tests. A run that
+# imports a module badly, or fails to discover the suite at all, reports far
+# fewer, and would otherwise leave the live logs untouched and pass.
+MIN_TESTS = 600
+
+
+def check_isolation(run, isolation, env):
+    """A full run makes no real `gh` call and writes no live log row.
+
+    The two suites are the ones that reached GitHub and the live skip log
+    before the environment was set for them. Their own result is recorded
+    in the detail and does not decide this check: the check is about the
+    live files, and a suite that is already red on this machine is not a
+    finding about the isolation. What the run must do is discover the suite
+    and finish it, so a run that never got as far as the tests cannot pass
+    by leaving the live files alone.
+
+    The fake `gh` writes every call it was not asked to answer to a file in
+    the run's temp directory, so a suite that captures the fake's stderr
+    cannot hide the refusal. A refusal is a failure of this check: it means
+    the run reached for a call the fake does not answer, and the isolation
+    is not complete.
+    """
+    before = live_log_counts(isolation)
+    suite = run(["python3", "-m", "unittest"], timeout=300, check=False, capture=True)
+    selftest = run(["python3", "coordinator/overnight/overnight", "selftest"],
+                   timeout=120, check=False, capture=True)
+    after = live_log_counts(isolation)
+    if after[:2] != before[:2]:
+        raise AssertionError(
+            f"the run wrote to the live logs: gh-usage rows for {isolation.CALLER} "
+            f"{before[0]} -> {after[0]}, skips.log lines {before[1]} -> {after[1]}")
+    refusals = Path(env["COORDINATOR_GH_REFUSALS"])
+    refused = refusals.read_text().splitlines() if refusals.is_file() else []
+    if refused:
+        raise AssertionError(
+            f"the run needed a call the fake `gh` does not answer: {refused[0]}")
+    ran = re.search(r"^Ran (\d+) tests? in ", suite.stdout + suite.stderr, re.MULTILINE)
+    if ran is None or int(ran.group(1)) < MIN_TESTS:
+        found = ran.group(1) if ran else "no test count"
+        raise AssertionError(
+            f"the suite did not run: {found} tests, expected at least {MIN_TESTS} "
+            f"(unittest exited {suite.returncode})")
+    if selftest.returncode != 0:
+        raise AssertionError(
+            f"the overnight selftest did not run: exited {selftest.returncode}")
+    return (f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
+            f"{before[1]}, unchanged after the run; gh-usage lines in total "
+            f"{before[2]} -> {after[2]}; no call the fake `gh` refused; "
+            f"{ran.group(1)} tests ran (unittest exited {suite.returncode}, "
+            f"selftest exited {selftest.returncode})")
+
+
 def imports(path):
     tree = ast.parse(path.read_bytes(), filename=str(path))
     names = set()
@@ -392,21 +484,27 @@ def main():
     print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
     if args.plan:
         return
+    isolation = load_isolation()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-           "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR"))}
+           "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR")),
+           **isolation.environment()}
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
-    dirty = [line for line in git("status", "--porcelain").decode().splitlines()
+    dirty = [line for line in git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
              if line[3:].strip() != args.proof]
 
-    def run(command, cwd=ROOT, timeout=300):
+    def run(command, cwd=ROOT, timeout=300, check=True, capture=False):
         actual = [sys.executable if part == "python3" else part for part in command]
-        return subprocess.run(actual, cwd=cwd, env=env, check=True, timeout=timeout)
+        return subprocess.run(actual, cwd=cwd, env=env, check=check, timeout=timeout,
+                              capture_output=capture, text=capture)
 
     lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
     proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
     selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
     proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
+    proof.check("test isolation: no live gh call or log row",
+                "python3 -m unittest; " + shlex.join(selftest),
+                lambda: check_isolation(run, isolation, env))
     for name in changed_python:
         command = ["python3", "-c",
                    "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]
