@@ -5,12 +5,12 @@ Command: `python3 evals/ladder/mine_traces.py --since 2026-11-13`
 Output:
 
 ```
-long_run: 122
+long_run: 123
 loop: 188
 rate_limit: 99
-retry: 205
+retry: 210
 success_sample: 5
-tool_failure: 461
+tool_failure: 463
 pi sessions without a flag: 472
 wrote evals/ladder/traces/flagged-2026-11-20.jsonl
 ```
@@ -30,4 +30,12 @@ The flagged file is `evals/ladder/traces/flagged-2026-11-20.jsonl` (gitignored, 
 {"run_id": "530c25136d5b", "source": "~/Code/coordinator/queue/gatekeep.log", "start": null, "end": null, "rule": "loop", "excerpt": "same line 3+ times: skip shyamsivakumar/mac-ops#157: router chain includes Claude"}
 {"run_id": "599a7164ef78", "source": "~/.pi/agent/sessions/--Users-shyamsivakumar-.t3-worktrees-cairn-t3-eaf21d9e-7af24124bfaa341c--/2026-11-13T16-45-25-130Z_01a1d5cc-b509-7250-9", "start": "2026-11-13T16:45:25.130000+00:00", "end": "2026-11-13T19:00:19.904000+00:00", "rule": "long_run", "excerpt": "135 minutes, 151 tool calls"}
 {"run_id": "28f42849163c", "source": "~/.pi/agent/sessions/--Users-shyamsivakumar-.t3-worktrees-strategy-replay-workbench-t3-016af9d2-92f09d67d58074f4--/2026-11-13T03-12-17-748Z_", "start": "2026-11-13T03:12:17.748000+00:00", "end": "2026-11-13T03:22:15.752000+00:00", "rule": "success_sample", "excerpt": "64 tool calls, no rule fired"}
+```
+
+## Time zone fix
+
+`ticks.log`, `decisions.md` and `lanes.log` stamps without a trailing `Z` are America/Los_Angeles and are converted to UTC (stamps ending in `Z` are already UTC). Corrected row: the decisions.md entry "2026-11-19 20:40 PT" now has start `2026-11-20T04:40:00+00:00`, where it was `2026-11-19T20:40:00+00:00` when parsed as UTC.
+
+```
+{"run_id": "c71c85128276", "source": "~/Code/coordinator/loop/decisions.md", "start": "2026-11-20T04:40:00+00:00", "end": "2026-11-20T04:40:00+00:00", "rule": "rate_limit", "excerpt": "- 2026-11-19 20:40 PT | route | gatekeep aborts its pass on nonexistent tickets: each of its last three passes queued a gate and then stopped with `GitHub request failed: repos/shyamsivakumar/mac-ops/issues/1131/comments?per_page=100`.
 ```

@@ -11,6 +11,7 @@ import random
 import re
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 HOME = Path.home()
@@ -45,7 +46,9 @@ SECRET = re.compile(
     r"\b(ghp|gho|ghs|github_pat|sk|xox[bp])[-_][A-Za-z0-9_-]{8,}|\bBearer\s+\S+)",
     re.I,
 )
-STAMP = re.compile(r"(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d(?::\d\d)?)")
+STAMP = re.compile(r"(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d(?::\d\d)?)(Z?)")
+UTC = datetime.timezone.utc
+LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 LOOP_MIN = 3
 ERRORS_MIN = 5
 BURST_PER_MINUTE = 60
@@ -60,7 +63,9 @@ def parse_ts(text):
     if not m:
         return None
     clock = m.group(2) if m.group(2).count(":") == 2 else m.group(2) + ":00"
-    return datetime.datetime.fromisoformat(f"{m.group(1)}T{clock}+00:00").timestamp()
+    zone = UTC if m.group(3) else LOS_ANGELES
+    naive = datetime.datetime.fromisoformat(f"{m.group(1)}T{clock}")
+    return naive.replace(tzinfo=zone).timestamp()
 
 
 def row(source, rule, start, end, excerpt, key):
