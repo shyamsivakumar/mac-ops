@@ -7,7 +7,8 @@ whole file, writes the matching rows to `<journal stem>.quarantine.jsonl`
 beside it, and rewrites the journal without them.
 
 A row matches when any string in it, `head` or a sha inside `data`, is one hex
-character repeated 40 times. No real sha looks like that, so the rule needs no
+character repeated 40 times, or a character repeated 8 times followed by a
+character repeated 32 times. No real sha looks like that, so the rule needs no
 time window and no repo or pull request filter.
 
 The journal's writers (coordinator/bin/journal.py) append under `flock` on
@@ -38,7 +39,7 @@ from pathlib import Path
 SETTLE_SECONDS = 1.0
 
 
-FIXTURE_SHA = re.compile(r"^([0-9a-f])\1{39}$")
+FIXTURE_SHA = re.compile(r"^([0-9a-f])\1{39}$|^([0-9a-f])\2{7}([0-9a-f])\3{31}$")
 
 
 def carries_fixture_sha(value):
