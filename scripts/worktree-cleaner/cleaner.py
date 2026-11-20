@@ -28,6 +28,8 @@ T3_WORKTREE_ROOT = Path.home() / ".t3/worktrees"
 ARCHIVE_ROOT = Path.home() / ".local/state/archive/worktrees"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
+BOOTSTRAP_DIRS = (".specstory/",)
+BOOTSTRAP_FILES = {".agents/legacy-instructions.md"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
 # The GitHub call path is the coordinator's, so a commit lookup is counted
 # in the same usage log as every other caller's.
@@ -144,9 +146,20 @@ def worktrees(repo: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def bootstrap_path(entry: str) -> bool:
+    return entry.startswith(BOOTSTRAP_DIRS) or entry in BOOTSTRAP_FILES
+
+
 def status_for(path: Path) -> tuple[bool, str]:
-    output = git(path, "status", "--porcelain=v1", "--untracked-files=all")
-    return bool(output.strip()), output.strip()
+    records = git_bytes(path, "status", "--porcelain=v1", "--untracked-files=all", "-z").split(b"\0")
+    lines = []
+    index = 0
+    while index < len(records) and records[index]:
+        record = os.fsdecode(records[index])
+        index += 2 if record[0] in "RC" else 1
+        if not (record.startswith("?? ") and bootstrap_path(record[3:])):
+            lines.append(record)
+    return bool(lines), "\n".join(lines)
 
 
 def detached_idle_seconds(path: Path) -> int | None:
