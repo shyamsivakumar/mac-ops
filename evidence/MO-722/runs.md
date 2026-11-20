@@ -34,3 +34,15 @@ FAIL credit-block: expected (False, False, [True]), got (True, True, [])
 $ COORDQ_DIR=$(mktemp -d) heavy python3 coordinator/overnight/selftest.py   # this head
 all 26 cases PASS, including credit-block
 ```
+
+## Merge of origin/main (#703, #704, #705, #715)
+Conflicts in `coordinator/bin/coordq` (PROVIDER_BLOCK_SECONDS beside JOURNAL_TITLE_LIMIT), `coordinator/bin/hourly_selftest.py` (EXPECTED has both `credit-block` and `close-evidence`) and `coordinator/overnight/selftest.py` (EVALS has both cases, `close_evidence` body kept from main). Both sides kept.
+```
+$ COORDQ_DIR=$(mktemp -d) python3 coordinator/overnight/overnight selftest
+27 cases PASS, including credit-block and close-evidence
+$ COORDQ_DIR=$(mktemp -d) python3 -m unittest tests.test_coordq_action_key tests.test_coordq_capacity tests.test_coordq_message_dedupe tests.test_ticket_gate_live tests.test_ticket_section_headings tests.test_ticket_text_blockers
+Ran 162 tests in 27.154s
+OK
+$ git diff origin/main...HEAD --stat
+coordinator/bin/coordq, coordinator/bin/hourly_selftest.py, coordinator/overnight/selftest.py, evidence/MO-722/*
+```
