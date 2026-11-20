@@ -391,7 +391,8 @@ def main():
     print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
     if args.plan:
         return
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+           "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR"))}
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
     dirty = [line for line in git("status", "--porcelain").decode().splitlines()
