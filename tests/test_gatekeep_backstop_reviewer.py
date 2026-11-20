@@ -31,6 +31,7 @@ THREAD = {"providerInstanceId": "router", "model": "task/ui"}
 RUNS = [{"executedModel": None}]
 # The task/ui route can run a Claude model, so the route is a Claude build.
 ROUTE = ["anthropic/claude-sonnet-5-5", "codex/gpt-6.1-terra"]
+ASTRA = {"instanceId": "openai-api", "model": "openai/gpt-6.2-astra"}
 
 coordq = None
 QUEUE_DIR = None
@@ -79,19 +80,24 @@ class GatekeepBase(unittest.TestCase):
     def setUp(self):
         self.saved = {name: getattr(coordq, name)
                       for name in ("gh_json", "load_receipts", "read_builder_thread",
-                                   "router_chain", "subprocess")}
+                                   "router_chain", "subprocess", "builder_thread_for_issue",
+                                   "gate_proof")}
         self.addCleanup(lambda: [setattr(coordq, name, value)
                                  for name, value in self.saved.items()])
-        self.pr = {"draft": False, "number": 7, "head": {"sha": HEAD},
+        self.pr = {"draft": False, "number": 7, "head": {"sha": HEAD}, "changed_files": 0,
                    "body": f"Refs #9\nBuilder check: PASS {HEAD}\n"}
         coordq.subprocess = types.SimpleNamespace(
             run=lambda *a, **k: FakeRun("me\n"))
         coordq.load_receipts = lambda: {RECEIPT["requestId"]: "thread-1"}
         coordq.read_builder_thread = lambda thread_id: (THREAD, RUNS)
         coordq.router_chain = lambda route: ROUTE
+        coordq.builder_thread_for_issue = lambda repo, issue: "thread-1"
+        coordq.gate_proof = lambda settings, repo, issue, head: ("missing", None, None)
         coordq.gh_json = self.fake_gh
 
-    def fake_gh(self, endpoint):
+    def fake_gh(self, endpoint, **options):
+        if endpoint.endswith("/files?per_page=100"):
+            return []
         if endpoint.startswith(f"repos/{REPO}/pulls"):
             return [self.pr]
         if "/issues/" in endpoint and endpoint.endswith("/comments?per_page=100"):
@@ -116,7 +122,7 @@ class GatekeepBackstopTest(GatekeepBase):
         candidates = [e for e in events if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6-astra"})
+                         ASTRA)
 
     def test_no_skip_is_reported(self):
         events = self.candidates()
@@ -128,7 +134,7 @@ class GatekeepBackstopTest(GatekeepBase):
         lines = [line for line in self.errors.splitlines() if line.startswith("backstop ")]
         self.assertEqual(len(lines), 1)
         self.assertIn(f"backstop {REPO}#7: executed model unavailable", lines[0])
-        self.assertIn("reviewer codex gpt-6-astra", lines[0])
+        self.assertIn("reviewer openai-api openai/gpt-6.2-astra", lines[0])
 
     def test_the_backstop_line_is_logged_once_for_two_issues(self):
         self.pr["body"] = "Refs #9\nRefs #10\n"
@@ -148,7 +154,7 @@ class GatekeepBackstopTest(GatekeepBase):
         candidates = [e for e in events if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6-astra"})
+                         ASTRA)
         self.assertEqual([l for l in self.errors.splitlines() if l.startswith("backstop ")], [])
 
     def test_a_minimax_builder_gets_astra(self):
@@ -158,7 +164,7 @@ class GatekeepBackstopTest(GatekeepBase):
         candidates = [e for e in events if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6-astra"})
+                         ASTRA)
 
 
 class GatekeepQueueTest(GatekeepBase):
@@ -188,7 +194,7 @@ class GatekeepQueueTest(GatekeepBase):
         gates = [item for item in queue["items"] if item["tool"] == "t3_thread_launch"]
         self.assertEqual(len(gates), 1)
         self.assertEqual(gates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6-astra"})
+                         ASTRA)
 
     def test_a_gated_head_is_not_stuck(self):
         for _ in range(coordq.STUCK_COUNT):

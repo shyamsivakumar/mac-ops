@@ -17,5 +17,6 @@
   "agent_restart": true,
   "min_headroom_bytes_by_host": {
     "shyams-macbook-pro": 2147483648
-  }
+  },
+  "foreground_build_hosts": ["shyams-macbook-pro"]
 }
