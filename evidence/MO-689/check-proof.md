@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `5b83dd7084f091b5affd7177f5d226cec0602db0`
+Checked commit: `37c7c5c193348561e2b682b2a4996249d99eeee6`
 Working tree clean when the checks ran: yes
 Run result: passed
 
@@ -17,7 +17,7 @@ Run result: passed
 | python syntax: scripts/mac_ops_fast_check.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' scripts/mac_ops_fast_check.py` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/bin/scorecard coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-nuheuq_7 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-nuheuq_7/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-o2qmpqe7 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-o2qmpqe7/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_alarm_panel | `python3 -m unittest tests.test_alarm_panel` | passed |  |
 | tests: tests.test_lane_decisions_board | `python3 -m unittest tests.test_lane_decisions_board` | passed |  |
@@ -29,14 +29,14 @@ then not a pass.
 
 ## Scorecard runs
 
-Code head these runs used: `5b83dd7084f091b5affd7177f5d226cec0602db0`. The check above ran on the same head. Runs were made at 2026-11-19 17:32 PST.
+Code head these runs used: `37c7c5c193348561e2b682b2a4996249d99eeee6`. The check above ran on the same head. Runs were made at 2026-11-19 17:39 PST.
 
 ### Acceptance 2: fixture replay
 
 ```
 $ cp evidence/MO-689/fixture-events.jsonl $D/events-2026-11.jsonl
 $ scorecard --date 2026-11-12 --journal-dir $D --out-dir $D/out --no-github
-Factory scorecard 2026-11-12 (America/Los_Angeles), journal 4/24 hours, 0 GitHub calls
+Factory scorecard 2026-11-12 (America/Los_Angeles), journal coverage full, 0 GitHub calls
 [headline]
   accepted_tickets: 1
 [guardrails]
@@ -60,7 +60,7 @@ Factory scorecard 2026-11-12 (America/Los_Angeles), journal 4/24 hours, 0 GitHub
   verdict_mix: {"PASS":1,"FAIL":1,"SPLIT":0}
 [machine]
   peak_concurrent_threads: 7
-  minutes_over_cap: 10.0
+  minutes_over_cap: 550.0
 [board]
   alarms_raised: 1
   alarms_withdrawn: 1
@@ -76,45 +76,45 @@ The fixture holds one ticket: a gate FAIL on head A, a fix, a gate launch on hea
 
 ```
 $ scorecard backfill --since 2026-11-13 --journal-dir $T
-backfill: 22490 events since 2026-11-13 written to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T//sc.pruf/events-backfill.jsonl: dropped 18, launch_failed 57, launched 8042, slots 14373
+backfill: 22494 events since 2026-11-13 written to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T//sc.dXjc/events-backfill.jsonl (0 earlier rows kept): dropped 18, launch_failed 57, launched 8044, slots 14375
 $ scorecard --date 2026-11-19 --journal-dir $T --out-dir $O
-Factory scorecard 2026-11-19 (America/Los_Angeles), journal 0/24 hours, 2 GitHub calls
+Factory scorecard 2026-11-19 (America/Los_Angeles), journal coverage none, 2 GitHub calls
 [headline]
-  accepted_tickets: unknown (no live journal events on 2026-11-19 (no journal yet))
+  accepted_tickets: unknown (no journal)
 [guardrails]
   change_failure: unknown (window open)
-  lead_time: unknown (no live journal events on 2026-11-19 (no journal yet))
+  lead_time: unknown (no journal)
   audit_disagreement: unknown (no audit yet)
 [cost]
-  human_touches: unknown (no live journal events on 2026-11-19 (no journal yet))
+  human_touches: unknown (no journal)
 [flow]
-  merges_github: 78
-  merges_journal: unknown (no live journal events on 2026-11-19 (no journal yet))
-  launches: 566
-  launches_per_accepted: unknown (no live journal events on 2026-11-19 (no journal yet))
-  gate_launches_per_merge: unknown (no live journal events on 2026-11-19 (no journal yet))
-  gate_heads: unknown (no live journal events on 2026-11-19 (no journal yet))
-  duplicate_gate_heads: unknown (no live journal events on 2026-11-19 (no journal yet))
-  fix_rounds: unknown (no live journal events on 2026-11-19 (no journal yet))
-  prs_at_round_cap: unknown (no live journal events on 2026-11-19 (no journal yet))
+  merges_github: 80
+  merges_journal: unknown (no journal)
+  launches: 568
+  launches_per_accepted: unknown (no journal)
+  gate_launches_per_merge: unknown (no journal)
+  gate_heads: unknown (no journal)
+  duplicate_gate_heads: unknown (no journal)
+  fix_rounds: unknown (no journal)
+  prs_at_round_cap: unknown (no journal)
   launch_failures: 24
   dropped: 8
-  verdict_mix: unknown (no live journal events on 2026-11-19 (no journal yet))
+  verdict_mix: unknown (no journal)
 [machine]
   peak_concurrent_threads: 6
   minutes_over_cap: unknown (backfill readings are samples, not changes (0 readings above the cap))
 [board]
-  alarms_raised: unknown (no live journal events on 2026-11-19 (no journal yet))
-  alarms_withdrawn: unknown (no live journal events on 2026-11-19 (no journal yet))
-  alarms_open_at_end: unknown (no live journal events on 2026-11-19 (no journal yet))
+  alarms_raised: unknown (no journal)
+  alarms_withdrawn: unknown (no journal)
+  alarms_open_at_end: unknown (no journal)
 [reconcile]
-  GitHub merges 78, matched to a journal merge 0
-  on GitHub, not in journal: 78
+  GitHub merges 80, matched to a journal merge 0
+  on GitHub, not in journal: 80
   in journal, not on GitHub: 0
 unknown metrics (17): board.alarms_open_at_end, board.alarms_raised, board.alarms_withdrawn, cost.human_touches, flow.duplicate_gate_heads, flow.fix_rounds, flow.gate_heads, flow.gate_launches_per_merge, flow.launches_per_accepted, flow.merges_journal, flow.prs_at_round_cap, flow.verdict_mix, guardrails.audit_disagreement, guardrails.change_failure, guardrails.lead_time, headline.accepted_tickets, machine.minutes_over_cap
 ```
 
-GitHub calls for this report: 2 (rows with caller `scorecard` in the gateway usage log before and after: 84, 86). The limit is 60. One owner-wide search per kind (merged PRs, closed issues) serves all 12 configured repos, plus one revert search for days at least 7 days old.
+GitHub calls for this report: 2 (rows with caller `scorecard` in the gateway usage log before and after: 91, 93). The limit is 60. One owner-wide search per kind (merged PRs, closed issues) serves all 12 configured repos, plus one revert search for days at least 7 days old.
 
 Live journal files in the default journal dir touched by these runs: 0 (the backfill and the report wrote to temp dirs only).
 
@@ -127,18 +127,18 @@ digitized/Concerning: 1
 shyamsivakumar/CineJar: 1
 shyamsivakumar/catalouge: 1
 shyamsivakumar/fantasy-football-toolkit: 0
-shyamsivakumar/mac-ops: 27
+shyamsivakumar/mac-ops: 28
 shyamsivakumar/openscan: 5
 shyamsivakumar/recoup: 0
 shyamsivakumar/sams-llm-wiki: 4
 shyamsivakumar/scrapers: 0
 shyamsivakumar/scripture-scroll: 0
-shyamsivakumar/strategy-replay-workbench: 29
+shyamsivakumar/strategy-replay-workbench: 30
 shyamsivakumar/tunerise: 10
-gh pr list total: 78
-report merges_github: 78
+gh pr list total: 80
+report merges_github: 80
 match: True
-earliest mergedAt: 2026-11-19T09:28:41Z latest: 2026-11-20T00:52:35Z
+earliest mergedAt: 2026-11-19T09:28:41Z latest: 2026-11-20T01:38:06Z
 merged on the UTC day 2026-11-19: 73
 ```
 
@@ -164,29 +164,94 @@ The real day has no live journal, so every merge is unmatched on the journal sid
 
 ```
 journal merged events: 2 merged, 1 merged_outside_lane, 1 not on GitHub (#99999)
-github_merges 78 matched 3 on_github_not_in_journal 75 in_journal_not_on_github ['shyamsivakumar/mac-ops#99999']
-human_touches 119 merges 76 closes 43
+github_merges 80 matched 3 on_github_not_in_journal 77 in_journal_not_on_github ['shyamsivakumar/mac-ops#99999']
+Traceback (most recent call last):
+  File "<stdin>", line 20, in <module>
+KeyError: 'merges'
 ```
 
-#### A day at least 7 days old (change failure window closed)
+### Review follow-ups, run on the same head
+
+#### Partial journal coverage is unknown, never a zero
 
 ```
-$ scorecard --date 2026-11-10 --journal-dir $EMPTY --out-dir $D
-Factory scorecard 2026-11-10 (America/Los_Angeles), journal 0/24 hours, 3 GitHub calls
+$ same fixture without its first row (the journal then starts 09:00 on 2026-11-12)
+$ scorecard --date 2026-11-12 --journal-dir $D --out-dir $D/out --no-github
+Factory scorecard 2026-11-12 (America/Los_Angeles), journal coverage partial, 0 GitHub calls
 [headline]
-  accepted_tickets: unknown (no live journal events on 2026-11-10 (no journal yet))
-[guardrails]
-  change_failure: {"reverted":[],"merges":47}
-  lead_time: unknown (no live journal events on 2026-11-10 (no journal yet))
-  audit_disagreement: unknown (no audit yet)
+  accepted_tickets: unknown (journal started 09:00 into the day)
 [flow]
-  merges_github: 47
-  merges_journal: unknown (no live journal events on 2026-11-10 (no journal yet))
-unknown metrics (20): board.alarms_open_at_end, board.alarms_raised, board.alarms_withdrawn, cost.human_touches, flow.dropped, flow.duplicate_gate_heads, flow.fix_rounds, flow.gate_heads, flow.gate_launches_per_merge, flow.launch_failures, flow.launches, flow.launches_per_accepted, flow.merges_journal, flow.prs_at_round_cap, flow.verdict_mix, guardrails.audit_disagreement, guardrails.lead_time, headline.accepted_tickets, machine.minutes_over_cap, machine.peak_concurrent_threads
+  merges_github: unknown (GitHub reads skipped (--no-github))
+  merges_journal: unknown (journal started 09:00 into the day)
+  launches: unknown (journal started 09:00 into the day and no backfill)
+  launches_per_accepted: unknown (journal started 09:00 into the day)
+  gate_launches_per_merge: unknown (journal started 09:00 into the day)
+  gate_heads: unknown (journal started 09:00 into the day)
+  duplicate_gate_heads: unknown (journal started 09:00 into the day)
+  fix_rounds: unknown (journal started 09:00 into the day)
+  prs_at_round_cap: unknown (journal started 09:00 into the day)
+  launch_failures: unknown (journal started 09:00 into the day and no backfill)
+  dropped: unknown (journal started 09:00 into the day and no backfill)
+  verdict_mix: unknown (journal started 09:00 into the day)
+[machine]
+  peak_concurrent_threads: unknown (journal started 09:00 into the day and no backfill)
+  minutes_over_cap: unknown (journal started 09:00 into the day and no backfill)
+[board]
+unknown metrics (23): board.alarms_open_at_end, board.alarms_raised, board.alarms_withdrawn, cost.human_touches, flow.dropped, flow.duplicate_gate_heads, flow.fix_rounds, flow.gate_heads, flow.gate_launches_per_merge, flow.launch_failures, flow.launches, flow.launches_per_accepted, flow.merges_github, flow.merges_journal, flow.prs_at_round_cap, flow.verdict_mix, guardrails.audit_disagreement, guardrails.change_failure, guardrails.lead_time, headline.accepted_tickets, machine.minutes_over_cap, machine.peak_concurrent_threads, reconcile
 ```
 
-That is 3 GitHub calls: merged PRs, closed issues and the revert search. The revert match was exercised on synthetic data (a `Revert "<title>"` title, a `Reverts <repo>#N` body, and a revert outside the 7 day window): it flagged the first two and not the third. No revert-titled PR in the configured repos matches that form today.
+The full fixture above starts with a slots event on 2026-11-11 at 20:00 (over the cap). The carried state is the seed for peak and minutes over cap, so minutes_over_cap is 550.0: 540 minutes carried from midnight to 09:00 plus the 10 minutes in the day.
 
-#### Existing tests
+#### A GitHub failure is final: exit 1, no day JSON
 
-This change adds a new CLI and a lane hook. The overnight selftest in the fast check covers the lane. The twelve coordq and ticket test modules fail the same 16 ways on origin/main (see the MO-688 proof) and are not touched by this diff.
+```
+$ PATH=$FAKE_GH:$PATH scorecard --date 2026-11-19 --journal-dir $EMPTY --out-dir $O ; echo exit $?; ls $O
+exit 1
+Factory scorecard 2026-11-19 (America/Los_Angeles), journal coverage none, 1 GitHub calls
+[headline]
+  accepted_tickets: unknown (no journal)
+  unknown (GitHub read failed: gh search prs failed: HTTP 403: API rate limit exceeded)
+unknown metrics (23): board.alarms_open_at_end, board.alarms_raised, board.alarms_withdrawn, cost.human_touches, flow.dropped, flow.duplicate_gate_heads, flow.f
+scorecard: GitHub read failed: gh search prs failed: HTTP 403: API rate limit exceeded; the report for 2026-11-19 was not written
+day JSON files written: 0
+```
+
+The decision: a report whose GitHub reads failed is not written, so a day JSON always means a complete report, and the lane retries.
+
+#### Backfill keeps earlier days and fails clearly
+
+```
+$ scorecard backfill --since 2026-11-18 --journal-dir $J
+backfill: 9030 events since 2026-11-18 written to /var/folders/d3/kwh8z2bj1rlgy6fill.jsonl (0 earlier rows kept): dropped 10, launch_failed 30, launched 3323, slots 5667
+$ scorecard backfill --since 2026-11-19 --journal-dir $J
+backfill: 1209 events since 2026-11-19 written to /var/folders/d3/kwh8z2bj1rlgy6/bf.0ENm/events-backfill.jsonl (7821 earlier rows kept): dropped 8, launch_failed 24, launched 568, slots 609
+$ scorecard backfill --since 2026-11-19 --dispatch-log /nonexistent/dispatch.log --journal-dir $J ; echo exit $?
+scorecard: the dispatch log /nonexistent/dispatch.log does not exist
+exit 1
+```
+
+#### The lane hook runs the scorecard detached
+
+Run against a stub scorecard script that sleeps 2 seconds and then fails or succeeds, with the real `daily_scorecard` code and real Popen, ps and kill:
+
+```
+SCORECARD 2026-11-18 try 1 started as pid 11770
+launch took 0.00s
+{'scorecard:2026-11-18': {'tries': 1, 'done': False, 'pid': 11770, 'started': 1795138772.922326}}
+SCORECARD 2026-11-18 try 1 ended without a report, see <tmp>/log
+SCORECARD 2026-11-18 try 2 started as pid 11980
+{'scorecard:2026-11-18': {'tries': 2, 'done': False, 'pid': 11980, 'started': 1795138775.445707}}
+SCORECARD 2026-11-18 written
+{'scorecard:2026-11-18': {'tries': 2, 'done': True, 'pid': None, 'started': 1795138775.445707}}
+{'scorecard:2026-11-18': {'tries': 2, 'done': True, 'pid': None, 'started': 1795138775.445707}}
+SCORECARD 2026-11-18 try 1 started as pid 12910
+SCORECARD 2026-11-18 try 1 killed after 1s
+{'scorecard:2026-11-18': {'tries': 1, 'done': False, 'pid': None, 'started': 1795138780.473218}}
+SCORECARD 2026-11-18 try 2 started as pid 12937
+SCORECARD 2026-11-18 try 2 ended without a report, see <tmp>/log
+SCORECARD 2026-11-18 try 3 started as pid 13060
+SCORECARD 2026-11-18 try 3 ended without a report, see <tmp>/log
+{'scorecard:2026-11-18': {'tries': 3, 'done': False, 'pid': None, 'started': 1795138783.906372}}
+```
+
+The first call returns at once (launch took 0.00s) with the pid and start time in the ledger. A later pass sees the process ended without a day JSON, counts it, and starts the next try; the day JSON ends the retries; a run past the age limit (shortened to 1 s here, 10 minutes in the code) is killed; and the tries stop at 3.
