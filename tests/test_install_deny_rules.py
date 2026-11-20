@@ -262,6 +262,7 @@ class ListTest(unittest.TestCase):
             families = [f for f, _ in hook_module.push_findings(["origin", "t3/x", flag])]
             self.assertIn("force_push", families, flag)
         self.assertEqual(hook_module.SECRET_FILE_RE, SPEC["secret_file_re"])
+        self.assertEqual(hook_module.SECRET_DIRS, SPEC["secret_dirs"])
         self.assertEqual(
             hook_module.FAMILY_MODES,
             {name: family["mode"] for name, family in SPEC["families"].items()},
@@ -531,6 +532,43 @@ class HookTest(unittest.TestCase):
             "gh api repos/a/b", "ls ~/.ssh",
         ):
             self.assertIsNone(self.decided(command), command)
+
+    def test_removal_patterns_are_expanded_and_their_directories_protected(self):
+        ssh, keys, work = self.home / ".ssh", self.home / "keys", self.home / "work"
+        for directory in (ssh, keys, work / "build", self.home / "Code/slash-eureka/a"):
+            directory.mkdir(parents=True)
+        for path in (ssh / "id_ed25519", keys / "x.pem", keys / ".env", work / "a.log", work / "build/a.o"):
+            path.write_text("fake")
+
+        def at(command, cwd):
+            return self.decided(command, cwd=str(cwd))
+
+        hard = [
+            ("rm ~/.ssh/id_*", work),
+            ("rm ~/.ssh/nothing_*", work),
+            ("rm ~/.ssh/*", work),
+            ("rm *.pem", keys),
+            ("rm .en?", keys),
+            ("rm {a,x}.pem", keys),
+            ("rm [x].pem", keys),
+            ("find ~/.ssh -name 'id_*' -delete", work),
+            ("find . -name '*.log' -delete", keys),
+            ("find . -exec rm {} +", keys),
+            ("rm ~/Code/slash-eureka/*/x", work),
+            ("git rm .env", keys),
+            ("git -C keys rm x.pem", self.home),
+            ("ls | xargs -0 rm x.pem", keys),
+            ("echo $(rm *.pem)", keys),
+            ("cat <(rm .env)", keys),
+        ]
+        for command, cwd in hard:
+            self.assertEqual(at(command, cwd)["permissionDecision"], "deny", command)
+        allowed = [
+            "rm build/*.o", "rm *.log", "find build -name '*.o' -delete",
+            "git rm a.log", "rm -r build/*", "xargs rm a.log",
+        ]
+        for command in allowed:
+            self.assertIsNone(at(command, work), command)
 
     def test_an_ascend_session_skips_the_ascend_check_only(self):
         ascend = str(self.home / "Code/slash-eureka")

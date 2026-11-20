@@ -32,6 +32,7 @@ Exit 0 with a decision blocks or asks; exit 0 with no output allows.
 Installed by scripts/install_deny_rules.py; do not edit the installed copy.
 """
 
+import glob
 import json
 import os
 import re
@@ -75,13 +76,15 @@ WRAPPERS = {
     "heavy",
     "timeout",
     "caffeinate",
+    "xargs",
 }
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
-COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "gh", "eval"}
+COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "gh", "eval", "rm", "rmdir", "unlink", "trash", "find"}
 KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
 SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
+SECRET_DIRS = ["~/.ssh"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
 FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
@@ -91,6 +94,8 @@ REMOVAL_REASON = "removing secret files or anything under ~/Code/slash-eureka is
 DIRECTORY_CHANGERS = {"cd", "pushd"}
 READ_ONLY_COMMANDS = {"ls"} | DIRECTORY_CHANGERS
 REMOVERS = {"rm", "rmdir", "unlink", "trash"}
+EXEC_FLAGS = {"-exec", "-execdir", "-ok", "-okdir"}
+GLOB_CHARS = r"[*?\[{]"
 CLOUD_CLIS = {"gcloud", "bq", "heroku"}
 INTERACTIVE_MODES = {"default", "acceptEdits", "plan", "auto"}
 SECRET_FORMAT_RE = r"(?i)payload|secret|password|token|private_key|\bkey\b"
@@ -339,11 +344,17 @@ def cloud_findings(name, words):
     return found + [("remote_delete", DELETE_REASON)] * deletes
 
 
-def push_arguments(words):
+def git_arguments(words):
+    """The subcommand and its arguments, skipping global options such as `-C dir`."""
     i = 1
     while i < len(words) and words[i].startswith("-"):
         i += 2 if words[i] in GIT_VALUE_OPTIONS else 1
-    return words[i + 1 :] if i < len(words) and words[i] == "push" else None
+    return (words[i], words[i + 1 :]) if i < len(words) else ("", [])
+
+
+def push_arguments(words):
+    subcommand, args = git_arguments(words)
+    return args if subcommand == "push" else None
 
 
 def destination(token):
@@ -398,12 +409,7 @@ def push_findings(args):
 
 
 def in_ascend(path):
-    real = os.path.realpath(path)
-    for root in ASCEND_ROOTS:
-        root = os.path.realpath(os.path.expanduser(root))
-        if real == root or real.startswith(root + os.sep):
-            return True
-    return False
+    return in_roots(path, ASCEND_ROOTS)
 
 
 def resolve(word, here):
@@ -424,13 +430,100 @@ def operands(words):
     return found
 
 
+def in_roots(path, roots):
+    real = os.path.realpath(path)
+    for root in roots:
+        root = os.path.realpath(os.path.expanduser(root))
+        if real == root or real.startswith(root + os.sep):
+            return True
+    return False
+
+
+def protected_path(path, ascend_session):
+    """A secret file, a secret directory, or (outside an Ascend session) the Ascend tree."""
+    secret = any(re.search(SECRET_FILE_RE, p) for p in (path, os.path.realpath(path)))
+    return secret or in_roots(path, SECRET_DIRS) or (not ascend_session and in_ascend(path))
+
+
+def brace_expand(word):
+    found = re.search(r"\{([^{}]*,[^{}]*)\}", word)
+    if not found:
+        return [word]
+    head, tail = word[: found.start()], word[found.end() :]
+    return [x for alt in found.group(1).split(",") for x in brace_expand(head + alt + tail)]
+
+
+def literal_directory(path):
+    prefix = re.split(GLOB_CHARS, path, maxsplit=1)[0]
+    return prefix if prefix.endswith("/") else os.path.dirname(prefix)
+
+
+def removal_target_protected(word, here, ascend_session):
+    """A removal operand is protected when it is, when its literal directory is, or when any file its pattern matches now is."""
+    path = resolve(word, here)
+    if protected_path(path, ascend_session):
+        return True
+    if not re.search(GLOB_CHARS, path):
+        return False
+    if protected_path(literal_directory(path), ascend_session):
+        return True
+    return any(
+        protected_path(match, ascend_session)
+        for expanded in brace_expand(path)
+        for match in glob.glob(expanded, recursive=False)
+    )
+
+
+def find_start_directories(words):
+    starts = []
+    for word in words[1:]:
+        if word.startswith("-") and word not in {"-H", "-L", "-P"}:
+            break
+        if word in {"(", "!", ")", "-H", "-L", "-P"}:
+            continue
+        starts.append(word)
+    return starts
+
+
+def find_protected(words, here, ascend_session):
+    """`find <dir> ... -delete` removes under <dir>: protected when <dir> is, or holds a protected file at the top level."""
+    for word in find_start_directories(words):
+        if removal_target_protected(word, here, ascend_session):
+            return True
+        directory = resolve(word, here)
+        if os.path.isdir(directory) and any(
+            protected_path(os.path.join(directory, entry), ascend_session)
+            for entry in os.listdir(directory)
+        ):
+            return True
+    return False
+
+
+def removal_command(words):
+    name = os.path.basename(words[0])
+    if name in REMOVERS:
+        return True
+    return name == "find" and (
+        "-delete" in words
+        or any(
+            words[i] in EXEC_FLAGS and os.path.basename(words[i + 1]) in REMOVERS
+            for i in range(len(words) - 1)
+        )
+    )
+
+
 def path_findings(words, here, ascend_session):
     name = os.path.basename(words[0])
-    removes = name in REMOVERS or (name == "find" and "-delete" in words)
+    removes = removal_command(words)
     paths = [resolve(word, here) for word in operands(words)]
     secret = any(re.search(SECRET_FILE_RE, path) for path in paths)
     ascend = not ascend_session and any(in_ascend(path) for path in paths)
-    if removes and (secret or ascend):
+    if removes and (
+        secret
+        or ascend
+        or (name == "find" and find_protected(words, here, ascend_session))
+        or (name != "find" and any(removal_target_protected(w, here, ascend_session) for w in operands(words)))
+    ):
         return [("protected_removal", REMOVAL_REASON)]
     found = []
     if secret and name not in READ_ONLY_COMMANDS:
@@ -454,8 +547,12 @@ def command_findings(commands, cwd, ascend_session):
             found += gh_findings(words)
         elif name in CLOUD_CLIS:
             found += cloud_findings(name, words)
-        elif name == "git" and (args := push_arguments(words)) is not None:
-            found += push_findings(args)
+        elif name == "git":
+            subcommand, args = git_arguments(words)
+            if subcommand == "push":
+                found += push_findings(args)
+            elif subcommand == "rm":
+                found += path_findings(["rm", *args], here, ascend_session)
         targets = operands(words)
         if name in DIRECTORY_CHANGERS and targets:
             here = resolve(targets[0], here)
