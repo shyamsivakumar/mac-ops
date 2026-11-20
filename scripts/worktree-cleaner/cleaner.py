@@ -467,7 +467,7 @@ class GitHub:
         try:
             result = run([
                 "gh", "pr", "list", "--repo", repo, "--head", branch,
-                "--state", "all", "--limit", "1000", "--json", "number,state,headRefName,headRefOid",
+                "--state", "all", "--limit", "1000", "--json", "number,state,headRefName,headRefOid,mergeCommit",
             ])
         except SafetyError:
             result = None
@@ -484,20 +484,37 @@ class GitHub:
         return self.pull_requests[key]
 
 
-def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *, refresh: bool = False) -> tuple[bool, str | None, str | None]:
+def upstream_branch(path: Path, branch: str) -> str | None:
+    result = run(["git", "-C", str(path), "config", "--get", f"branch.{branch}.merge"])
+    merge_ref = result.stdout.strip().removeprefix("refs/heads/")
+    return merge_ref if result.returncode == 0 and merge_ref else None
+
+
+def merged_contains(path: Path, head: str, pr: dict[str, Any]) -> bool:
+    tips = [pr.get("headRefOid"), (pr.get("mergeCommit") or {}).get("oid")]
+    return any(tip and run(["git", "-C", str(path), "merge-base", "--is-ancestor", head, tip]).returncode == 0 for tip in tips)
+
+
+def verify_pr(github: GitHub, repo: str | None, path: Path, branch: str | None, head: str, *, refresh: bool = False) -> tuple[bool, str | None, str | None]:
     if not repo or not branch:
         return False, "github_repository_unknown", None
-    prs = github.prs(repo, branch, refresh=refresh)
-    if prs is None:
-        return False, "github_pr_state_unavailable", None
-    matching = [row for row in prs if row.get("headRefName") == branch]
+    names = list(dict.fromkeys([branch, upstream_branch(path, branch) or branch]))
+    matching = []
+    for name in names:
+        prs = github.prs(repo, name, refresh=refresh)
+        if prs is None:
+            return False, "github_pr_state_unavailable", None
+        matching += [row for row in prs if row.get("headRefName") == name]
     if any(str(row.get("state", "")).upper() == "OPEN" for row in matching):
         return False, "github_pr_open", None
-    closed = [row for row in matching if str(row.get("state", "")).upper() in {"CLOSED", "MERGED"} and str(row.get("headRefOid", "")).lower() == head.lower()]
+    closed = [
+        row for row in matching
+        if str(row.get("headRefOid", "")).lower() == head.lower() and str(row.get("state", "")).upper() in {"CLOSED", "MERGED"}
+        or str(row.get("state", "")).upper() == "MERGED" and merged_contains(path, head, row)
+    ]
     if not closed:
         return False, "github_pr_not_closed_for_head", None
-    row = closed[-1]
-    return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
+    return True, None, f"https://github.com/{repo}/pull/{closed[-1].get('number')}"
 
 
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
@@ -559,7 +576,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         if idle is None or idle < 24 * 60 * 60:
             reasons.append("detached_not_proven_24h_old")
     elif not result["main_checkout"]:
-        ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
+        ok, why, pr_url = verify_pr(github, repo_slug, path, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url
         if not ok and why:
             reasons.append(why)
@@ -681,7 +698,7 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str, extra: dic
         "removed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repo": row["repo"], "path": row["path"], "branch": row["branch"],
         "head": row["head"], "pull_request": row["pull_request"],
-        "reason": "clean, remote commit verified, no live T3 thread, and closed PR or detached idle for 24 hours",
+        "reason": "clean, remote commit verified, no live T3 thread, and closed or merged PR (commits contained) or detached idle for 24 hours",
         **(extra or {}),
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
@@ -795,6 +812,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_remove_failed"]
                     continue
+                run(["git", "-C", str(repo_root), "worktree", "prune"])
                 append_removal(state_root, candidate, "removed")
                 candidate["eligible"] = False
                 candidate["removed"] = True
