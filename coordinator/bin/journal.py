@@ -16,6 +16,7 @@ import functools
 import hashlib
 import json
 import os
+import pathlib
 import re
 import sys
 import time
@@ -68,18 +69,16 @@ def installed_sha():
 
 
 def manifest_hash(arm):
-    path = os.path.join(_COORDINATOR_DIR, "config", "factory.json")
-    if not os.path.exists(path):
+    root = pathlib.Path(_COORDINATOR_DIR)
+    path = root / "config" / "factory.json"
+    if not path.exists():
         return None
-    with open(path) as fh:
-        manifest = json.load(fh)
-    names = manifest["arms"].get(arm)
+    names = json.loads(path.read_text())["arms"].get(arm)
     if names is None:
         return None
     digest = hashlib.sha256()
     for name in names:
-        with open(os.path.join(_COORDINATOR_DIR, name), "rb") as fh:
-            digest.update(fh.read())
+        digest.update((root / name).read_bytes())
     return digest.hexdigest()
 
 
