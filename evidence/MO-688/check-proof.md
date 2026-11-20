@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `05d3b0af0f70ae328219d2fa3a627374f0806892`
+Checked commit: `f577faf5d0c098d6f830f354b736180e82d0a9d5`
 Working tree clean when the checks ran: yes
 Run result: passed
 
@@ -16,7 +16,7 @@ Run result: passed
 | python syntax: scripts/mac_ops_fast_check.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' scripts/mac_ops_fast_check.py` | passed |  |
 | ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-wlfjp4py -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-wlfjp4py/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-qsyzdid9 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-qsyzdid9/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_alarm_panel | `python3 -m unittest tests.test_alarm_panel` | passed |  |
 | tests: tests.test_lane_decisions_board | `python3 -m unittest tests.test_lane_decisions_board` | passed |  |
@@ -28,7 +28,7 @@ then not a pass.
 
 ## Journal runs
 
-Code head these runs used: `05d3b0af0f70ae328219d2fa3a627374f0806892`. The check above ran on the same head.
+Code head these runs used: `f577faf5d0c098d6f830f354b736180e82d0a9d5`. The check above ran on the same head.
 
 ### Acceptance 2: concurrency, 8 processes x 500 emits
 
@@ -51,15 +51,14 @@ $ coordq start ... --tool t3_thread_bogus   # tool refusal
 refused: tool 't3_thread_bogus' is not dispatchable. Accepted tools: t3_thread_launch, t3_thread_send
 $ coordq dispatch   # drain again, slot triple unchanged: no slots line
 $ coordq status
-{"cap": 6, "live": 2, "reserved": {"1": 1795137375.463874}, "queued": 0, "failed": [], "stuck": [], "tickAlarm": ""}
+{"cap": 6, "live": 2, "reserved": {"1": 1795137753.093059}, "queued": 0, "failed": [], "stuck": [], "tickAlarm": ""}
 $ wc -l and lines in the journal
-       6
-{"v":1,"ts":1795137375.3380868,"event":"enqueued","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":1,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","taskType":null,"modelSelection":null}}
-{"v":1,"ts":1795137375.4636931,"event":"slots","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"live":2,"reserved":0,"cap":6,"over_cap":false}}
-{"v":1,"ts":1795137375.470134,"event":"launched","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":1,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","live":2,"reserved":1,"cap":6}}
-{"v":1,"ts":1795137375.48283,"event":"slots","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"live":2,"reserved":1,"cap":6,"over_cap":false}}
-{"v":1,"ts":1795137375.539884,"event":"refused","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":null,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","reason":"refused: duplicate message 'sandbox' for t-x: already started as coordq #1"}}
-{"v":1,"ts":1795137375.591098,"event":"refused","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":null,"attempt":null,"kind":"other","data":{"tool":"t3_thread_bogus","reason":"refused: tool 't3_thread_bogus' is not dispatchable. Accepted tools: t3_thread_launch, t3_thread_send"}}
+       5
+{"v":1,"ts":1795137752.986094,"event":"enqueued","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":1,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","taskType":null,"modelSelection":null}}
+{"v":1,"ts":1795137753.092844,"event":"slots","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"live":2,"reserved":0,"cap":6,"over_cap":false}}
+{"v":1,"ts":1795137753.099838,"event":"launched","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":1,"attempt":null,"kind":"other","data":{"tool":"t3_thread_send","live":2,"reserved":1,"cap":6}}
+{"v":1,"ts":1795137753.112918,"event":"slots","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":null,"item":null,"attempt":null,"kind":null,"data":{"live":2,"reserved":1,"cap":6,"over_cap":false}}
+{"v":1,"ts":1795137753.2343009,"event":"refused","actor":"coordq","repo":null,"ticket":null,"pr":null,"head":null,"thread":"t-x","item":null,"attempt":null,"kind":"other","data":{"tool":"t3_thread_bogus","reason":"refused: tool 't3_thread_bogus' is not dispatchable. Accepted tools: t3_thread_launch, t3_thread_send"}}
 ```
 
 Read-only ticket command, journal dir empty afterwards:
@@ -85,33 +84,31 @@ Emits that need a real launch, a real gate or a real merge are not run here. By 
 - `coordinator/bin/coordq:897` `            refuse_start(refusal, requested, tool)`
 - `coordinator/bin/coordq:904` `                refuse_start(f"refused: {e}", args, tool)`
 - `coordinator/bin/coordq:919` `                refuse_start(f"refused: the action key {key} is already "`
-- `coordinator/bin/coordq:932` `            refuse_start(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "`
 - `coordinator/bin/coordq:946` `                refuse_start(f"refused: a gate for this head is already recorded as "`
 - `coordinator/bin/coordq:950` `        journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool,`
 - `coordinator/bin/coordq:1902` `                journal.emit("gate_queued", "gatekeep", item=item["id"],`
-- `coordinator/bin/ticket:512` `    journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(url.rsplit("/", 1)[1]), key=key, labels=labels)`
-- `coordinator/bin/ticket:1379` `    journal.emit("ticket_started", "ticket", builder=t["builderAlias"], reviewer=t["reviewerAlias"],`
-- `coordinator/bin/ticket:1789` `        journal.emit("close_failed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,`
-- `coordinator/bin/ticket:1794` `    journal.emit("ticket_closed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,`
-- `coordinator/bin/ticket:1820` `    journal.emit("ticket_abandoned", "ticket", repo=repo, ticket=n)`
+- `coordinator/bin/ticket:513` `    journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(number) if number.isdigit() else None,`
+- `coordinator/bin/ticket:1381` `    journal.emit("ticket_started", "ticket", builder=t["builderAlias"], reviewer=t["reviewerAlias"],`
+- `coordinator/bin/ticket:1791` `        journal.emit("close_failed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,`
+- `coordinator/bin/ticket:1796` `    journal.emit("ticket_closed", "ticket", repo=repo, ticket=number, pr=a.pr, head=a.head,`
+- `coordinator/bin/ticket:1822` `    journal.emit("ticket_abandoned", "ticket", repo=repo, ticket=n)`
 - `coordinator/overnight/lane_driver.py:410` `        journal.emit(event, "lane", repo=repo, pr=number, head=head, **fields)`
 - `coordinator/overnight/lane_driver.py:416` `        journal_event(event, repo, number, head, **fields)`
-- `coordinator/overnight/lane_driver.py:420` `    journal_once("gate_verdict", repo, number, head, ledger,`
-- `coordinator/overnight/lane_driver.py:635` `        journal.emit("fix_sent", "lane", thread=thread_id, model=fixer["selection"]["model"],`
-- `coordinator/overnight/lane_driver.py:709` `        journal_event("round_cap", repo, number, head, reviews=count)`
-- `coordinator/overnight/lane_driver.py:1050` `        journal_event("merge_held", repo, number, head,`
-- `coordinator/overnight/lane_driver.py:1067` `        journal_event("merge_held", repo, number, head, reason="base moved")`
-- `coordinator/overnight/lane_driver.py:1110` `            journal_once("merge_held", repo, number, head, ledger,`
-- `coordinator/overnight/lane_driver.py:1118` `        journal_once("merge_held", repo, number, head, ledger,`
-- `coordinator/overnight/lane_driver.py:1132` `    journal_event("merged", repo, number, head, thread=gate["threadId"], base=base)`
-- `coordinator/overnight/lane_driver.py:1200` `        journal_event("merged_outside_lane", repo, number, head,`
-- `coordinator/overnight/lane_driver.py:1232` `        journal_verdict(repo, number, head, verdict, gate, ledger)`
-- `coordinator/overnight/lane_driver.py:1234` `            journal_once("merge_held", repo, number, head, ledger,`
-- `coordinator/overnight/lane_driver.py:1317` `        journal_verdict(repo, number, head, verdict, gate, ledger)`
-- `coordinator/overnight/lane_driver.py:1319` `        journal_once("merge_held", repo, number, head, ledger,`
-- `coordinator/overnight/alarms.py:368` `        journal.emit(event[0], "alarms", alarm=alarm_id, board=str(path), group=event[1])`
-- `coordinator/overnight/alarms.py:384` `    journal_alarm(path, alarm_id, event)`
-- `coordinator/overnight/alarms.py:416` `        journal_alarm(path, alarm_id, event)`
+- `coordinator/overnight/lane_driver.py:421` `        journal_once("gate_verdict", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:637` `        journal.emit("fix_sent", "lane", thread=thread_id if sendable else None,`
+- `coordinator/overnight/lane_driver.py:713` `        journal_event("round_cap", repo, number, head, reviews=count)`
+- `coordinator/overnight/lane_driver.py:1057` `        journal_event("merge_held", repo, number, head,`
+- `coordinator/overnight/lane_driver.py:1117` `            journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1125` `        journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1139` `        journal_once("merged", repo, number, head, ledger, f"journal-outside:{repo}#{number}:{head}",`
+- `coordinator/overnight/lane_driver.py:1210` `        journal_once("merged_outside_lane", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1243` `        journal_verdict(repo, number, head, verdict, gate, ledger)`
+- `coordinator/overnight/lane_driver.py:1245` `            journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/lane_driver.py:1328` `        journal_verdict(repo, number, head, verdict, gate, ledger)`
+- `coordinator/overnight/lane_driver.py:1330` `        journal_once("merge_held", repo, number, head, ledger,`
+- `coordinator/overnight/alarms.py:374` `        journal.emit(event[0], "alarms", alarm=alarm_id, board=str(path), group=event[1])`
+- `coordinator/overnight/alarms.py:390` `    journal_alarm(path, alarm_id, event)`
+- `coordinator/overnight/alarms.py:422` `        journal_alarm(path, alarm_id, event)`
 
 ### Acceptance 4: parse_request_id on real ids from dispatch-receipts.json
 
@@ -132,4 +129,4 @@ crit:one-lane:Sol
 
 ### Existing tests that load coordq and ticket, run for the reason the fast check does not select them
 
-The fast check selects tests by changed .py file, and coordq and ticket have no .py suffix. The twelve test modules that load them ran on 163bced (the code before the last commit, which changed only the selftest and the check script) and on da70cd7d (`git archive`): both give 298 tests, 13 failures, 3 errors, the same 16 names. The failures are in origin/main, not in this diff.
+The fast check selects tests by changed .py file, and coordq and ticket have no .py suffix. The twelve test modules that load them ran on this head and on da70cd7d (`git archive`): both give 298 tests, 13 failures, 3 errors, with the same 16 names. The failures are already in origin/main and are not in this diff.
