@@ -13,6 +13,7 @@ if _OVERNIGHT_DIR not in sys.path:
     sys.path.append(_OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
+from gate_policy import parse_verdict
 import prompt_paths
 from tick_health import tick_alarm
 import alarms
@@ -201,7 +202,7 @@ def gate_state(value):
 
 def has_verdict(report):
     lines = [line.rstrip() for line in report.splitlines() if line.strip()]
-    return bool(lines) and lines[-1] in ("VERDICT: PASS", "VERDICT: FAIL")
+    return parse_verdict(report) is not None or (bool(lines) and lines[-1] in ("VERDICT: PASS", "VERDICT: FAIL"))
 
 
 def gate_thread_to_judge(queue, key, receipts):

@@ -41,6 +41,57 @@ def complete_pass(reply, head, provides=True):
             and (not provides or f"PROVIDES: PASS {head}" in lines))
 
 
+JSON_VERDICT_ASK = """Machine-readable verdict. Before the final CHECK and VERDICT lines, post exactly one fenced json block, and only one:
+
+```json
+{"verdict": "PASS", "findings": [{"id": "F1", "severity": "major", "bar_clause": "the bar line this finding breaks", "path": "file/that/changed.py", "line": 42, "text": "what is wrong, in one sentence", "fixed_when": "the check that proves it is fixed"}]}
+```
+
+- "verdict" is "PASS" or "FAIL" and must match the VERDICT line.
+- "findings" holds one entry per finding, in the order you list them in prose. Use an empty list when there are none.
+- Every entry carries all seven keys: id, severity, bar_clause, path, line, text, fixed_when. Use "n/a" for path or line when a finding has no file.
+- Follow the block with a one-line prose summary of the verdict.
+- The VERDICT line stays last, after the json block and the summary."""
+
+
+JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+
+
+def parse_verdict(report):
+    for block in reversed(JSON_BLOCK.findall(report)):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("verdict") in ("PASS", "FAIL") and isinstance(data.get("findings"), list):
+            return data
+    return None
+
+
+def read_verdict(report):
+    data = parse_verdict(report)
+    if data:
+        return (data["verdict"], data["findings"])
+    if report.endswith("VERDICT: FAIL"):
+        verdict = "FAIL"
+    elif report.endswith("VERDICT: PASS"):
+        verdict = "PASS"
+    else:
+        verdict = None
+    findings = [{"severity": s, "path": p, "line": int(l), "text": t.strip()}
+                for s, p, l, t in re.findall(r"\[(critical|major|minor)\]\s+(\S+?):(\d+)(.*)", report)]
+    return (verdict, findings)
+
+
+def report_for_builder(report):
+    data = parse_verdict(report)
+    if data is None:
+        return report
+    lines = [f"[{f.get('severity', '')}] {f.get('path', '')}:{f.get('line', '')} {f.get('text', '')} (fixed when: {f.get('fixed_when', '')})"
+             for f in data["findings"]]
+    return report + "\n\nFindings from the verdict block:\n" + "\n".join(lines)
+
+
 PROMPT_CLOSE_NOTHING = " Do not close the issue either: the merge that would close it is Shyam's."
 
 
@@ -68,7 +119,7 @@ def manual_gate_ending():
     return "Do not merge or close; Shyam merges passed PRs himself."
 
 
-def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False):
+def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False):
     import proof_file
     mode = merge_mode(repo, settings, ascend_override)
     merge = (PROMPT_NO_MERGE if prompt else
@@ -116,4 +167,6 @@ Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}`
 {manual_gate_ending() if mode == "manual" else merge + fast_forward + close} {provides_ask} Never call emp. Never print secrets."""
     if not fast_forward_main and mode != "manual":
         message = message.replace(" Never call emp. Never print secrets.", "\nNever call emp. Never print secrets.")
+    if json_verdict:
+        message += "\n" + JSON_VERDICT_ASK
     return message

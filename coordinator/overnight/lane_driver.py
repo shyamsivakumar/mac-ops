@@ -29,7 +29,8 @@ import gh_gateway
 import close_check
 import gate_policy
 import journal
-from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
+from gate_policy import (LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode, parse_verdict,
+                         read_verdict, report_for_builder)
 import prompt_paths
 from lane_briefs import OPEN_FINDINGS_NONE, UNSTICK_BRIEF
 
@@ -489,7 +490,7 @@ def gate_verdict(repo, number, head, base):
     if gate_in_flight(current):
         return "running", gate, ""
     reply = last_reply(current)
-    if reply.endswith("VERDICT: FAIL"):
+    if read_verdict(reply)[0] == "FAIL":
         return "FAIL", gate, reply
     others = sorted({v for k, v in receipts.items() if k.startswith(key + ":") and v != current
                      and receipts.get(f"base:{v}") == base})
@@ -511,7 +512,7 @@ def gate_verdict(repo, number, head, base):
     for thread in others:
         if gate_in_flight(thread):
             return "running", {"threadId": thread}, ""
-    if any(last_reply(thread).endswith("VERDICT: FAIL") for thread in others):
+    if any(read_verdict(last_reply(thread))[0] == "FAIL" for thread in others):
         return "SPLIT", gate, reply
     return "PASS", gate, reply
 
@@ -805,8 +806,10 @@ def no_open_findings(reply, head):
     trailing whitespace stripped from any line.
     """
     lines = [line.rstrip() for line in reply.splitlines() if line.strip()]
-    return (len(lines) >= 2 and lines[-1] == "VERDICT: FAIL" and lines[-2] == OPEN_FINDINGS_NONE
-            and f"CHECK: PASS {head}" in lines
+    data = parse_verdict(reply)
+    none_listed = (data["verdict"] == "FAIL" and data["findings"] == []) if data else (
+        len(lines) >= 2 and lines[-1] == "VERDICT: FAIL" and lines[-2] == OPEN_FINDINGS_NONE)
+    return (none_listed and f"CHECK: PASS {head}" in lines
             and not any(line.startswith("CHECK: FAIL") for line in lines))
 
 
@@ -1575,7 +1578,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
-               + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
+               + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + report_for_builder(reply)[-6000:])
         return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     if gate_rounds_used(repo, number, ledger):
         # The pull request has used the three reviews the rule gives it.
