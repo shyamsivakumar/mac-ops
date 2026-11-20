@@ -452,10 +452,14 @@ def journal_has_merged(repo, number):
     path = journal.journal_path(time.time())
     if not os.path.exists(path):
         return False
-    for line in open(path):
-        row = json.loads(line)
-        if row.get("event") == "merged" and row.get("repo") == repo and row.get("pr") == number:
-            return True
+    with open(path) as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("event") in ("merged", "merged_outside_lane") and row.get("repo") == repo and row.get("pr") == number:
+                return True
     return False
 
 
