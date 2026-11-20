@@ -19,3 +19,12 @@ ticket_started  repo r/x ticket 5 attempt 1
 ticket_started  repo r/x ticket 5 attempt 1   (second call; no second assigned)
 ```
 Note: the proof command in the issue was adapted only by running the "before" against a copy of origin/main's scorecard (KeyError above). Real gate_verdict rows carry no ticket, so first_gate_pass maps their PR to a ticket through any row that has both.
+
+## Cross-midnight (review fix: group by assignment day, look up the first verdict in the full journal)
+Tickets 1 (assigned D 23:50, PASS at D+1 00:10) and 2 (assigned D 00:01, no verdict):
+```
+first_gate_pass(rows)                      -> 0.5
+first_gate_pass(rows, D start, D end)      -> 0.5   (ticket 1 counts as passed for day D)
+first_gate_pass(rows, D+1 start, D+1 end)  -> None  (no assignments that day)
+original proof command                     -> 0.5
+```

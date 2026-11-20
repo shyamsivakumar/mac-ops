@@ -102,12 +102,14 @@ def data_of(row):
     return row.get("data") or {}
 
 
-def first_gate_pass(rows):
-    assigned = {(row["repo"], row["ticket"]) for row in rows if row["event"] == "assigned"}
-    pr_ticket = {}
+def first_gate_pass(rows, start=None, end=None):
+    assigned = {}
     for row in rows:
-        if row.get("ticket") is not None and row.get("pr") is not None:
-            pr_ticket[(row["repo"], row["pr"])] = row["ticket"]
+        ts = row.get("ts", 0)
+        if row["event"] == "assigned" and (start is None or start <= ts < end):
+            assigned.setdefault((row["repo"], row["ticket"]), ts)
+    pr_ticket = {(row["repo"], row["pr"]): row["ticket"] for row in rows
+                 if row.get("ticket") is not None and row.get("pr") is not None}
     first = {}
     for row in rows:
         if row["event"] != "gate_verdict":
@@ -115,7 +117,9 @@ def first_gate_pass(rows):
         ticket = row.get("ticket")
         if ticket is None:
             ticket = pr_ticket.get((row["repo"], row.get("pr")))
-        first.setdefault((row["repo"], ticket), data_of(row).get("verdict"))
+        key = (row["repo"], ticket)
+        if key in assigned and row.get("ts", 0) >= assigned[key]:
+            first.setdefault(key, data_of(row).get("verdict"))
     if not assigned:
         return None
     return sum(1 for key in assigned if first.get(key) == "PASS") / len(assigned)
@@ -403,7 +407,7 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
                  "prs_at_round_cap": capped, "launch_failures": with_backfill("launch_failed"),
                  "dropped": with_backfill("dropped"), "verdict_mix": verdicts,
                  "assigned": counted("assigned"),
-                 "first_gate_pass": (metric(round(first_gate_pass(live_day), 3), "tickets whose first gate verdict is PASS over assigned tickets, blocked and abandoned included")
+                 "first_gate_pass": (metric(round(first_gate_pass(live, start, end), 3), "tickets assigned that day whose first gate verdict is PASS, over all assigned tickets (blocked and abandoned included); a ticket counts once a closing row links its PR")
                                      if covered and any(row["event"] == "assigned" for row in live_day)
                                      else unknown(no_journal if not covered else "no assigned event"))},
         "machine": {"peak_concurrent_threads": peak, "minutes_over_cap": over},
