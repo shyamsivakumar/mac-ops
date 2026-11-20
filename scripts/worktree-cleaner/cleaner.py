@@ -509,8 +509,8 @@ def verify_pr(github: GitHub, repo: str | None, path: Path, branch: str | None, 
         return False, "github_pr_open", None
     closed = [
         row for row in matching
-        if str(row.get("headRefOid", "")).lower() == head.lower() and str(row.get("state", "")).upper() in {"CLOSED", "MERGED"}
-        or str(row.get("state", "")).upper() == "MERGED" and merged_contains(path, head, row)
+        if str(row.get("state", "")).upper() == "MERGED" and merged_contains(path, head, row)
+        or row.get("headRefName") == branch and str(row.get("state", "")).upper() in {"CLOSED", "MERGED"} and str(row.get("headRefOid", "")).lower() == head.lower()
     ]
     if not closed:
         return False, "github_pr_not_closed_for_head", None
