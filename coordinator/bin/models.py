@@ -21,6 +21,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import time
@@ -167,9 +168,10 @@ def entry_identities(entry):
 
 
 def entry_blocked(entry, blocked=None):
-    """Whether every identity an entry covers is blocked."""
+    """Whether the entry is blocked: by its own identity, or for a router entry
+    by every Morph model in its chains."""
     blocked = blocked_identities() if blocked is None else blocked
-    return entry_identities(entry) <= blocked
+    return identity(entry["selection"]) in blocked or entry_identities(entry) <= blocked
 
 
 def router_entry(list_name):
@@ -257,11 +259,18 @@ def read_blocked_file(file_path):
     return data
 
 
+FRACTION = re.compile(r"\.(\d+)")
+
+
 def moment(value):
-    """The epoch second an ISO 8601 timestamp names, or None when it names none."""
+    """The epoch second an ISO 8601 timestamp names, or None when it names none.
+
+    Python 3.9 reads a fractional second only at three or six digits, so the
+    fraction is padded or cut to six before parsing."""
     if not isinstance(value, str) or not value:
         return None
     text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    text = FRACTION.sub(lambda m: "." + (m.group(1) + "000000")[:6], text, count=1)
     try:
         stamp = datetime.datetime.fromisoformat(text)
     except ValueError:
@@ -299,11 +308,18 @@ def known_identities():
     """Every blocked-store identity a list can produce.
 
     An entry whose key is not one of these names a model no list carries any
-    more, so the reader drops it instead of keeping a stale block forever."""
+    more, so the reader drops it instead of keeping a stale block forever. A
+    router entry is known by its own route (`router:<chain>`) as well as by
+    each Morph model in its chains."""
     known = set()
+    catalog = load()
     for name in LISTS:
-        for entry in entries(name):
+        for entry in catalog[name]:
             known |= entry_identities(entry)
+            known.add(identity(entry["selection"]))
+            if is_router(entry):
+                instance = entry["selection"]["instanceId"]
+                known |= {f"{instance}:{chain}" for chain in entry.get("chains") or {}}
     return known
 
 

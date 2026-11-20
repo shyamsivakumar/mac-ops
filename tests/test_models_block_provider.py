@@ -66,6 +66,25 @@ class BlockProviderTest(unittest.TestCase):
                          {"openai-api:gpt-6.2-astra", "codex:gpt-6.2-sol"})
         self.assertEqual(models.blocked_identities(now=160), {"codex:gpt-6.2-sol"})
 
+    def test_until_accepts_a_one_digit_and_a_nine_digit_fraction(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"until": "1970-01-01T00:02:40.5+00:00"},
+            "codex:gpt-6.2-sol": {"until": "1970-01-01T00:02:40.500000000+00:00"},
+        }}))
+        self.assertEqual(models.blocked_identities(now=160),
+                         {"openai-api:gpt-6.2-astra", "codex:gpt-6.2-sol"})
+        self.assertEqual(models.blocked_identities(now=161), set())
+
+    def test_a_router_route_block_is_known_and_blocks_the_router_entry(self):
+        self.file.write_text(json.dumps({"blocked": {"router:standard": {"expires_at": 900}}}))
+        self.assertEqual(models.blocked_identities(now=100), {"router:standard"})
+        self.assertTrue(models.entry_blocked(models.router_entry("build"), {"router:standard"}))
+        self.assertEqual(models.first_available("build", None, {"router:standard"}, "standard")["id"], "cursor")
+
+    def test_a_block_on_another_instance_is_pruned(self):
+        self.file.write_text(json.dumps({"blocked": {"other:gpt-6.2-sol": {"expires_at": 900}}}))
+        self.assertEqual(models.blocked_identities(now=100), set())
+
     def test_unknown_model_entry_is_pruned_and_a_manual_block_is_kept(self):
         self.file.write_text(json.dumps({"blocked": {
             "glm:glm-5.3": {"reason": "weekly limit"},
