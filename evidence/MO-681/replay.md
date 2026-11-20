@@ -106,25 +106,42 @@ print(json.dumps([world("lagging", True), world("current", False)], indent=1))
 | lagging | `MO-1 · one` | `MO-1 · one` | no `If-None-Match`, then `If-None-Match: "e1"` | paid, then `0 / 304`, then `0 / hit` |
 | current | `MO-1 · one` | `MO-2 · two`, `MO-1 · one` | no `If-None-Match`, then `If-None-Match: "e1"` | paid, then paid, then `0 / hit` |
 
-The finding is **GitHub's issue list lags the create**, not the gateway:
+What the replay settles, and what it does not:
 
-- When GitHub's list is current, the `fresh` read pays a core call and returns
-  the new issue. The gateway is faithful, and the short-TTL cache is skipped
-  (the second read is a paid call, not a `hit`).
-- When GitHub's list has not caught up, the `fresh` read gets a 304 and the
-  gateway returns the body it stored with that ETag. That body is exactly what
-  GitHub said was current, so the gateway adds no staleness of its own: it
-  cannot return a page newer than the ETag GitHub publishes.
-- The conditional path is therefore not the cause, and `gh_gateway.py` is not
-  changed. The client cannot make GitHub's list catch up, so the fix is to stop
-  trusting the list alone: the last key a repo gave out is recorded beside the
-  open lock and the mint goes one past the larger of the two sources.
+- It settles that `fresh=True` skips the short-TTL cache: in the current world
+  the second read is a paid call, not a `hit`.
+- It settles that the conditional path is the only way a `fresh` read can
+  return an older body, and that it does so only on a 304, by returning the
+  body it stored with that ETag. That body is exactly what GitHub said was
+  current, so the gateway cannot return a page newer than the ETag GitHub
+  publishes, and it adds no staleness of its own.
+- It does **not** settle which response GitHub sent during the six opens on
+  2026-11-19. The fake chooses whether the body and the ETag advance, so the
+  lagging world is a model of GitHub's eventual consistency, not a recording
+  of it. The usage log for that day predates the `cost` field, so it cannot
+  tell a 304 from a paid call either.
+
+So upstream lag is consistent with the evidence and with the gateway's code,
+and the gateway is not shown to be at fault; the incident's exact cause stays
+unconfirmed. Either way the client cannot make GitHub's list catch up, so the
+fix is to stop trusting the list alone.
 
 ## The fix, and the replay that proves it
 
-`coordinator/bin/ticket` writes `last-key-<repo>.json` in `CACHE_DIR` under the
-open lock, after a successful create, and `mint_key` takes
-`max(listed keys, last key given out) + 1`.
+`coordinator/bin/ticket` keeps `last-key-<repo>-<prefix>.json` in `CACHE_DIR`,
+written under the open lock, holding:
+
+- `number`: the highest key number this repo has given out under that prefix.
+- `unconfirmed`: the numbers given out that the issue list has not shown yet.
+- `pending`: the number of a create whose answer has not come back.
+
+The mint goes one past `max(listed keys, number)`. An explicit key is refused
+when the list or `unconfirmed` already holds it. The record is written before
+the create and cleared after it, so a create that lands and then loses its
+answer leaves the key pending and the next open refuses until a human checks
+the repo. A create GitHub refused puts the record back, so the key is free
+again and no number is skipped. The prefix is part of the file name, so a new
+prefix starts at one and switching back finds the old sequence.
 
 The new `key-mint` case in `coordinator/overnight/selftest.py` replays the
 worst lag: the fake GitHub's list never catches up, so every read is the same
@@ -134,9 +151,13 @@ page. Three back-to-back opens still give three distinct keys:
 PASS key-mint
 ```
 
-and with the record ignored (`read_last_key` forced to 0) the same three opens
-give `MO-2`, `MO-2`, `MO-2`, so the case fails on the old mint:
+and with the record ignored (`read_last_key` forced to zero) the same three
+opens give one key three times, so the case fails on the old mint:
 
 ```
 old mint caught: expected ['MO-2', 'MO-3', 'MO-4'], got ['MO-2', 'MO-2', 'MO-2']
 ```
+
+The case also covers the other ways to reuse a key: an explicit key an earlier
+open gave out, a listed key past the record, a create GitHub refused, a prefix
+change, a pending create, and a record that cannot be read.
