@@ -228,3 +228,21 @@ SCORECARD 2026-11-18 try 3 ended without a report, see <tmp>/log
 ```
 
 The first call returns at once (launch took 0.00s) with the pid and start time in the ledger. A later pass sees the process ended without a day JSON, counts it, and starts the next try; the day JSON ends the retries; a run past the age limit (shortened to 1 s here, 10 minutes in the code) is killed; and the tries stop at 3.
+
+## Revert window boundary
+
+Code head these runs used: `ac9e36ae932312a7e33d0b7bfbb8e4737781a73c`, the head `check-proof-2.md` names. Run at 2026-11-19 18:54 PST.
+
+A day's change failure is final once the report day's end plus 7 days has passed. The day ends at local midnight, so 2026-11-11 is final from 2026-11-19 00:00 and 2026-11-12 is final from 2026-11-20 00:00. Before the fix both days counted as final on 2026-11-19, because the test was 7 whole days since the day began.
+
+```
+$ scorecard --date 2026-11-11 --journal-dir $EMPTY --out-dir $D | grep -E 'Factory|change_failure'
+Factory scorecard 2026-11-11 (America/Los_Angeles), journal coverage none, 3 GitHub calls
+  change_failure: {"reverted":[],"merges":152}
+$ scorecard --date 2026-11-12 --journal-dir $EMPTY --out-dir $D | grep -E 'Factory|change_failure'
+Factory scorecard 2026-11-12 (America/Los_Angeles), journal coverage none, 2 GitHub calls
+  change_failure: unknown (window open)
+unknown metrics (21): board.alarms_open_at_end, board.alarms_raised, board.alarms_withdrawn, cost.human_touches, flow.dropped, flow.duplicate_gate_heads, flow.fix_rounds, flow.gate_heads, flow.gate_launches_per_merge, flow.launch_failures, flow.launches, flow.launches_per_accepted, flow.merges_journal, flow.prs_at_round_cap, flow.verdict_mix, guardrails.audit_disagreement, guardrails.change_failure, guardrails.lead_time, headline.accepted_tickets, machine.minutes_over_cap, machine.peak_concurrent_threads
+```
+
+2026-11-11 reads its revert window (3 GitHub calls: merged PRs, closed issues, the revert search) and finds no revert. 2026-11-12 is `unknown (window open)` (2 calls) until 2026-11-20 00:00 PT.
