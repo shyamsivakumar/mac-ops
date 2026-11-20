@@ -76,19 +76,43 @@ class InstallTest(FakeHome):
         rules = install_deny_rules.claude_rules(SPEC, self.home)
         self.assertEqual(settings["permissions"]["deny"], rules["deny"])
         self.assertEqual(settings["permissions"]["ask"], rules["ask"])
-        self.assertIn("Read(~/Code/slash-eureka/**)", rules["ask"])
+        self.assertIn("Read(~/Code/slash-eureka/**)", rules["retired"])
+        self.assertFalse(
+            [e for e in rules["deny"] + rules["ask"] if "slash-eureka" in e]
+        )
         self.assertIn("Edit(**/.env)", rules["deny"])
         self.assertIn("Bash(git push origin main:*)", rules["ask"])
         self.assertFalse(set(rules["deny"]) & set(rules["ask"]))
+        self.assertEqual(
+            load(self.settings_path)["hooks"]["PreToolUse"][0]["matcher"],
+            SPEC["claude_code"]["hook"]["matcher"],
+        )
         self.assertTrue(self.installer.hook_target(SPEC).is_file())
         blocks = settings["hooks"]["PreToolUse"]
         self.assertEqual(len(blocks), 1)
         matcher = re.compile(blocks[0]["matcher"])
         self.assertTrue(matcher.search("Bash"))
-        self.assertFalse(matcher.search("Read"))
+        for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob"):
+            self.assertTrue(matcher.search(tool), tool)
+        self.assertFalse(matcher.search("WebFetch"))
         for path in self.installer.scope_paths(SPEC):
             self.assertIn(install_deny_rules.BEGIN, path.read_text())
         self.assertTrue(Path(report["backups"]).parent.is_dir())
+
+    def test_ascend_entries_leave_both_settings_lists_and_the_old_hook_matcher_goes(self):
+        rules = install_deny_rules.claude_rules(SPEC, self.home)
+        retired = rules["retired"]
+        settings = load(self.settings_path)
+        settings["permissions"]["deny"] = retired[:3] + ["Bash(user rule:*)"]
+        settings["permissions"]["ask"] = retired[3:5]
+        self.settings_path.write_text(json.dumps(settings))
+        self.installer.install(SPEC)
+        permissions = load(self.settings_path)["permissions"]
+        for entry in retired:
+            self.assertNotIn(entry, permissions["deny"] + permissions["ask"])
+        self.assertIn("Bash(user rule:*)", permissions["deny"])
+        self.installer.install(SPEC)
+        self.assertEqual(len(load(self.settings_path)["hooks"]["PreToolUse"]), 1)
 
     def test_reinstall_is_idempotent(self):
         self.installer.install(SPEC)
@@ -107,6 +131,7 @@ class InstallTest(FakeHome):
         self.assertEqual(status["claude_deny_missing"], [])
         self.assertEqual(status["claude_ask_missing"], [])
         self.assertEqual(status["claude_ask_still_denied"], [])
+        self.assertEqual(status["claude_ascend_entries_present"], [])
         self.assertTrue(all(v == "installed" for v in status["pi_guards"].values()))
         self.installer.uninstall(SPEC)
         settings = load(self.settings_path)
@@ -228,7 +253,7 @@ class ListTest(unittest.TestCase):
         self.assertIn("Edit(**/*token*.json)", rules["deny"])
         self.assertIn("Read(//Users/t/.ssh/**)", rules["ask"])
         self.assertIn("Edit(//Users/t/.ssh/**)", rules["deny"])
-        self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", rules["ask"])
+        self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", rules["retired"])
         self.assertIn("Bash(git push --force-if-includes:*)", rules["deny"])
 
     def test_hook_constants_match_the_list(self):
@@ -512,6 +537,38 @@ class HookTest(unittest.TestCase):
         self.assertIsNone(self.decided("git status", cwd=ascend))
         self.assertEqual(self.decided("cat .env", cwd=ascend)["permissionDecision"], "ask")
         self.assertEqual(self.decided("gh pr merge 1", cwd=ascend)["permissionDecision"], "ask")
+
+    def test_file_tools_ask_for_the_ascend_tree_by_realpath_and_skip_it_in_an_ascend_session(self):
+        ascend = self.home / "Code/slash-eureka"
+        (ascend / "src").mkdir(parents=True)
+        (self.home / "link").symlink_to(ascend)
+        elsewhere = str(self.home / "work")
+
+        def tool(name, tool_input, **extra):
+            payload = {"tool_name": name, "tool_input": tool_input, "cwd": elsewhere, **extra}
+            return self.run_hook(payload)
+
+        asks = [
+            ("Read", {"file_path": str(ascend / "src/a.py")}),
+            ("Edit", {"file_path": "~/Code/slash-eureka/a.py"}),
+            ("Write", {"file_path": str(self.home / "link/new.py")}),
+            ("MultiEdit", {"file_path": str(ascend / "src/../b.py")}),
+            ("NotebookEdit", {"notebook_path": str(ascend / "n.ipynb")}),
+            ("Grep", {"pattern": "x", "path": str(self.home / "link")}),
+            ("Glob", {"pattern": str(ascend / "src/**/*.py")}),
+            ("Glob", {"pattern": "*.py", "path": str(ascend)}),
+        ]
+        for name, tool_input in asks:
+            self.assertEqual(tool(name, tool_input)["permissionDecision"], "ask", (name, tool_input))
+        self.assertIsNone(tool("Read", {"file_path": str(self.home / "work/a.py")}))
+        self.assertIsNone(tool("Grep", {"pattern": "x", "path": str(self.home / "work")}))
+        self.assertEqual(
+            tool("Read", {"file_path": str(ascend / "a")}, permission_mode="bypassPermissions")["permissionDecision"],
+            "deny",
+        )
+        self.extra_env = {"CLAUDE_PROJECT_DIR": str(ascend)}
+        for name, tool_input in asks:
+            self.assertIsNone(tool(name, tool_input), (name, tool_input))
 
     def test_the_audit_log_redacts_secrets_and_the_guard_errors_closed(self):
         self.decided("cat app/.env " + "x" * 400, session_id="s1")

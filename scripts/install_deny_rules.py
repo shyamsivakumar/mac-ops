@@ -64,9 +64,12 @@ def family_modes(spec: dict) -> dict[str, str]:
 
 
 def claude_rules(spec: dict, root: Path) -> dict[str, list[str]]:
-    """Settings entries by decision. Edits of secret files and force-push flags stay denied."""
+    """Settings entries by decision. Edits of secret files and force-push flags stay denied.
+
+    The Ascend tree has no settings entries: a settings rule cannot tell an Ascend session
+    from any other, so the hook decides it. `retired` lists the entries earlier installs wrote."""
     modes = family_modes(spec)
-    rules: dict[str, list[str]] = {"deny": [], "ask": []}
+    rules: dict[str, list[str]] = {"deny": [], "ask": [], "retired": []}
 
     def add(entry: str, family: str | None) -> None:
         mode = modes[family] if family else "deny"
@@ -75,7 +78,7 @@ def claude_rules(spec: dict, root: Path) -> dict[str, list[str]]:
     for p in spec["ascend_roots"]:
         for form in (p, "/" + expand(p, root)):
             for tool in ("Read", "Edit"):
-                add(f"{tool}({form}/**)", "ascend")
+                rules["retired"].append(f"{tool}({form}/**)")
     for p in spec["secret_dirs"]:
         for form in (p, "/" + expand(p, root)):
             add(f"Read({form}/**)", "secret_files")
@@ -86,7 +89,7 @@ def claude_rules(spec: dict, root: Path) -> dict[str, list[str]]:
     for p in spec["ascend_roots"]:
         for form in (p, "$HOME" + p[1:]):
             for command in spec["ascend_read_commands"]:
-                add(f"Bash({command} {form}:*)", "ascend")
+                rules["retired"].append(f"Bash({command} {form}:*)")
     for flag in spec["push_force_flags"]:
         add(f"Bash(git push {flag}:*)", None)
     for branch in spec["push_protected"]:
@@ -278,8 +281,10 @@ class Installer:
         rules = claude_rules(spec, self.root)
         current_deny = list(permissions.get("deny") or [])
         ask = list(permissions.get("ask") or [])
-        moved = [e for e in current_deny if e in rules["ask"]]
-        deny = [e for e in current_deny if e not in rules["ask"]]
+        dropped = rules["ask"] + rules["retired"]
+        moved = [e for e in current_deny if e in dropped]
+        deny = [e for e in current_deny if e not in dropped]
+        ask = [e for e in ask if e not in rules["retired"]]
         added_deny = [e for e in rules["deny"] if e not in deny]
         added_ask = [e for e in rules["ask"] if e not in ask]
         permissions["deny"] = deny + added_deny
@@ -320,7 +325,7 @@ class Installer:
         if saved.get("hook_registered") and "PreToolUse" in hooks:
             pre = []
             for entry in hooks["PreToolUse"]:
-                ours = entry.get("matcher") == spec["claude_code"]["hook"]["matcher"]
+                ours = entry.get("matcher") == saved.get("hook_matcher", "Bash")
                 inner = [
                     h
                     for h in entry.get("hooks") or []
@@ -372,7 +377,7 @@ class Installer:
         actions = [
             f"claude settings: +{len(merged['added_deny'])} deny entries, "
             f"+{len(merged['added_ask'])} ask entries, "
-            f"{len(merged['moved_from_deny'])} existing deny entries moved to ask",
+            f"{len(merged['moved_from_deny'])} existing deny entries moved to ask or retired",
             f"claude hook: registered={merged['registered']}",
         ]
         hook = self.hook_target(spec)
@@ -397,6 +402,7 @@ class Installer:
                 "managed_ask": merged["added_ask"],
                 "moved_from_deny": merged["moved_from_deny"],
                 "hook_registered": merged["registered"],
+                "hook_matcher": spec["claude_code"]["hook"]["matcher"],
                 "prior_files": prior_files,
             },
         )
@@ -435,6 +441,9 @@ class Installer:
             "claude_deny_missing": [e for e in rules["deny"] if e not in deny],
             "claude_ask_missing": [e for e in rules["ask"] if e not in ask],
             "claude_ask_still_denied": [e for e in rules["ask"] if e in deny],
+            "claude_ascend_entries_present": [
+                e for e in rules["retired"] if e in deny or e in ask
+            ],
             "merge_hook_file": self.hook_target(spec).is_file(),
             "pi_guards": {
                 str(t): (
@@ -451,10 +460,14 @@ class Installer:
     def plan(self, spec: dict) -> dict:
         """What install would change, computed without writing anything."""
         saved = load_json(self.receipt)
-        permissions = drop_managed(load_json(self.settings()).get("permissions") or {}, saved)
+        current = load_json(self.settings()).get("permissions") or {}
+        permissions = drop_managed(current, saved)
         rules = claude_rules(spec, self.root)
-        deny = permissions.get("deny") or []
-        ask = permissions.get("ask") or []
+        dropped = rules["ask"] + rules["retired"]
+        deny = [e for e in permissions.get("deny") or [] if e not in dropped]
+        ask = [e for e in permissions.get("ask") or [] if e not in rules["retired"]]
+        deny_added = [e for e in rules["deny"] if e not in deny]
+        ask_added = [e for e in rules["ask"] if e not in ask]
 
         def file_state(path: Path, text: str) -> str:
             if not path.is_file():
@@ -464,9 +477,11 @@ class Installer:
         return {
             "dry_run": True,
             "claude_settings": {
-                "deny_added": [e for e in rules["deny"] if e not in deny],
-                "ask_added": [e for e in rules["ask"] if e not in ask],
-                "moved_from_deny_to_ask": [e for e in deny if e in rules["ask"]],
+                "deny_entries": [len(current.get("deny") or []), len(deny) + len(deny_added)],
+                "ask_entries": [len(current.get("ask") or []), len(ask) + len(ask_added)],
+                "ascend_entries_left": [
+                    e for e in deny + deny_added + ask + ask_added if e in rules["retired"]
+                ],
             },
             "claude_hook": {
                 str(self.hook_target(spec)): file_state(

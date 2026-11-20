@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Deny rules for shell commands that `permissions.deny` cannot express (mac-ops #530).
 
-PreToolUse hook for Claude Code, and the single implementation the pi deny
-guards call for every bash command. The rules are read from the structure of
+PreToolUse hook for Claude Code (Bash, and the Read, Edit, Write, MultiEdit,
+NotebookEdit, Grep and Glob tools for the Ascend tree), and the single
+implementation the pi deny guards call for every bash command. The rules are read from the structure of
 the command (the simple commands the shell would run), never from its text,
 so a PR body, an `hc` message or a heredoc that mentions a rule is not a
 command that breaks it:
@@ -96,6 +97,8 @@ SECRET_FORMAT_RE = r"(?i)payload|secret|password|token|private_key|\bkey\b"
 DELETE_TOOLS = {"curl", "http", "https"}
 GUARDED_TEXT_RE = r"\b(?:gh|git|gcloud|bq|heroku|curl|http|rm|rmdir|unlink|trash|find)\b|slash-eureka|\.env|\.ssh|auth\.json"
 COMMAND_SHOWN = 300
+PATH_KEYS = ("file_path", "notebook_path", "path")
+PATH_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob"}
 AUDIT_PATH = "~/.local/state/mac-ops/deny-audit.jsonl"
 COMMAND_LIMIT = 200
 
@@ -459,9 +462,37 @@ def command_findings(commands, cwd, ascend_session):
 
 
 def decide(command, cwd, project_dir, permission_mode):
-    interactive = permission_mode is None or permission_mode in INTERACTIVE_MODES
     ascend_session = bool(project_dir) and in_ascend(project_dir)
     found = command_findings(list(real_commands(command)), cwd, ascend_session)
+    return conclude(found, command, cwd, permission_mode)
+
+
+def glob_base(pattern):
+    prefix = re.split(r"[*?\[{]", pattern, maxsplit=1)[0]
+    return prefix if prefix == pattern or prefix.endswith("/") else os.path.dirname(prefix)
+
+
+def tool_paths(tool_name, tool_input, cwd):
+    given = [str(tool_input[key]) for key in PATH_KEYS if tool_input.get(key)]
+    if tool_input.get("pattern") and tool_name == "Glob":
+        given.append(glob_base(str(tool_input["pattern"])))
+    if not given and tool_name in {"Grep", "Glob"}:
+        given.append(cwd or os.getcwd())
+    here = cwd or os.getcwd()
+    return [os.path.join(here, os.path.expandvars(os.path.expanduser(path))) for path in given]
+
+
+def decide_tool(tool_name, tool_input, cwd, project_dir, permission_mode):
+    """File tools touching the Ascend tree ask; the realpath makes symlinks and `..` count."""
+    shown = f"{tool_name} " + " ".join(str(tool_input[k]) for k in PATH_KEYS + ("pattern",) if tool_input.get(k))
+    ascend_session = bool(project_dir) and in_ascend(project_dir)
+    touches = not ascend_session and any(in_ascend(p) for p in tool_paths(tool_name, tool_input, cwd))
+    found = [("ascend", ASCEND_REASON)] if touches else []
+    return conclude(found, shown, cwd, permission_mode)
+
+
+def conclude(found, shown, cwd, permission_mode):
+    interactive = permission_mode is None or permission_mode in INTERACTIVE_MODES
     if not found:
         return None
     hard = [f for f in found if FAMILY_MODES[f[0]] == "deny"]
@@ -479,7 +510,7 @@ def decide(command, cwd, project_dir, permission_mode):
         decision, note = "ask", "approve it to run the command"
     reason = f"[{', '.join(families)}] {'; '.join(reasons)} ({note})"
     if decision == "ask":
-        reason += f"\ncommand: {command[:COMMAND_SHOWN]}\ncwd: {cwd or os.getcwd()}"
+        reason += f"\ncommand: {shown[:COMMAND_SHOWN]}\ncwd: {cwd or os.getcwd()}"
     return {"decision": decision, "families": families, "reason": reason}
 
 
@@ -517,16 +548,16 @@ def main():
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         return 0
-    if tool_name != "Bash":
+    if tool_name != "Bash" and tool_name not in PATH_TOOLS:
         return 0
-    command = str(tool_input.get("command") or "")
+    command = str(tool_input.get("command") or "") if tool_name == "Bash" else f"{tool_name} {json.dumps(tool_input)}"
     try:
-        outcome = decide(
-            command,
-            payload.get("cwd"),
-            os.environ.get("CLAUDE_PROJECT_DIR"),
-            payload.get("permission_mode"),
-        )
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+        mode = payload.get("permission_mode")
+        if tool_name == "Bash":
+            outcome = decide(command, payload.get("cwd"), project_dir, mode)
+        else:
+            outcome = decide_tool(tool_name, tool_input, payload.get("cwd"), project_dir, mode)
     except Exception:
         if not re.search(GUARDED_TEXT_RE, command):
             return 0

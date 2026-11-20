@@ -41,6 +41,16 @@ Before is the installed ~/.claude/hooks/deny-merge-guard.py. After is the repo h
 | `git push --force-with-lease=t3/x origin t3/x` | - | default | deny | deny |
 | `git push origin +t3/x` | - | default | deny | deny |
 | `git push origin main --force` | - | bypassPermissions | deny | deny |
+| `Read ~/Code/slash-eureka/src/a.py (cwd ~/Code/mac-ops)` | ~/Code/slash-eureka | default | deny (settings) | allow |
+| `Edit ~/Code/slash-eureka/src/a.py (cwd ~/Code/mac-ops)` | ~/Code/slash-eureka | default | deny (settings) | allow |
+| `Grep x in ~/Code/slash-eureka (cwd ~/Code/mac-ops)` | ~/Code/slash-eureka | default | allow | allow |
+| `Read ~/Code/slash-eureka/src/a.py (cwd ~/Code/mac-ops)` | - | default | deny (settings) | ask |
+| `Edit ~/Code/slash-eureka/src/a.py (cwd ~/Code/mac-ops)` | - | default | deny (settings) | ask |
+| `Grep x in ~/Code/slash-eureka (cwd ~/Code/mac-ops)` | - | default | allow | ask |
+| `Glob ~/Code/slash-eureka/**/*.py (cwd ~/Code/mac-ops)` | - | default | allow | ask |
+| `Read ~/link/src/a.py (symlink into slash-eureka) (cwd ~/Code/mac-ops)` | - | default | allow | ask |
+| `Write ~/link/new.py (symlink into slash-eureka) (cwd ~/Code/mac-ops)` | - | default | allow | ask |
+| `Read ~/Code/mac-ops/README.md (cwd ~/Code/mac-ops)` | - | default | allow | allow |
 | `git push --delete origin t3/x` | - | default | allow | deny |
 | `git push -d origin t3/x` | - | default | allow | deny |
 | `git push origin :t3/x` | - | default | allow | deny |
@@ -89,11 +99,11 @@ A full ask reason, as Claude Code shows it:
 Audit log lines from this table run (command cut to 200 chars, secret paths redacted):
 
 ```
-{"time": "2026-11-20T16:48:28Z", "runtime": "claude", "session_id": "probe", "family": "secret_files", "decision": "ask", "command": "cat [secret]"}
-{"time": "2026-11-20T16:48:28Z", "runtime": "claude", "session_id": "probe", "family": "cloud_secret", "decision": "ask", "command": "gcloud run services describe s --format='value(payload)'"}
-{"time": "2026-11-20T16:48:29Z", "runtime": "claude", "session_id": "probe", "family": "secret_files", "decision": "ask", "command": "cat [secret]"}
-{"time": "2026-11-20T16:48:29Z", "runtime": "claude", "session_id": "probe", "family": "force_push", "decision": "deny", "command": "git push --force-with-lease origin t3/x"}
-{"time": "2026-11-20T16:48:29Z", "runtime": "claude", "session_id": "probe", "family": "force_push", "decision": "deny", "command": "git push origin main --force"}
+{"time": "2026-11-20T16:57:03Z", "runtime": "claude", "session_id": "probe", "family": "secret_files", "decision": "ask", "command": "cat [secret]"}
+{"time": "2026-11-20T16:57:03Z", "runtime": "claude", "session_id": "probe", "family": "cloud_secret", "decision": "ask", "command": "gcloud run services describe s --format='value(payload)'"}
+{"time": "2026-11-20T16:57:03Z", "runtime": "claude", "session_id": "probe", "family": "secret_files", "decision": "ask", "command": "cat [secret]"}
+{"time": "2026-11-20T16:57:04Z", "runtime": "claude", "session_id": "probe", "family": "force_push", "decision": "deny", "command": "git push --force-with-lease origin t3/x"}
+{"time": "2026-11-20T16:57:04Z", "runtime": "claude", "session_id": "probe", "family": "force_push", "decision": "deny", "command": "git push origin main --force"}
 ```
 
 ## pi guard
@@ -119,13 +129,13 @@ The installed guard (from the installer run below) loaded in bun, tool_call hand
 
 ## Installer against a temp copy of the home
 
-The temp root holds a copy of ~/.claude/settings.json and the installed deny-merge-guard.py. Paths below are shortened from the temp root to `<root>`. Entries written with the real home path (`//Users/shyamsivakumar/...`) are not matched by a temp root, so 2 of them stay in deny here; with the real root they move too.
+The temp root starts from a copy of ~/.claude/settings.json with its deny list and deny hook removed, then the previous installer (origin/main) is run into it, so the starting state and the receipt are what a real upgrade sees. The new installer then upgrades it. Paths below are shortened from the temp root to `<root>`.
 
 Dry run:
 
 ```
-{'deny_added': 1, 'ask_added': 54, 'moved_from_deny_to_ask': 51}
-dict_values(['changed']) ['new', 'new', 'new', 'new', 'new', 'new']
+{'deny_entries': [78, 24], 'ask_entries': [0, 22], 'ascend_entries_left': []} (entry counts are [before, after])
+dict_values(['changed']) ['changed', 'changed', 'changed', 'changed', 'changed', 'changed']
 ```
 
 Install summary:
@@ -134,7 +144,7 @@ Install summary:
 {
   "owner": "mac-ops/deny-rules.v1",
   "actions": [
-    "claude settings: +1 deny entries, +54 ask entries, 51 existing deny entries moved to ask",
+    "claude settings: +24 deny entries, +22 ask entries, 0 existing deny entries moved to ask or retired",
     "claude hook: registered=True",
     "pi guard: <root>/.pi/agent/extensions/deny-guard.ts",
     "pi guard: <root>/.pi/agent-minimax/extensions/deny-guard.ts",
@@ -151,35 +161,48 @@ Permissions before and after, and untouched keys:
 
 ```
 before: {'allow': 2, 'deny': 78}
-after:  {'allow': 2, 'deny': 28, 'ask': 54}
-first ask entries: ['Read(~/Code/slash-eureka/**)', 'Edit(~/Code/slash-eureka/**)']
+after:  {'allow': 2, 'deny': 24, 'ask': 22}
+first ask entries: ['Read(~/.ssh/**)', 'Read(//private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/final.kRJG/.ssh/**)']
 push-to-main entries now in ask: ['Bash(git push origin main:*)', 'Bash(git push origin master:*)']
 force-push entries still in deny: ['Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push --force-with-lease:*)']
+slash-eureka entries left in deny or ask: []
+slash-eureka entries before: 32
+hook entries: [('Bash|Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob', 'python3 <root>/.claude/hooks/deny-merge-guard.py')]
 Edit(secret) still in deny: True
 keys changed outside permissions and hooks: []
-hook registered: ['python3 /Users/shyamsivakumar/.claude/hooks/deny-merge-guard.py', 'python3 <root>/.claude/hooks/deny-merge-guard.py']
+hook registered: ['python3 <root>/.claude/hooks/deny-merge-guard.py']
 ```
 
 Backups written before the change (settings, previous hook):
 
 ```
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.local/state/mac-ops/deny-rules-receipt.json
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/hooks/deny-merge-guard.py
-<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/prior/.claude/hooks/deny-merge-guard.py
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/CLAUDE.md
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-openai-api/extensions/deny-guard.ts
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-openai-api/AGENTS.md
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-deepseek/extensions/deny-guard.ts
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-glm/extensions/deny-guard.ts
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent/extensions/deny-guard.ts
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-anthropic-api/extensions/deny-guard.ts
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-anthropic-api/AGENTS.md
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-minimax/extensions/deny-guard.ts
 ```
 
 Status after install:
 
 ```
-{'installed': True, 'claude_deny_missing': [], 'claude_ask_missing': [], 'claude_ask_still_denied': [], 'merge_hook_file': True, 'pi_guards': ['installed']}
+{'installed': True, 'claude_deny_missing': [], 'claude_ask_missing': [], 'claude_ask_still_denied': [], 'claude_ascend_entries_present': [], 'merge_hook_file': True, 'pi_guards': ['installed']}
 ```
 
 ## Existing tests
 
 ```
-...........................
+.............................
 ----------------------------------------------------------------------
-Ran 27 tests in 6.779s
+Ran 29 tests in 7.558s
 
 OK
 ```
