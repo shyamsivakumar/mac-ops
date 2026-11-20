@@ -3616,6 +3616,7 @@ EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "wo
 
 
 def main():
+    os.environ["COORD_JOURNAL_DIR"] = tempfile.mkdtemp(prefix="selftest-journal-")
     failed = False
     try:
         exact(["unexpected"], ["expected"])

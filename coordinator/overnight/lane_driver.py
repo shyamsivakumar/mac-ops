@@ -24,6 +24,7 @@ if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
 import gate_policy
+import journal
 from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
 import prompt_paths
 
@@ -404,6 +405,24 @@ def gate_in_flight(thread_id):
     return status in ("running", "queued", "starting", "preparing")
 
 
+def journal_event(event, repo, number, head, **fields):
+    if not DRY:
+        journal.emit(event, "lane", repo=repo, pr=number, head=head, **fields)
+
+
+def journal_once(event, repo, number, head, ledger, key, **fields):
+    if not DRY and key not in ledger:
+        ledger[key] = event
+        journal_event(event, repo, number, head, **fields)
+
+
+def journal_verdict(repo, number, head, verdict, gate, ledger):
+    if verdict in ("PASS", "FAIL", "SPLIT"):
+        journal_once("gate_verdict", repo, number, head, ledger,
+                     f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
+                     thread=gate["threadId"], kind="gate", verdict=verdict)
+
+
 def gate_verdict(repo, number, head, base):
     receipts = json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}
     key = f"gate:{repo}#{number}:{head}"
@@ -613,6 +632,12 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         raise RuntimeError(f"Empty dispatch receipt for {lkey}")
     out = receipt.splitlines()[-1]
     ledger[lkey] = out
+    if lkey.startswith("fix:"):
+        queued_item = re.search(r"#(\d+)", out)
+        journal.emit("fix_sent", "lane", thread=thread_id if sendable else None,
+                     item=int(queued_item[1]) if queued_item else None,
+                     rerouted_from=None if sendable else thread_id,
+                     model=fixer["selection"]["model"], **journal.parse_request_id(lkey))
     if not sendable:
         print(f"SEND REROUTE {thread_id}: {out}")
         return f"fresh ({thread_id} {reroute}): {out}"
@@ -684,6 +709,8 @@ def record_failed_review(repo, number, head, ledger):
         return count
     count += 1
     ledger[f"rounds:{repo}#{number}"] = {"count": count, "head": head}
+    if count >= GATE_ROUND_CAP:
+        journal_event("round_cap", repo, number, head, reviews=count)
     return count
 
 
@@ -1008,6 +1035,9 @@ def base_moved_item(repo, number, head, landed, base):
                     "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
 
 
+LANDED_ELSEWHERE = {}
+
+
 def merge_on_reviewed_base(repo, number, head, base):
     """Merge one pull request only when its base is still the reviewed one.
 
@@ -1045,6 +1075,8 @@ def merge_on_reviewed_base(repo, number, head, base):
     current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                               "--json", "baseRefName,headRefOid"])) or {}
     if current.get("baseRefName") != base or current.get("headRefOid") != head:
+        journal_event("merge_held", repo, number, head,
+                      reason="base moved" if current.get("baseRefName") != base else "head moved")
         return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
                        f"{current.get('baseRefName')}, head {head[:8]} -> "
                        f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
@@ -1060,6 +1092,7 @@ def merge_on_reviewed_base(repo, number, head, base):
         # The pull request cannot be retargeted once it is merged, so the base
         # it names now is the base the merge landed on. The item puts that in
         # front of Shyam; the pass itself claims no merge.
+        LANDED_ELSEWHERE[(repo, number, head)] = landed.get("baseRefName")
         published = publish_decision(base_moved_item(repo, number, head,
                                                      landed.get("baseRefName"), base))
         return False, (f"critical #{number}: the merge landed on base "
@@ -1098,16 +1131,20 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     # A prompt, skill or playbook change never auto-merges (Refs #543):
     # the hold comes first, so a prompt PR is written to the board before
     # anything else looks at the merge.
-    held = prompt_pass(repo, number, head,
-                       prompt_pull(repo, number, pr.get("changedFiles"),
-                                   pr.get("baseRefName") or "main", head))
+    prompt = prompt_pull(repo, number, pr.get("changedFiles"), pr.get("baseRefName") or "main", head)
+    held = prompt_pass(repo, number, head, prompt)
     if held:
+        if prompt == prompt_paths.HOLD:
+            journal_once("merge_held", repo, number, head, ledger,
+                         f"journal-held:{repo}#{number}:{head}:prompt hold", reason="prompt hold")
         return held
     # Main's gate-round bookkeeping: the round's decisions item must leave
     # the board before the merge, or the merge waits.
     if not clear_gate_round_decision(repo, number, ledger):
         return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
     if merge_mode(repo, CFG[repo]) in ("manual", "ascend"):
+        journal_once("merge_held", repo, number, head, ledger,
+                     f"journal-held:{repo}#{number}:{head}:manual repo", reason="manual repo")
         return manual_merge_ask(repo, number, head)
     base = pr.get("baseRefName") or "main"
     if DRY:
@@ -1118,6 +1155,10 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     # head are read again inside the merge step, as close to the merge as
     # the merge can be guarded: a pull request that moved merges nothing.
     merged, note = merge_on_reviewed_base(repo, number, head, base)
+    landed = LANDED_ELSEWHERE.pop((repo, number, head), None)
+    if merged or landed:
+        journal_once("merged", repo, number, head, ledger, f"journal-outside:{repo}#{number}:{head}",
+                     thread=gate["threadId"], base=base, landed_base=landed or base)
     if not merged:
         return note
     close_after_merge(repo, number, head, issue, gate, ledger)
@@ -1187,6 +1228,9 @@ def settle_merged_prs(repo, ledger):
             print(f"DRY after-merge #{number}")
             continue
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
+        journal_once("merged_outside_lane", repo, number, head, ledger,
+                     f"journal-outside:{repo}#{number}:{head}",
+                     thread=gate["threadId"] if gate else None, verdict=verdict)
         if verdict == "PASS":
             close_after_merge(repo, number, head, found.group(1), gate, ledger)
             print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
@@ -1217,7 +1261,10 @@ def merge_pass(repo, ledger):
         settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
         if verdict in ("running", "none", "absent"):
             continue
+        journal_verdict(repo, number, head, verdict, gate, ledger)
         if verdict == "SPLIT":
+            journal_once("merge_held", repo, number, head, ledger,
+                         f"journal-held:{repo}#{number}:{head}:split", reason="split")
             print(f"{CFG[repo]['key']:5} {gate_split_decision(repo, number, head)}")
         if verdict in ("FAIL", "SPLIT"):
             ledger[settled] = verdict
@@ -1298,7 +1345,11 @@ def act_on_pr(repo, number, ledger):
     verdict, gate, reply = gate_verdict(repo, number, head, base)
     if verdict == "running":
         return f"#{number}: gate running"
+    if gate:
+        journal_verdict(repo, number, head, verdict, gate, ledger)
     if verdict == "SPLIT":
+        journal_once("merge_held", repo, number, head, ledger,
+                     f"journal-held:{repo}#{number}:{head}:split", reason="split")
         return gate_split_decision(repo, number, head)
     if verdict == "PASS":
         return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
