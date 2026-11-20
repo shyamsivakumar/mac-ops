@@ -1886,6 +1886,39 @@ def unreadable_ticket_reason(error, issue, body, title):
     return reason
 
 
+SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/")
+OVER_CAP_LINES = 150
+OVER_CAP_FILES = 3
+RECUT_LINES = 300
+RECUT_FILES = 6
+
+
+def counted_code_file(f):
+    name = f["filename"]
+    if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
+        return False
+    base = name.rsplit("/", 1)[-1]
+    is_test = (base.startswith("test_") or base.endswith("_test.py")
+               or "selftest" in name or "tests" in name.split("/"))
+    if f.get("status") != "added" and is_test:
+        return False
+    return True
+
+
+def size_class(files):
+    code = [f for f in files if counted_code_file(f)]
+    lines = sum(f["additions"] + f["deletions"] for f in code)
+    if lines > RECUT_LINES or len(code) > RECUT_FILES:
+        return "recut"
+    if lines > OVER_CAP_LINES or len(code) > OVER_CAP_FILES:
+        return "over_cap"
+    return "ok"
+
+
+def pr_size_class(repo, number):
+    return size_class(gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100"))
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -2004,7 +2037,7 @@ def gate_candidates(config, rounds=None):
                            "reason": "changed-file list unreadable, gate deferred"}
                     break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "builderModels": models,
+                       "builderModels": models, "size": pr_size_class(repo, number),
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
@@ -2024,7 +2057,8 @@ def gate_candidates(config, rounds=None):
                     if key != gated_key:
                         key, args = gated_key, {**args, "clientRequestId": gated_key}
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
-                           "key": key, "builderModels": models, "args": args}
+                           "key": key, "builderModels": models, "args": args,
+                           "size": pr_size_class(repo, number)}
 
 
 def executed_models(value):
@@ -2062,6 +2096,15 @@ def cmd_gatekeep(a):
                 continue
             counts.pop(event["pr"], None)
             key, args = event["key"], event["args"]
+            size = event.get("size")
+            if size == "recut":
+                pr_number = event["pr"].rsplit("#", 1)[1]
+                if a.dry_run:
+                    print(f"would recut #{pr_number}", flush=True)
+                    continue
+                journal.emit("recut", "gatekeep", **journal.parse_request_id(key))
+                print(f"recut #{pr_number}", flush=True)
+                continue
             if key in attempted:
                 continue
             observed = load()
@@ -2136,7 +2179,7 @@ def cmd_gatekeep(a):
                 journal.emit("gate_queued", "gatekeep", item=item["id"],
                              reviewer=args["modelSelection"]["model"],
                              model=args["modelSelection"]["model"], model_source="requested",
-                             **journal.parse_request_id(key))
+                             size=size, **journal.parse_request_id(key))
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
