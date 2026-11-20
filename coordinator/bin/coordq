@@ -133,6 +133,7 @@ def journal_item(event, item, **fields):
     args = item.get("args") or {}
     row = {"item": item["id"], "thread": args.get("threadId"), "tool": item.get("tool"),
            "title": journal_title(item.get("title")),
+           "model": (args.get("modelSelection") or {}).get("model"), "model_source": "requested",
            **journal.parse_request_id(args.get("clientRequestId")), **fields}
     journal.emit(event, "coordq", **row)
 
@@ -1000,6 +1001,7 @@ def cmd_start(a):
         save(queue)
         journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool, title=label,
                      taskType=args.get("taskType"), modelSelection=args.get("modelSelection"),
+                     model=(args.get("modelSelection") or {}).get("model"), model_source="requested",
                      **journal.parse_request_id(request_id))
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -2132,7 +2134,9 @@ def cmd_gatekeep(a):
                     heads[key]["retryOf"] = retry_of
                 save(queue)
                 journal.emit("gate_queued", "gatekeep", item=item["id"],
-                             reviewer=args["modelSelection"]["model"], **journal.parse_request_id(key))
+                             reviewer=args["modelSelection"]["model"],
+                             model=args["modelSelection"]["model"], model_source="requested",
+                             **journal.parse_request_id(key))
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
