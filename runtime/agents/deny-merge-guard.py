@@ -83,7 +83,6 @@ SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
-SECRET_VALUE_RES = ["AKIA[0-9A-Z]{16}", "\\b(?:ghp|gho|ghs|github_pat)_[A-Za-z0-9_]{20,}", "\\bsk-[A-Za-z0-9_-]{16,}", "\\bxox[abprs]-[A-Za-z0-9-]{10,}", "(\\bbearer\\s+)\\S+", "((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)\\w*\\s*[=:]\\s*)\\S+"]
 FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
 SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval"
@@ -413,13 +412,13 @@ def resolve(word, here):
 
 
 def operands(words):
-    """Words that can name a path: options with `=` give their value, other options and prose are skipped."""
+    """Words that can name a path, quoted or escaped spaces kept whole: options with `=` give their value, other options are skipped."""
     found = []
     for word in words[1:]:
         word = word.lstrip("<>")
         if word.startswith("-"):
             word = word.split("=", 1)[1] if "=" in word else ""
-        if word and not re.search(r"\s", word):
+        if word:
             found.append(word)
     return found
 
@@ -524,18 +523,15 @@ def conclude(found, shown, cwd, permission_mode):
     return {"decision": decision, "families": families, "reason": reason}
 
 
-def redact(text):
-    for pattern in SECRET_VALUE_RES:
-        text = re.sub(
-            pattern,
-            lambda m: (m.group(1) if m.lastindex else "") + "[redacted]",
-            text,
-            flags=re.I,
-        )
-    return " ".join(
-        "[secret]" if re.search(SECRET_FILE_RE, token) else token
-        for token in text.split(" ")
-    )
+def redact_path(path):
+    return "[secret]" if re.search(SECRET_FILE_RE, path) else path
+
+
+def program(command):
+    """The program name of the first command. Nothing after it is kept: arguments can hold credentials."""
+    for words in real_commands(command):
+        return os.path.basename(words[0])
+    return ""
 
 
 def audit(outcome, command, payload, tool_name):
@@ -547,16 +543,16 @@ def audit(outcome, command, payload, tool_name):
         "family": ",".join(outcome["families"]),
         "decision": outcome["decision"],
     }
-    if tool_name == "Bash":
-        line["command"] = redact(command)[:COMMAND_LIMIT]
-    else:
-        line["target"] = redact(outcome.get("target", ""))[:COMMAND_LIMIT]
     try:
+        if tool_name == "Bash":
+            line["program"] = program(command)
+        else:
+            line["target"] = redact_path(outcome.get("target", ""))[:COMMAND_LIMIT]
         path = os.path.expanduser(AUDIT_PATH)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as log:
             log.write(json.dumps(line) + "\n")
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 

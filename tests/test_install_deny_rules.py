@@ -262,7 +262,6 @@ class ListTest(unittest.TestCase):
             families = [f for f, _ in hook_module.push_findings(["origin", "t3/x", flag])]
             self.assertIn("force_push", families, flag)
         self.assertEqual(hook_module.SECRET_FILE_RE, SPEC["secret_file_re"])
-        self.assertEqual(hook_module.SECRET_VALUE_RES, SPEC["secret_value_res"])
         self.assertEqual(
             hook_module.FAMILY_MODES,
             {name: family["mode"] for name, family in SPEC["families"].items()},
@@ -514,6 +513,9 @@ class HookTest(unittest.TestCase):
             "curl -X DELETE https://x.test/a", "curl --request DELETE https://x.test/a",
             "http DELETE https://x.test/a", "rm app/.env", "unlink ~/.ssh/id_rsa",
             "find ~/Code/slash-eureka -delete", "rmdir ~/Code/slash-eureka/x",
+            'rm "~/Code/slash-eureka/a b/x"', "rm ~/Code/slash-eureka/a\\ b/x",
+            "rm 'my dir/.env'", "rm my\\ dir/.env", "unlink ~/.ssh/my\\ key.pem",
+            'find "~/Code/slash-eureka/a b" -delete', 'trash "a b/.env"',
         ]
         for command in hard:
             self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
@@ -579,16 +581,22 @@ class HookTest(unittest.TestCase):
             (line["runtime"], line["session_id"], line["decision"], line["family"]),
             ("claude", "s1", "ask", "secret_files"),
         )
-        self.assertIn("[secret]", line["command"])
-        self.assertLessEqual(len(line["command"]), 200)
-        self.decided("echo password=hunter2 key=AKIA" + "A" * 16 + " > ~/Code/slash-eureka/x")
-        bash_line = json.loads(log.read_text().splitlines()[1])
-        self.assertIn("password=[redacted]", bash_line["command"])
-        self.assertNotIn("hunter2", log.read_text())
-        self.assertNotIn("AKIA", log.read_text())
-        padded = "x" * 190 + " password=hunter2"
-        self.decided("cat ~/Code/slash-eureka/a " + padded)
-        self.assertNotIn("hunter", log.read_text())
+        self.assertEqual(line["program"], "cat")
+        self.assertNotIn("command", line)
+        credentials = [
+            "curl -u user:hunter2 -X DELETE https://x.test/a",
+            "curl -X DELETE https://user:hunter2@x.test/a",
+            "git push https://tok_hunter2@github.com/a/b.git main",
+            "echo password=hunter2 > ~/Code/slash-eureka/x",
+            "TOKEN=hunter2 cat ~/Code/slash-eureka/x",
+        ]
+        for command in credentials:
+            self.decided(command)
+        logged = log.read_text()
+        self.assertNotIn("hunter2", logged)
+        self.assertNotIn("x.test", logged)
+        programs = [json.loads(x)["program"] for x in logged.splitlines()[1:]]
+        self.assertEqual(programs, ["curl", "curl", "git", "echo", "cat"])
         edit = {
             "file_path": str(self.home / "Code/slash-eureka/a.py"),
             "old_string": "old-secret-text",
