@@ -12,14 +12,21 @@ directory.
 - `coordinator/bin/models.py`: `known_identities` names every blocked-store
   identity the four lists can produce, and `blocked_identities` drops an entry
   whose key is not one of them, so a block on a model that left `models.json`
-  no longer blocks anything.
+  no longer blocks anything. A router entry is known by its own route
+  (`router:<chain>`) as well as by each Morph model in its chains, and
+  `entry_blocked` treats an explicit route block as blocking the router, so a
+  block `block_provider` writes for a router selection still takes effect.
+- `coordinator/bin/models.py`: `moment` pads or cuts a fractional second to six
+  digits before parsing, because Python 3.9 reads only three or six.
 - `coordinator/bin/models.py`: `block_provider` already wrote `expires_at`; it
   now also prunes an expired `until`-only entry on write, because `expiry`
   reads `until`. A longer `until`-only block is still never shortened.
 - `tests/test_models_block_provider.py`: the expiry test now uses identities
   the lists carry, because an unknown-model entry is pruned. New tests cover
-  the `until` rule, the `Z` suffix, a bad `until`, unknown-model pruning, the
-  numeric `expires_at` a write produces, and the two writer cases above.
+  the `until` rule, the `Z` suffix, one- and nine-digit fractions, a bad
+  `until`, unknown-model pruning, a block on another instance, the router
+  route round trip, the numeric `expires_at` a write produces, and the two
+  writer cases above.
 - `docs/model-list.md`: the blocked-providers paragraph states the `until`
   rule and the unknown-model pruning.
 
@@ -31,7 +38,7 @@ reads and writes only the copy. Output on this head:
 
 ```
 == the live file, read through the new reader ==
-now: 2026-11-20T04:45:03Z
+now: 2026-11-20T04:48:36Z
   anthropic-api:claude-opus-5-5: expiry=inf known=True
   glm:glm-5.3: expiry=inf known=False
   openai-api:gpt-6.2-astra: expiry=1795035192.195219 known=True
@@ -40,14 +47,19 @@ now: 2026-11-20T04:45:03Z
 blocked now: ['anthropic-api:claude-opus-5-5']
 
 == 1. block_provider writes a numeric expires_at ==
-{"expires_at": 1795153503.4931352}
+{"expires_at": 1795153716.650975}
 
 == 2. an until-only entry: a past until is not blocked, a future one is ==
-past until   2026-11-20T04:44:03+00:00 -> []
-future until 2026-11-20T05:45:03+00:00 -> ['openai-api:gpt-6.2-astra']
+past until   2026-11-20T04:47:36+00:00 -> []
+future until 2026-11-20T05:48:36+00:00 -> ['openai-api:gpt-6.2-astra']
 
 == 3. a manual block is kept, an unknown-model entry is pruned ==
 -> ['anthropic-api:claude-opus-5-5']
+
+== 4. a router route block survives the reader and blocks the router ==
+blocked: ['router:standard']
+router entry blocked: True
+first build for standard: cursor
 
 == the live file is untouched ==
 sha256 before: e660152e8f9213551d8810124478de64b554890b91ddbf1e9123bb89de6a08fb
@@ -87,4 +99,5 @@ listed model and stays blocked.
 3. A manual block stays blocked and an unknown-model entry is pruned: section 3
    above, and `test_unknown_model_entry_is_pruned_and_a_manual_block_is_kept`.
 4. `python3 scripts/mac_ops_fast_check.py --proof evidence/MO-1134/check-proof.md`
-   passes on the final head: `check-proof.md`.
+   passes: `check-proof.md` records the run against the commit that holds the
+   code, and the commit after it adds only that receipt.

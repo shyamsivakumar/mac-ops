@@ -63,6 +63,13 @@ def main():
            "minimax:MiniMax-M3.1-Flash": {"reason": "usage limit"}})
     print("->", sorted(models.blocked_identities(now=now)))
 
+    print("\n== 4. a router route block survives the reader and blocks the router ==")
+    write({"router:standard": {"expires_at": now + 3600}})
+    blocked = models.blocked_identities(now=now)
+    print("blocked:", sorted(blocked))
+    print("router entry blocked:", models.entry_blocked(models.router_entry("build"), blocked))
+    print("first build for standard:", models.first_available("build", None, blocked, "standard")["id"])
+
     after = hashlib.sha256(open(LIVE, "rb").read()).hexdigest()
     print("\n== the live file is untouched ==")
     print("sha256 before:", before)
