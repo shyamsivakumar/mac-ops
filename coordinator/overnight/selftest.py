@@ -4213,7 +4213,31 @@ def close_evidence():
     exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "close-evidence": close_evidence, "build-here": build_here}
+def provider_until():
+    """A provider block ends at its own time, and an unknown model is dropped."""
+    import lane_driver as lane
+    model_list = lane.model_list
+    loader = importlib.machinery.SourceFileLoader("fixture_models", str(Path(model_list.__file__)))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    real = importlib.util.module_from_spec(spec)
+    loader.exec_module(real)
+    key = model_list.identity(model_list.entries("review")[0]["selection"])
+    now = 1_000_000_000.0
+
+    def blocked(name, entry):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(model_list, "blocked_identities", real.blocked_identities):
+            Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {name: entry}}))
+            return model_list.blocked_identities(now)
+
+    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}), False)
+    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-10T00:00:00Z"}), True)
+    exact(key in blocked(key, {"by": "manual"}), True)
+    exact("gone:retired-model" in blocked("gone:retired-model", {"expires_at": 4102444800}), False)
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "close-evidence": close_evidence, "build-here": build_here}
 
 
 def main():
