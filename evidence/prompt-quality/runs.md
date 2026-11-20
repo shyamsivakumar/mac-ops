@@ -23,10 +23,10 @@ Files in `briefs-v2/`:
 
 | Repo | Old brief | New brief | Change |
 | --- | --- | --- | --- |
-| mac-ops | 811 | 609 | -25% |
-| SRW | 811 | 725 | -11% (the trading block is back for SRW only) |
+| mac-ops | 811 | 625 | -23% |
+| SRW | 811 | 741 | -9% (the trading block is back for SRW only) |
 
-The 30% cut of v1 is gone: the finding block format, the clause ids, the three outcomes and the round-diff rules add about 150 words. Round 2 with two prior findings in full: 794 words (mac-ops). Round 3: 769.
+The 30% cut of v1 is gone: the finding block format, the clause ids, the three outcomes and the round-diff rules add about 150 words. Round 2 with two prior findings in full: 810 words (mac-ops). Round 3: 785.
 
 ## Changes this round
 
@@ -46,3 +46,5 @@ The 30% cut of v1 is gone: the finding block format, the clause ids, the three o
 ## Checks
 
 See `check-proof.md`.
+
+The first two fast-check runs failed the selftest evals `gate-pipeline` (my shortened Provides sentence dropped text the selftest pins) and `no-parking` (the lane fix path wrote the live ledger). Both are fixed; `gate-pipeline`, `no-parking` and `gate-round-cap` pass when called directly.

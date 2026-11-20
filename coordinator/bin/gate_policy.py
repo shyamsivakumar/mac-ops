@@ -133,8 +133,9 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     merge = (PROMPT_NO_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if mode == "ascend" else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-    provides_ask = (f"Verify each Provides claim on head {head} (none: pass). `PROVIDES: FAIL {head}` forces `VERDICT: FAIL`; "
-                    f"a PASS reply without the PROVIDES line is read as no verdict.")
+    provides_ask = (f"Verify every Provides claim from the ticket on head {head}. A ticket with no Provides section has "
+                    f"no claims, so it passes this check trivially. `PROVIDES: FAIL {head}` forces `VERDICT: FAIL`. "
+                    f"A PASS reply without the PROVIDES line is read as no verdict.")
     lane = mode == "lane" and not prompt
     if lane:
         merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict."
