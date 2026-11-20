@@ -1284,12 +1284,22 @@ def close_after_merge(repo, number, head, issue, gate, ledger):
     return True
 
 
-def merged_without_gate_item(repo, number, head):
+UNREVIEWED_REASONS = {
+    "absent": "no gate attempt for this head has a recorded base, so the merge cannot be tied to a reviewed base",
+    "none": "the gate reply on this head is not a complete PASS (it needs PROVIDES, CHECK and VERDICT lines)",
+    "FAIL": "the gate on this head said FAIL",
+    "SPLIT": "two gates on this head disagreed",
+    "running": "a gate on this head is still running",
+}
+
+
+def merged_without_gate_item(repo, number, head, verdict):
     key = CFG[repo]["key"]
     return {"id": f"lane-merged-unreviewed-{key}-{number}", "group": "Coordinator", "kind": "action",
-            "title": (f"{key}-{number} is merged at head {head[:8]} with no recorded gate PASS, "
+            "title": (f"{key}-{number} is merged at head {head[:8]} without a gate PASS the lane can tie to the merge, "
                       "so its ticket stays open: check the merge and close the ticket yourself."),
-            "why": "The lane closes a ticket only after a merge whose head the recorded gate attempt passed."}
+            "why": ("The lane closes a ticket only after a merge whose head the recorded gate attempt passed. "
+                    f"Here {UNREVIEWED_REASONS[verdict]}.")}
 
 
 SETTLE_LOOKBACK_DAYS = 3
@@ -1322,7 +1332,7 @@ def settle_merged_prs(repo, ledger):
             else:
                 print(f"{CFG[repo]['key']:5} #{number}: merged earlier, close failed, board item raised")
         else:
-            publish_decision(merged_without_gate_item(repo, number, head))
+            publish_decision(merged_without_gate_item(repo, number, head, verdict))
             ledger[lkey] = "item raised"
 
 
