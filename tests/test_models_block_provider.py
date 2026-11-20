@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import sys
@@ -12,9 +13,15 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "coordinator" / "bin"))
 import models  # noqa: E402
 
+SEED = Path(__file__).resolve().parent.parent / "coordinator" / "models.json"
 
-def pick(name):
-    return {"instanceId": name, "model": "m"}
+
+def pick(name, model="m"):
+    return {"instanceId": name, "model": model}
+
+
+def stamp(seconds):
+    return datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).isoformat()
 
 
 class BlockProviderTest(unittest.TestCase):
@@ -23,7 +30,7 @@ class BlockProviderTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
         self.file = self.dir / models.BLOCKED_FILE
-        patcher = patch.dict(os.environ, {"COORDQ_DIR": tmp.name})
+        patcher = patch.dict(os.environ, {"COORDQ_DIR": tmp.name, "COORDINATOR_MODELS": str(SEED)})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -31,10 +38,64 @@ class BlockProviderTest(unittest.TestCase):
         return json.loads(self.file.read_text())["blocked"]
 
     def test_expiry_on_read_and_manual_entries_kept(self):
-        self.file.write_text(json.dumps({"blocked": {"manual:m": {"reason": "x"}, "bare:m": True}}))
-        models.block_provider(pick("a"), 160, now=100)
-        self.assertEqual(models.blocked_identities(now=159), {"a:m", "manual:m", "bare:m"})
-        self.assertEqual(models.blocked_identities(now=160), {"manual:m", "bare:m"})
+        self.file.write_text(json.dumps({"blocked": {"cursor:default": {"reason": "x"}, "codex:gpt-6.2-sol": True}}))
+        models.block_provider(pick("codex", "gpt-6.1-terra"), 160, now=100)
+        self.assertEqual(models.blocked_identities(now=159),
+                         {"codex:gpt-6.1-terra", "cursor:default", "codex:gpt-6.2-sol"})
+        self.assertEqual(models.blocked_identities(now=160), {"cursor:default", "codex:gpt-6.2-sol"})
+
+    def test_until_only_entry_ends_at_its_until(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"by": "provider_block", "until": stamp(160)},
+        }}))
+        self.assertEqual(models.blocked_identities(now=159), {"openai-api:gpt-6.2-astra"})
+        self.assertEqual(models.blocked_identities(now=160), set())
+
+    def test_until_is_read_only_when_expires_at_is_absent(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"expires_at": 160, "until": stamp(900)},
+        }}))
+        self.assertEqual(models.blocked_identities(now=200), set())
+
+    def test_until_accepts_a_z_suffix_and_a_bad_value_is_manual(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"until": "1970-01-01T00:02:40Z"},
+            "codex:gpt-6.2-sol": {"until": "not a time"},
+        }}))
+        self.assertEqual(models.blocked_identities(now=159),
+                         {"openai-api:gpt-6.2-astra", "codex:gpt-6.2-sol"})
+        self.assertEqual(models.blocked_identities(now=160), {"codex:gpt-6.2-sol"})
+
+    def test_unknown_model_entry_is_pruned_and_a_manual_block_is_kept(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "glm:glm-5.3": {"reason": "weekly limit"},
+            "minimax:MiniMax-M3.1-Flash": {"reason": "usage limit"},
+            "anthropic-api:claude-opus-5-5": {"reason": "credit balance too low"},
+        }}))
+        self.assertEqual(models.blocked_identities(now=100), {"anthropic-api:claude-opus-5-5"})
+
+    def test_written_entry_carries_a_numeric_expires_at(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"by": "provider_block", "until": stamp(160)},
+        }}))
+        models.block_provider(pick("openai-api", "openai/gpt-6.2-astra"), 900, now=100)
+        entry = self.blocked()["openai-api:gpt-6.2-astra"]
+        self.assertEqual(entry["expires_at"], 900)
+        self.assertIsInstance(entry["expires_at"], (int, float))
+
+    def test_a_longer_until_only_block_is_not_shortened_by_a_write(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"until": stamp(900)},
+        }}))
+        models.block_provider(pick("openai-api", "openai/gpt-6.2-astra"), 160, now=100)
+        self.assertEqual(self.blocked()["openai-api:gpt-6.2-astra"], {"until": stamp(900)})
+
+    def test_an_expired_until_only_entry_is_dropped_on_write(self):
+        self.file.write_text(json.dumps({"blocked": {
+            "openai-api:gpt-6.2-astra": {"until": stamp(50)},
+        }}))
+        models.block_provider(pick("codex", "gpt-6.2-sol"), 160, now=100)
+        self.assertEqual(set(self.blocked()), {"codex:gpt-6.2-sol"})
 
     def test_shorter_or_manual_block_never_replaces_a_longer_one(self):
         self.file.write_text(json.dumps({"blocked": {"manual:m": {"reason": "x"}, "a:m": {"expires_at": 700, "reason": "quota"}}}))

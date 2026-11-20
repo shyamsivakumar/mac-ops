@@ -9,10 +9,14 @@ A provider that fails for a blocking reason is recorded in
 `providers-blocked.json` in the queue folder, so every caller skips the same
 blocked providers. `block_provider` writes an entry with an `expires_at`
 epoch time; the reader drops an entry once that time has passed. An entry
-without a numeric `expires_at` is a manual block and stays until removed.
+written before that rule carries only an ISO 8601 `until`, which the reader
+honours when `expires_at` is absent. An entry with neither is a manual block
+and stays until removed. The reader also drops an entry whose model is no
+longer listed in `models.json`.
 """
 
 import contextlib
+import datetime
 import fcntl
 import json
 import math
@@ -253,26 +257,61 @@ def read_blocked_file(file_path):
     return data
 
 
-def expiry(entry):
-    """The entry's `expires_at` as a float, or infinity for a manual entry that never expires.
-
-    Anything that is not a finite number counts as manual, including an integer too
-    large for a float, which JavaScript's JSON.parse reads as an infinity.
-    """
-    value = entry.get("expires_at") if isinstance(entry, dict) else None
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return math.inf
+def moment(value):
+    """The epoch second an ISO 8601 timestamp names, or None when it names none."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        seconds = float(value)
-    except OverflowError:
+        stamp = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return stamp.timestamp()
+
+
+def expiry(entry):
+    """The epoch second the entry stops blocking, or infinity for a manual entry.
+
+    `expires_at` is the epoch second `block_provider` writes. An entry written
+    before that rule carries only an ISO 8601 `until`, so `until` is read when
+    `expires_at` is absent. Anything that is not a finite number counts as
+    manual, including an integer too large for a float, which JavaScript's
+    JSON.parse reads as an infinity.
+    """
+    if not isinstance(entry, dict):
         return math.inf
-    return seconds if math.isfinite(seconds) else math.inf
+    if "expires_at" in entry:
+        value = entry["expires_at"]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return math.inf
+        try:
+            seconds = float(value)
+        except OverflowError:
+            return math.inf
+        return seconds if math.isfinite(seconds) else math.inf
+    until = moment(entry.get("until"))
+    return math.inf if until is None else until
+
+
+def known_identities():
+    """Every blocked-store identity a list can produce.
+
+    An entry whose key is not one of these names a model no list carries any
+    more, so the reader drops it instead of keeping a stale block forever."""
+    known = set()
+    for name in LISTS:
+        for entry in entries(name):
+            known |= entry_identities(entry)
+    return known
 
 
 def blocked_identities(now=None):
     now = time.time() if now is None else now
     blocked = read_blocked_file(blocked_path())["blocked"]
-    return {key for key, entry in blocked.items() if expiry(entry) > now}
+    known = known_identities()
+    return {key for key, entry in blocked.items() if key in known and expiry(entry) > now}
 
 
 @contextlib.contextmanager
