@@ -18,3 +18,5 @@ Fixture run of `status_for` on a scratch repo outside the repository:
 | the same plus untracked ` .specstory-x` (leading space, lookalike name) | dirty, listed |
 
 `python3 scripts/mac_ops_fast_check.py --proof evidence/MO-514/check-proof.md` through `heavy`: passed. The repo has no cleaner tests, so the check does not exercise the cleaner beyond a syntax compile.
+
+The first clean-tree run of the check failed in "test isolation" on `pr view 169`, a call the fake `gh` does not answer, which this change does not touch. The rerun with `COORDQ_DIR` pointing at an empty temp directory passed on commit f5beb71f9af8.
