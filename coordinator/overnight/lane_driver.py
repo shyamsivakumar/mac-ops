@@ -31,7 +31,7 @@ import gate_policy
 import journal
 from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
 import prompt_paths
-from lane_briefs import OPEN_FINDINGS_INSTRUCTION, OPEN_FINDINGS_NONE, UNSTICK_BRIEF
+from lane_briefs import OPEN_FINDINGS_NONE, UNSTICK_BRIEF
 
 # The lane driver loads inside the overnight command, so it names itself on
 # its own calls. A process-wide name would charge every later overnight call
