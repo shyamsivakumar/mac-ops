@@ -7,19 +7,18 @@ from unittest.mock import patch
 C = runpy.run_path('coordinator/bin/coordq')
 
 
-def setUpModule():
-    queue = tempfile.TemporaryDirectory()
-    unittest.addModuleCleanup(queue.cleanup)
-    environment = patch.dict(os.environ, {"COORDQ_DIR": queue.name})
-    environment.start()
-    unittest.addModuleCleanup(environment.stop)
-
-
 def review_selection(entry_id):
     return next(e['selection'] for e in C['model_list'].entries('review') if e['id'] == entry_id)
 
 
 class ReviewerQuotaTests(unittest.TestCase):
+    def setUp(self):
+        queue = tempfile.TemporaryDirectory()
+        self.addCleanup(queue.cleanup)
+        environment = patch.dict(os.environ, {"COORDQ_DIR": queue.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_vendor_routing(self):
         for builder, expected in [('claude', 'astra-api'), ('gpt-6.1-sol', 'opus-api'), ('minimax/m3', 'astra-api'), ('deepseek/flash', 'astra-api'), ('glm/5', 'astra-api')]:
             self.assertEqual(C['reviewer_model']([builder]), review_selection(expected))
