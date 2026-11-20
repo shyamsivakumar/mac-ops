@@ -28,9 +28,10 @@ is recorded as `not run` too, and leaves the run incomplete: the run is
 then not a pass.
 
 
+
 ## Scorecard runs
 
-Code head these runs used: `e552e004b23d8bd677ad56042fdba17cfbb3e3fb`. The check above ran on the same head. Runs were made at 2026-11-19 17:40 PST.
+Code head these runs used: `37c7c5c193348561e2b682b2a4996249d99eeee6` (the commits after it change only this proof file). The check above ran on the same head. Runs were made at 2026-11-19 17:41 PST.
 
 ### Acceptance 2: fixture replay
 
@@ -77,7 +78,7 @@ The fixture holds one ticket: a gate FAIL on head A, a fix, a gate launch on hea
 
 ```
 $ scorecard backfill --since 2026-11-13 --journal-dir $T
-backfill: 22494 events since 2026-11-13 written to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T//sc.LPmg/events-backfill.jsonl (0 earlier rows kept): dropped 18, launch_failed 57, launched 8044, slots 14375
+backfill: 22494 events since 2026-11-13 written to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T//sc.NC83/events-backfill.jsonl (0 earlier rows kept): dropped 18, launch_failed 57, launched 8044, slots 14375
 $ scorecard --date 2026-11-19 --journal-dir $T --out-dir $O
 Factory scorecard 2026-11-19 (America/Los_Angeles), journal coverage none, 2 GitHub calls
 [headline]
@@ -115,7 +116,7 @@ Factory scorecard 2026-11-19 (America/Los_Angeles), journal coverage none, 2 Git
 unknown metrics (17): board.alarms_open_at_end, board.alarms_raised, board.alarms_withdrawn, cost.human_touches, flow.duplicate_gate_heads, flow.fix_rounds, flow.gate_heads, flow.gate_launches_per_merge, flow.launches_per_accepted, flow.merges_journal, flow.prs_at_round_cap, flow.verdict_mix, guardrails.audit_disagreement, guardrails.change_failure, guardrails.lead_time, headline.accepted_tickets, machine.minutes_over_cap
 ```
 
-GitHub calls for this report: 2 (rows with caller `scorecard` in the gateway usage log before and after: 96, 98). The limit is 60. One owner-wide search per kind (merged PRs, closed issues) serves all 12 configured repos, plus one revert search for days at least 7 days old.
+GitHub calls for this report: 2 (rows with caller `scorecard` in the gateway usage log before and after: 103, 105). The limit is 60. One owner-wide search per kind (merged PRs, closed issues) serves all 12 configured repos, plus one revert search for days at least 7 days old.
 
 Live journal files in the default journal dir touched by these runs: 0 (the backfill and the report wrote to temp dirs only).
 
@@ -164,15 +165,9 @@ Only drain's `at cap n/m, K waiting` lines and the `(was n/m)` on starts are rea
 The real day has no live journal, so every merge is unmatched on the journal side. The matching itself was exercised with a throwaway journal of three real merged PRs, one that is not on GitHub, and one slots event from the day before so the journal counts as running the whole day:
 
 ```
-Traceback (most recent call last):
-  File "<stdin>", line 17, in <module>
-  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/json/__init__.py", line 346, in loads
-    return _default_decoder.decode(s)
-  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/json/decoder.py", line 337, in decode
-    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
-  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/json/decoder.py", line 355, in raw_decode
-    raise JSONDecodeError("Expecting value", s, err.value) from None
-json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+journal merged events: 2 merged, 1 merged_outside_lane, 1 not on GitHub (#99999)
+github_merges 80 matched 3 on_github_not_in_journal 77 in_journal_not_on_github ['shyamsivakumar/mac-ops#99999']
+human_touches 122 merges 78 closes 44
 ```
 
 ### Review follow-ups, run on the same head
@@ -229,7 +224,7 @@ The decision: a report whose GitHub reads failed is not written, so a day JSON a
 $ scorecard backfill --since 2026-11-18 --journal-dir $J
 backfill: 9030 events since 2026-11-18 written to /var/folders/d3/kwh8z2bj1rlgy6fill.jsonl (0 earlier rows kept): dropped 10, launch_failed 30, launched 3323, slots 5667
 $ scorecard backfill --since 2026-11-19 --journal-dir $J
-backfill: 1209 events since 2026-11-19 written to /var/folders/d3/kwh8z2bj1rlgy6/bf.W3bi/events-backfill.jsonl (7821 earlier rows kept): dropped 8, launch_failed 24, launched 568, slots 609
+backfill: 1209 events since 2026-11-19 written to /var/folders/d3/kwh8z2bj1rlgy6/bf.qptV/events-backfill.jsonl (7821 earlier rows kept): dropped 8, launch_failed 24, launched 568, slots 609
 $ scorecard backfill --since 2026-11-19 --dispatch-log /nonexistent/dispatch.log --journal-dir $J ; echo exit $?
 scorecard: the dispatch log /nonexistent/dispatch.log does not exist
 exit 1
@@ -240,23 +235,23 @@ exit 1
 Run against a stub scorecard script that sleeps 2 seconds and then fails or succeeds, with the real `daily_scorecard` code and real Popen, ps and kill:
 
 ```
-SCORECARD 2026-11-18 try 1 started as pid 18926
+SCORECARD 2026-11-18 try 1 started as pid 26211
 launch took 0.00s
-{'scorecard:2026-11-18': {'tries': 1, 'done': False, 'pid': 18926, 'started': 1795138826.202986}}
+{'scorecard:2026-11-18': {'tries': 1, 'done': False, 'pid': 26211, 'started': 1795138885.341803}}
 SCORECARD 2026-11-18 try 1 ended without a report, see <tmp>/log
-SCORECARD 2026-11-18 try 2 started as pid 19657
-{'scorecard:2026-11-18': {'tries': 2, 'done': False, 'pid': 19657, 'started': 1795138828.738354}}
+SCORECARD 2026-11-18 try 2 started as pid 26436
+{'scorecard:2026-11-18': {'tries': 2, 'done': False, 'pid': 26436, 'started': 1795138887.866915}}
 SCORECARD 2026-11-18 written
-{'scorecard:2026-11-18': {'tries': 2, 'done': True, 'pid': None, 'started': 1795138828.738354}}
-{'scorecard:2026-11-18': {'tries': 2, 'done': True, 'pid': None, 'started': 1795138828.738354}}
-SCORECARD 2026-11-18 try 1 started as pid 20572
+{'scorecard:2026-11-18': {'tries': 2, 'done': True, 'pid': None, 'started': 1795138887.866915}}
+{'scorecard:2026-11-18': {'tries': 2, 'done': True, 'pid': None, 'started': 1795138887.866915}}
+SCORECARD 2026-11-18 try 1 started as pid 26587
 SCORECARD 2026-11-18 try 1 killed after 1s
-{'scorecard:2026-11-18': {'tries': 1, 'done': False, 'pid': None, 'started': 1795138833.758276}}
-SCORECARD 2026-11-18 try 2 started as pid 21056
+{'scorecard:2026-11-18': {'tries': 1, 'done': False, 'pid': None, 'started': 1795138892.892182}}
+SCORECARD 2026-11-18 try 2 started as pid 26634
 SCORECARD 2026-11-18 try 2 ended without a report, see <tmp>/log
-SCORECARD 2026-11-18 try 3 started as pid 21261
+SCORECARD 2026-11-18 try 3 started as pid 26890
 SCORECARD 2026-11-18 try 3 ended without a report, see <tmp>/log
-{'scorecard:2026-11-18': {'tries': 3, 'done': False, 'pid': None, 'started': 1795138837.2083058}}
+{'scorecard:2026-11-18': {'tries': 3, 'done': False, 'pid': None, 'started': 1795138896.3254569}}
 ```
 
 The first call returns at once (launch took 0.00s) with the pid and start time in the ledger. A later pass sees the process ended without a day JSON, counts it, and starts the next try; the day JSON ends the retries; a run past the age limit (shortened to 1 s here, 10 minutes in the code) is killed; and the tries stop at 3.
