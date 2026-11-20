@@ -8,33 +8,33 @@ Before is the installed ~/.claude/hooks/deny-merge-guard.py. After is the repo h
 
 | command | project dir | permission_mode | before | after |
 | --- | --- | --- | --- | --- |
-| `gh pr merge 531 --squash` | - | default | ask | ask |
-| `gh pr merge 531 --squash` | - | auto | ask | ask |
+| `gh pr merge 531 --squash` | - | default | deny | ask |
+| `gh pr merge 531 --squash` | - | auto | deny | ask |
 | `gh pr merge 531 --squash` | - | bypassPermissions | deny | deny |
 | `gh pr merge 531 --squash` | - | dontAsk | deny | deny |
 | `gh pr merge 531 --squash` | - | brandNewMode | deny | deny |
-| `git push origin main` | - | default | ask | ask |
-| `git push origin HEAD:master` | - | default | ask | ask |
-| `cat app/.env` | - | default | ask | ask |
-| `cat ~/.ssh/id_rsa` | - | default | ask | ask |
+| `git push origin main` | - | default | deny | ask |
+| `git push origin HEAD:master` | - | default | deny | ask |
+| `cat app/.env` | - | default | allow | ask |
+| `cat ~/.ssh/id_rsa` | - | default | allow | ask |
 | `ls ~/.ssh` | - | default | allow | allow |
 | `gcloud run services list` | - | default | allow | allow |
 | `gcloud run deploy svc --image x` | - | default | allow | allow |
 | `bq query 'select 1'` | - | default | allow | allow |
 | `heroku logs -a x` | - | default | allow | allow |
 | `heroku config:set A=1 -a x` | - | default | allow | allow |
-| `gcloud secrets versions access latest --secret=api` | - | default | ask | ask |
-| `gcloud run services describe s --format='value(payload)'` | - | default | ask | ask |
-| `heroku config -a x` | - | default | ask | ask |
-| `heroku config:get KEY -a x` | - | default | ask | ask |
-| `cat ~/Code/slash-eureka/README.md` | - | default | ask | ask |
-| `cd ~/Code/slash-eureka/x && ls` | - | default | ask | ask |
-| `ls (cwd ~/Code/slash-eureka/x)` | - | default | ask | ask |
-| `echo hi (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | allow | allow |
-| `git status (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | allow | allow |
-| `cd ~/Code/slash-eureka/x && git status` | ~/Code/slash-eureka | default | allow | allow |
-| `cat app/.env (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | ask | ask |
-| `rm ~/Code/slash-eureka/x (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | allow | allow |
+| `gcloud secrets versions access latest --secret=api` | - | default | allow | ask |
+| `gcloud run services describe s --format='value(payload)'` | - | default | allow | ask |
+| `heroku config -a x` | - | default | allow | ask |
+| `heroku config:get KEY -a x` | - | default | allow | ask |
+| `cat ~/Code/slash-eureka/README.md` | - | default | allow | ask |
+| `cd ~/Code/slash-eureka/x && ls` | - | default | deny | ask |
+| `ls (cwd ~/Code/slash-eureka/x)` | - | default | deny | ask |
+| `echo hi (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | deny | allow |
+| `git status (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | deny | allow |
+| `cd ~/Code/slash-eureka/x && git status` | ~/Code/slash-eureka | default | deny | allow |
+| `cat app/.env (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | deny | ask |
+| `rm ~/Code/slash-eureka/x (cwd ~/Code/slash-eureka/x)` | ~/Code/slash-eureka | default | deny | allow |
 | `git push origin t3/x --force` | - | default | deny | deny |
 | `git push -f origin t3/x` | - | default | deny | deny |
 | `git push --force-with-lease origin t3/x` | - | default | deny | deny |
@@ -51,28 +51,40 @@ Before is the installed ~/.claude/hooks/deny-merge-guard.py. After is the repo h
 | `Read ~/link/src/a.py (symlink into slash-eureka) (cwd ~/Code/mac-ops)` | - | default | allow | ask |
 | `Write ~/link/new.py (symlink into slash-eureka) (cwd ~/Code/mac-ops)` | - | default | allow | ask |
 | `Read ~/Code/mac-ops/README.md (cwd ~/Code/mac-ops)` | - | default | allow | allow |
-| `git push --delete origin t3/x` | - | default | deny | deny |
-| `git push -d origin t3/x` | - | default | deny | deny |
-| `git push origin :t3/x` | - | default | deny | deny |
-| `gcloud compute instances delete vm1 --quiet` | - | default | deny | deny |
-| `bq rm -t ds.tbl` | - | default | deny | deny |
-| `heroku apps:destroy -a x --confirm x` | - | default | deny | deny |
-| `heroku addons:destroy db -a x` | - | default | deny | deny |
-| `gh repo delete a/b --yes` | - | default | deny | deny |
-| `gh release delete v1 --yes` | - | default | deny | deny |
-| `gh api -X DELETE repos/a/b/git/refs/heads/x` | - | default | deny | deny |
-| `gh api --method DELETE repos/a/b` | - | default | deny | deny |
-| `curl -X DELETE https://x.test/a` | - | default | deny | deny |
-| `curl --request DELETE https://x.test/a` | - | default | deny | deny |
-| `http DELETE https://x.test/a` | - | default | deny | deny |
+| `git push --delete origin t3/x` | - | default | allow | deny |
+| `git push -d origin t3/x` | - | default | allow | deny |
+| `git push origin :t3/x` | - | default | allow | deny |
+| `gcloud compute instances delete vm1 --quiet` | - | default | allow | deny |
+| `bq rm -t ds.tbl` | - | default | allow | deny |
+| `heroku apps:destroy -a x --confirm x` | - | default | allow | deny |
+| `heroku addons:destroy db -a x` | - | default | allow | deny |
+| `gh repo delete a/b --yes` | - | default | allow | deny |
+| `gh release delete v1 --yes` | - | default | allow | deny |
+| `gh api -X DELETE repos/a/b/git/refs/heads/x` | - | default | allow | deny |
+| `gh api --method DELETE repos/a/b` | - | default | allow | deny |
+| `curl -X DELETE https://x.test/a` | - | default | allow | deny |
+| `curl --request DELETE https://x.test/a` | - | default | allow | deny |
+| `http DELETE https://x.test/a` | - | default | allow | deny |
 | `gh api repos/a/b` | - | default | allow | allow |
 | `curl https://x.test/a` | - | default | allow | allow |
-| `rm app/.env` | - | default | deny | deny |
-| `rm -rf ~/Code/slash-eureka/x` | - | default | deny | deny |
-| `rmdir ~/Code/slash-eureka/x` | - | default | deny | deny |
-| `unlink ~/.ssh/id_rsa` | - | default | deny | deny |
-| `trash cert.pem` | - | default | deny | deny |
-| `find ~/Code/slash-eureka -name x -delete` | - | default | deny | deny |
+| `rm "~/Code/slash-eureka/a b/x"` | - | default | allow | deny |
+| `rm ~/Code/slash-eureka/a\ b/x` | - | default | allow | deny |
+| `rm 'my dir/.env'` | - | default | allow | deny |
+| `rm my\ dir/.env` | - | default | allow | deny |
+| `unlink ~/.ssh/my\ key.pem` | - | default | allow | deny |
+| `find "~/Code/slash-eureka/a b" -delete` | - | default | allow | deny |
+| `trash "a b/.env"` | - | default | allow | deny |
+| `cat "~/Code/slash-eureka/a b/x"` | - | default | allow | ask |
+| `rm "my docs/notes.txt"` | - | default | allow | allow |
+| `curl -u user:pass -X DELETE https://x.test/a` | - | default | allow | deny |
+| `curl -X DELETE https://user:pass@x.test/a` | - | default | allow | deny |
+| `git push https://tok@github.com/a/b.git main` | - | default | deny | ask |
+| `rm app/.env` | - | default | allow | deny |
+| `rm -rf ~/Code/slash-eureka/x` | - | default | allow | deny |
+| `rmdir ~/Code/slash-eureka/x` | - | default | allow | deny |
+| `unlink ~/.ssh/id_rsa` | - | default | allow | deny |
+| `trash cert.pem` | - | default | allow | deny |
+| `find ~/Code/slash-eureka -name x -delete` | - | default | allow | deny |
 | `rm -rf build` | - | default | allow | allow |
 | `git push -u origin t3/x` | - | default | allow | allow |
 | `git status` | - | default | allow | allow |
@@ -99,38 +111,53 @@ A full ask reason, as Claude Code shows it:
 Audit log lines from this table run (command cut to 200 chars, secret paths redacted):
 
 ```
-{"time": "2026-11-20T17:03:56Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "command": "cat [secret]"}
-{"time": "2026-11-20T17:03:56Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "cloud_secret", "decision": "ask", "command": "gcloud run services describe s --format='value(payload)'"}
-{"time": "2026-11-20T17:03:56Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "command": "cat [secret]"}
-{"time": "2026-11-20T17:03:56Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "command": "git push --force-with-lease origin t3/x"}
-{"time": "2026-11-20T17:03:56Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "command": "git push origin main --force"}
+{"time": "2026-11-20T17:44:04Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T17:44:04Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "cloud_secret", "decision": "ask", "program": "gcloud"}
+{"time": "2026-11-20T17:44:05Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "secret_files", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T17:44:05Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
+{"time": "2026-11-20T17:44:05Z", "runtime": "claude", "session_id": "probe", "tool": "Bash", "family": "force_push", "decision": "deny", "program": "git"}
 ```
 
 ## Audit log redaction
 
-Temp HOME `/private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/audithome.HMG6`; nothing reaches the real audit log. An Edit into slash-eureka from a non-Ascend session with fake secret-looking text in `new_string`, `old_string`, `content` and `edits`, then a Bash echo of a fake password and key into slash-eureka.
+Temp HOME /private/tmp/claude-501/-Users-shyamsivakumar-Code/c283b00e-e8c8-422f-9aa1-eb7c969bb5ce/scratchpad/audithome.yOYR; nothing reaches the real audit log. An Edit into slash-eureka from a non-Ascend session with fake secret-looking text in `new_string`, `old_string`, `content` and `edits`, then Bash commands that carry fake credentials: an echo of a password into slash-eureka, curl with -u user:pass, a URL with user:pass@, a git push to a URL with a token, an env-assigned token, and a quoted spaced path. A Bash line holds only the program name.
 
 ```
-Edit -> ask
-Bash -> ask
+Edit  -> ask
+Bash echo password=hunter2 > ~/Code/slash-eureka/x -> ask
+Bash curl -u user:pass -X DELETE https://x.test/a -> deny
+Bash curl -X DELETE https://user:pass@x.test/a -> deny
+Bash git push https://tok@github.com/a/b.git main -> ask
+Bash TOKEN=hunter2 cat ~/Code/slash-eureka/x -> ask
+Bash rm "~/Code/slash-eureka/a b/x" --note=pw-hunter2 -> deny
 ```
 
 Audit lines written:
 
 ```
-{"time": "2026-11-20T17:04:01Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Edit", "family": "ascend", "decision": "ask", "target": "<home>/Code/slash-eureka/app.py"}
-{"time": "2026-11-20T17:04:01Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "command": "echo password=[redacted] > ~/Code/slash-eureka/x"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Edit", "family": "ascend", "decision": "ask", "target": "<home>/Code/slash-eureka/app.py"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "echo"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "remote_delete", "decision": "deny", "program": "curl"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "push_protected", "decision": "ask", "program": "git"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "ascend", "decision": "ask", "program": "cat"}
+{"time": "2026-11-20T17:44:11Z", "runtime": "claude", "session_id": "redact-demo", "tool": "Bash", "family": "protected_removal", "decision": "deny", "program": "rm"}
 ```
 
 Leak check over the whole audit file (each count must be 0):
 
 ```
 hunter2: 0
+user:pass: 0
+tok@: 0
+x.test: 0
 AKIA: 0
 OLD_SECRET_TEXT: 0
 abc123: 0
 sk-qqq: 0
 new_string: 0
+pw-: 0
+"command": 0
 ```
 
 ## pi guard
@@ -203,6 +230,7 @@ hook registered: ['python3 <root>/.claude/hooks/deny-merge-guard.py']
 Backups written before the change (settings, previous hook):
 
 ```
+<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.local/state/mac-ops/deny-rules-receipt.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/hooks/deny-merge-guard.py
@@ -215,7 +243,6 @@ Backups written before the change (settings, previous hook):
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-anthropic-api/extensions/deny-guard.ts
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-anthropic-api/AGENTS.md
 <root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.pi/agent-minimax/extensions/deny-guard.ts
-<root>/.local/state/mac-ops/deny-rules-backups/<stamp>/snapshot/.claude/settings.json
 ```
 
 Status after install:
@@ -229,7 +256,7 @@ Status after install:
 ```
 .............................
 ----------------------------------------------------------------------
-Ran 29 tests in 7.964s
+Ran 29 tests in 8.140s
 
 OK
 ```
