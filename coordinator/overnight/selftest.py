@@ -600,12 +600,15 @@ def merged_restart():
 
         def command(cmd, timeout=150, actions=actions, board=board):
             if cmd[:3] == ["gh", "pr", "list"]:
+                exact(cmd[cmd.index("--limit") + 1], str(lane.SETTLE_PR_LIMIT))
+                exact(cmd[cmd.index("--search") + 1].startswith("merged:>="), True)
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:
                 exact(cmd[3:5], ["--pr", "20"])
                 actions.append("provides")
                 if board == "close-failed":
-                    raise subprocess.CalledProcessError(1, cmd)
+                    raise subprocess.CalledProcessError(
+                        1, cmd, output="scope: fail - the ticket names no file\nRESULT: FAIL")
                 return "closed"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
@@ -638,6 +641,10 @@ def merged_restart():
                   ["lane-close-failed-MO-20"] if board == "close-failed" else [])
             exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
                   [item_id] if board == "decisions" else [])
+            if board == "close-failed":
+                why = json.loads(owner_path.read_text())["items"][0]["why"]
+                exact("scope: fail - the ticket names no file" in why, True)
+                exact("RESULT: FAIL" in why, False)
 
 
 def merge_pass():

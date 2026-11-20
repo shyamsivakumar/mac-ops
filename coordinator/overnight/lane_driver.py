@@ -1255,23 +1255,33 @@ def after_merge(repo, number, head, issue, gate):
     fast_forward_main(repo)
 
 
-def close_failed_item(repo, number, head, issue):
+def failed_checklist_lines(exc):
+    text = f"{exc.output or ''}\n{exc.stderr or ''}"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return [line for line in lines if ": fail" in line] or lines[:1]
+
+
+def close_failed_item(repo, number, head, issue, failed):
     key = CFG[repo]["key"]
+    why = "The lane tried the close once and does not retry it every pass."
+    if failed:
+        why += f" The close checklist said: {'; '.join(failed)}"
     return {"id": f"lane-close-failed-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": (f"{key}-{number} is merged at head {head[:8]} but closing {key}-{issue} failed: "
                       "check why and close the ticket yourself."),
-            "why": "The lane tried the close once and does not retry it every pass."}
+            "why": why}
 
 
 def close_after_merge(repo, number, head, issue, gate, ledger):
     lkey = f"after-merge:{repo}#{number}:{head}"
     try:
         after_merge(repo, number, head, issue, gate)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as exc:
         ledger[lkey] = "close failed"
-        publish_decision(close_failed_item(repo, number, head, issue))
-        return
+        publish_decision(close_failed_item(repo, number, head, issue, failed_checklist_lines(exc)))
+        return False
     ledger[lkey] = "closed"
+    return True
 
 
 def merged_without_gate_item(repo, number, head):
@@ -1282,10 +1292,15 @@ def merged_without_gate_item(repo, number, head):
             "why": "The lane closes a ticket only after a merge whose head the recorded gate attempt passed."}
 
 
+SETTLE_LOOKBACK_DAYS = 3
+SETTLE_PR_LIMIT = 100
+
+
 def settle_merged_prs(repo, ledger):
-    merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "10",
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - SETTLE_LOOKBACK_DAYS * 86400))
+    merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged",
+                             "--search", f"merged:>={since[:10]}", "--limit", str(SETTLE_PR_LIMIT),
                              "--json", "number,headRefOid,body,mergedAt,baseRefName"]) or "[]")
-    since = ledger.setdefault("settle-since", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     for pr in merged:
         if (pr.get("mergedAt") or "") < since:
             continue
@@ -1302,8 +1317,10 @@ def settle_merged_prs(repo, ledger):
                      f"journal-outside:{repo}#{number}:{head}",
                      thread=gate["threadId"] if gate else None, verdict=verdict)
         if verdict == "PASS":
-            close_after_merge(repo, number, head, found.group(1), gate, ledger)
-            print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
+            if close_after_merge(repo, number, head, found.group(1), gate, ledger):
+                print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
+            else:
+                print(f"{CFG[repo]['key']:5} #{number}: merged earlier, close failed, board item raised")
         else:
             publish_decision(merged_without_gate_item(repo, number, head))
             ledger[lkey] = "item raised"
