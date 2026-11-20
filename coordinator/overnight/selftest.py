@@ -585,27 +585,41 @@ def gate_pipeline():
 def merged_restart():
     import lane_driver as lane
     head = "a" * 40
-    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt="2999-01-01T00:00:00Z", baseRefName="main"),
-              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt="2000-01-01T00:00:00Z", baseRefName="main")]
+    now = time.time()
+
+    def days_ago(days):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - days * 86400))
+
+    merged = [dict(number=20, headRefOid=head, body="Refs #10", mergedAt=days_ago(2), baseRefName="main"),
+              dict(number=21, headRefOid="b" * 40, body="Refs #10", mergedAt=days_ago(4), baseRefName="main")]
+    gate_key = {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"}
+    passing = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
     for repo, key, receipts, reply, expected, board in [
-        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"},
-         f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS",
-         ["provides", "ff"], None),
-        ("shyamsivakumar/mac-ops", "MO", {f"gate:shyamsivakumar/mac-ops#20:{head}": "gate", "base:gate": "main"},
-         f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS", ["provides"], "close-failed"),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, passing, ["provides", "ff"], None),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, passing, ["provides"], "close-failed"),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, passing, ["provides", "ff"], "ff-failed"),
+        ("shyamsivakumar/mac-ops", "MO", gate_key, "", [], "running"),
         ("shyamsivakumar/mac-ops", "MO", {}, "", [], "owner"),
         ("shyamsivakumar/strategy-replay-workbench", "SRW", {}, "", [], "decisions"),
     ]:
         actions = []
+        searches = []
+        checklist = {"items": [
+            dict(item="scope", status="pass", detail="every file is named"),
+            dict(item="proof file", status="skipped", detail="there is no proof file to read"),
+            dict(item="cost note", status="skipped", required=False, detail="the report does not exist yet"),
+            dict(item="checks", status="fail", detail="a check failed")]}
 
-        def command(cmd, timeout=150, actions=actions, board=board):
+        def command(cmd, timeout=150, actions=actions, board=board, searches=searches):
             if cmd[:3] == ["gh", "pr", "list"]:
+                exact(cmd[cmd.index("--limit") + 1], "300")
+                searches.append(cmd[cmd.index("--search") + 1])
                 return json.dumps(merged)
             if cmd[:2] == ["ticket", "close"]:
                 exact(cmd[3:5], ["--pr", "20"])
                 actions.append("provides")
                 if board == "close-failed":
-                    raise subprocess.CalledProcessError(1, cmd)
+                    raise subprocess.CalledProcessError(1, cmd, output="refused: the close checklist failed")
                 return "closed"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
@@ -613,11 +627,14 @@ def merged_restart():
                 return "refs/heads/main"
             if cmd[0] == "git" and "--ff-only" in cmd:
                 actions.append("ff")
+                if board == "ff-failed":
+                    raise subprocess.CalledProcessError(1, cmd, output="not a fast-forward")
                 return "updated"
             raise AssertionError(f"unexpected command: {cmd}")
 
-        def threads(tool, args, reply=reply):
-            return {"thread": {"status": "completed"}, "items": [{"type": "assistant_message", "text": reply}]}
+        def threads(tool, args, reply=reply, board=board):
+            status = "running" if board == "running" else "completed"
+            return {"thread": {"status": status}, "items": [{"type": "assistant_message", "text": reply}]}
 
         ledger = {}
         with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions, \
@@ -626,18 +643,32 @@ def merged_restart():
              patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
              patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": [dict(number=10, labels=[])]}}}), \
              patch.object(lane, "DRY", False), \
+             patch.object(lane.close_check, "run_check", lambda *args, checklist=checklist: checklist), \
              patch.object(lane, "run", command), patch.object(lane, "t3", threads):
             Path(scratch, "receipts.json").write_text(json.dumps(receipts))
             for _ in range(2):
                 lane.settle_merged_prs(repo, ledger)
                 exact(actions, expected)
+            exact(searches, [f"merged:>={days_ago(lane.SETTLE_LOOKBACK_DAYS)[:10]}"] * 2)
             item_id = f"lane-merged-unreviewed-{key}-20"
             owner_path = Path(scratch, "owner.json")
-            owner = [i["id"] for i in json.loads(owner_path.read_text())["items"]] if owner_path.exists() else []
-            exact(owner, [item_id] if board == "owner" else
+            owner = json.loads(owner_path.read_text())["items"] if owner_path.exists() else []
+            exact([i["id"] for i in owner], [item_id] if board == "owner" else
                   ["lane-close-failed-MO-20"] if board == "close-failed" else [])
             exact([i["id"] for i in json.loads(decisions.read_text())["items"]],
                   [item_id] if board == "decisions" else [])
+            exact(sorted(k for k in ledger if k.startswith("after-merge:")),
+                  [] if board == "running" else [f"after-merge:{repo}#20:{head}"])
+            if board == "close-failed":
+                why = owner[0]["why"]
+                exact("proof file: skipped - there is no proof file to read" in why, True)
+                exact("checks: fail - a check failed" in why, True)
+                exact("scope: pass" in why or "cost note" in why, False)
+            if board == "owner":
+                exact("no gate attempt for this head has a recorded base" in owner[0]["why"], True)
+                exact("(ticket MO-10)" in owner[0]["title"], True)
+            if board == "ff-failed":
+                exact(ledger[f"after-merge:{repo}#20:{head}"], "closed")
 
 
 def merge_pass():
@@ -2283,6 +2314,16 @@ def decisions_board_guard():
     cards.append({"id": "unrelated"})
     exact(reconcile(), len(settled))
     exact("unrelated" in taken, False)
+    # A merged-unreviewed card is withdrawn once the ticket it names is closed.
+    def unreviewed_title(pr, ticket):
+        return (f"MO-{pr} is merged at head 12345678 without a gate PASS the lane can tie to the merge, "
+                f"so its ticket stays open (ticket MO-{ticket}): check the merge and close the ticket yourself.")
+    cards[:] = [{"id": "lane-merged-unreviewed-MO-663", "title": unreviewed_title(663, 659)},
+                {"id": "lane-merged-unreviewed-MO-703", "title": unreviewed_title(703, 701)}]
+    closed_tickets.clear()
+    closed_tickets.add(659)
+    exact(reconcile(), 1)
+    exact(taken, ["lane-merged-unreviewed-MO-663"])
 
 
 def send_integrity():
