@@ -730,19 +730,40 @@ def gate_round_item(repo, number, head):
     }
 
 
+def card_on_board(alarm_id):
+    """True when the decisions item is on the board it belongs to.
+
+    The item id is fixed per pull request, so the board is the only place
+    that says whether the card is still there. A board that cannot be read
+    reads as no card, so a missing card is raised again instead of being
+    trusted to a ledger key.
+    """
+    _, board = alarms.read_board(alarms.board_for(DECISIONS_PATH, alarm_id))
+    return any(isinstance(entry, dict) and entry.get("id") == alarm_id
+               for entry in (board or {"items": []})["items"])
+
+
 def gate_round_decision(repo, number, head, ledger):
     """Raise the one decisions item for a pull request that used its rounds.
 
     The board holds one item per pull request: the item has a fixed id,
     so a later pass over the same pull request finds it already raised
-    instead of raising a second one.
+    instead of raising a second one. The ledger key alone is not proof
+    that the card is there: a card that was withdrawn or never written is
+    raised again, so the ledger and the board cannot disagree.
     """
     lkey = f"rounds-decision:{repo}#{number}"
-    if lkey in ledger:
-        if not DRY:
-            alarms.migrate_stale(DECISIONS_PATH, gate_round_item(repo, number, "")["id"])
-        return f"#{number}: no fix round, the decisions item is on the board"
     item = gate_round_item(repo, number, head)
+    if lkey in ledger:
+        if DRY:
+            return f"DRY #{number}: no fix round, the decisions item is on the board"
+        if alarms.migrate_stale(DECISIONS_PATH, item["id"]) != "wrote":
+            return f"#{number}: the decisions item could not be published"
+        if card_on_board(item["id"]):
+            return f"#{number}: no fix round, the decisions item is on the board"
+        if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+            return f"#{number}: the decisions item could not be published"
+        return f"#{number}: no fix round, the decisions item was raised again"
     if DRY:
         return f"DRY #{number}: no fix round, one decisions item"
     if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":

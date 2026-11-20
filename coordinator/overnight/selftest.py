@@ -2033,6 +2033,19 @@ def gate_round_cap():
             at_cap(number, report)
             exact(round_item(number), True)
         exact(merged, [(30, heads[2])])
+        # A ledger key with no card on the board is not proof the card is
+        # there: the item is raised again, and the ledger key stays. A
+        # second pass finds the card and raises no second one.
+        missing = {f"rounds:{repo}#24": {"count": 3, "head": heads[2]},
+                   f"rounds-decision:{repo}#24": "lane-gate-rounds-shyamsivakumar-mac-ops-24"}
+        result = act(24, heads[3], missing, verdict=("absent", None, ""))
+        exact(result, "#24: no fix round, the decisions item was raised again")
+        exact(round_item(24), True)
+        exact(f"rounds-decision:{repo}#24" in missing, True)
+        result = act(24, heads[3], missing, verdict=("absent", None, ""))
+        exact(result, "#24: no fix round, the decisions item is on the board")
+        exact(sum(1 for item in json.loads(board.read_text())["items"]
+                  if item["id"] == "lane-gate-rounds-shyamsivakumar-mac-ops-24"), 1)
         # (d) round 1 FAIL with the none line is a normal fix round.
         sent.clear()
         with patch.object(lane, "merge_on_reviewed_base", merge):
@@ -2052,6 +2065,79 @@ def gate_round_cap():
         two_rounds = {f"fix:{repo}#36:{heads[0]}": "sent", f"fix:{repo}#36:{heads[1]}": "sent"}
         exact(lane.OPEN_FINDINGS_NONE in brief_for(two_rounds), True)
         exact(lane.OPEN_FINDINGS_NONE in brief_for({}), False)
+    gatekeep_round_cap()
+
+
+def gatekeep_round_cap():
+    """Gatekeep queues no gate for a pull request at the lane's round cap.
+
+    The lane counts the failed gate reviews of a pull request in its
+    ledger. Gatekeep reads that same count, so a pull request that used
+    its rounds is skipped instead of gated again: SRW#1338 was gated ten
+    times because every new head looked like a fresh candidate.
+    """
+    coordq = load_coordq()
+    repo = "shyamsivakumar/strategy-replay-workbench"
+    head = "3b7671c1" + "0" * 32
+    pr = {"draft": False, "number": 1338, "head": {"sha": head},
+          "body": f"Refs #1338\nBuilder check: PASS {head}\n",
+          "changed_files": 1, "base": {"ref": "main"}}
+    config = {"repos": {repo: {"key": "SRW", "projectId": "fixture"}}}
+
+    class Run:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([[pr]]))
+        # A pull request at the cap is skipped before any other read, so
+        # no other endpoint is asked for.
+        raise AssertionError(f"unexpected read for a capped pull request: {endpoint}")
+
+    def events(ledger):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             contextlib.redirect_stderr(io.StringIO()) as errors:
+            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
+            found = list(coordq.gate_candidates(config))
+        return found, errors.getvalue()
+
+    # The SRW#1338 shape: ten failed rounds, a new head, no gate queued.
+    found, errors = events({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
+    exact([event["kind"] for event in found], ["skip"])
+    exact(found[0]["reason"], "at the gate round cap")
+    exact(f"skip {repo}#1338: at the gate round cap, no gate queued" in errors, True)
+    # Three failed rounds is the cap itself, and three fix rounds count the
+    # same way the lane counts them.
+    for ledger in ({f"rounds:{repo}#1338": {"count": 3}},
+                   {f"fix:{repo}#1338:{head}": "sent",
+                    f"fix:{repo}#1338:{'b' * 40}": "sent",
+                    f"fix:{repo}#1338:{'c' * 40}": "sent"}):
+        found, _ = events(ledger)
+        exact([event["kind"] for event in found], ["skip"])
+    # Under the cap the pull request is still gated, and a ledger that
+    # cannot be read is no reason to stop the gate.
+    for ledger in ({f"rounds:{repo}#1338": {"count": 2}}, {},
+                   {"rounds:other/repo#1": {"count": 9}}):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")):
+            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
+            exact(coordq.gate_rounds_used(repo, 1338, coordq.lane_ledger()), False)
+    with tempfile.TemporaryDirectory() as scratch, \
+         patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "missing.json")):
+        exact(coordq.lane_ledger(), {})
+        exact(coordq.gate_rounds_used(repo, 1338, coordq.lane_ledger()), False)
+        Path(scratch, "corrupt.json").write_text("{not json")
+        with patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "corrupt.json")):
+            exact(coordq.lane_ledger(), {})
 
 
 def decisions_board_guard():
