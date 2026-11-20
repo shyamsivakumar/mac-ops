@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -2107,13 +2108,35 @@ def gatekeep_round_cap():
              patch.object(coordq.gh_gateway, "run", run), \
              contextlib.redirect_stderr(io.StringIO()) as errors:
             Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
-            found = list(coordq.gate_candidates(config))
+            found = list(coordq.gate_candidates(config, coordq.lane_ledger()))
         return found, errors.getvalue()
+
+    def gatekeep(ledger):
+        """One gatekeep run over a scratch queue, and what it queued."""
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             contextlib.redirect_stderr(io.StringIO()) as errors, \
+             contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
+            settings = Path(scratch) / "gatekeep-config.json"
+            settings.write_text(json.dumps(config))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+            queue = json.loads(Path(scratch, "queue.json").read_text())
+        return queue, errors.getvalue()
 
     # The SRW#1338 shape: ten failed rounds, a new head, no gate queued.
     found, errors = events({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
     exact([event["kind"] for event in found], ["skip"])
     exact(found[0]["reason"], "at the gate round cap")
+    exact(f"skip {repo}#1338: at the gate round cap, no gate queued" in errors, True)
+    # The command that owns the run reads the ledger and passes it in, so
+    # the real gatekeep path queues no gate for the capped pull request.
+    queue, errors = gatekeep({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
+    exact(queue["items"], [])
+    exact(queue["gatekeepSkips"][f"{repo}#1338"]["reason"], "at the gate round cap")
     exact(f"skip {repo}#1338: at the gate round cap, no gate queued" in errors, True)
     # Three failed rounds is the cap itself, and three fix rounds count the
     # same way the lane counts them.

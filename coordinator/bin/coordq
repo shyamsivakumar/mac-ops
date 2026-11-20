@@ -1695,11 +1695,15 @@ def gate_rounds_used(repo, number, ledger):
     return count >= GATE_ROUND_CAP
 
 
-def gate_candidates(config):
+def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
     Every event carries the pull request it belongs to, so the caller can
     count the skips of a pull request and report the ones it cannot gate.
+
+    `rounds` is the lane's ledger, read once by the caller that owns the
+    run (`cmd_gatekeep`). A caller that passes none reads no ledger, so a
+    test of the gate path never touches the live one.
     """
     login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
                                timeout=40, limit=FLOOR)
@@ -1708,7 +1712,7 @@ def gate_candidates(config):
     login = login_run.stdout.strip()
     receipts = load_receipts()
     queue = load()
-    rounds = lane_ledger()
+    rounds = rounds or {}
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
@@ -1839,7 +1843,7 @@ def cmd_gatekeep(a):
         seen = set()
         stuck = []
         attempted = set()
-        for event in gate_candidates(config):
+        for event in gate_candidates(config, lane_ledger()):
             if event["kind"] == "skip":
                 pr = event["pr"]
                 previous = counts.get(pr)
