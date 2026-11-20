@@ -6,8 +6,9 @@ journal. This script takes the journal path and a match rule, backs up the
 whole file, writes the matching rows to `<journal stem>.quarantine.jsonl`
 beside it, and rewrites the journal without them.
 
-A row matches when its timestamp is inside the window and either its repo is
-`--repo` with a pr in `--pr`, or its head starts with one of `--head-prefix`.
+A row matches when any string in it, `head` or a sha inside `data`, is one hex
+character repeated 40 times. No real sha looks like that, so the rule needs no
+time window and no repo or pull request filter.
 
 The journal's writers (coordinator/bin/journal.py) append under `flock` on
 the journal file itself, so this script takes the same exclusive `flock` on
@@ -19,8 +20,7 @@ the new journal.
 
 The default is a dry run that prints counts only. `--apply` writes.
 
-    quarantine_test_journal_rows.py JOURNAL --since 2026-11-20T06:55-08:00 \
-        --until 2026-11-20T10:30-08:00
+    quarantine_test_journal_rows.py JOURNAL [--apply]
 """
 
 import argparse
@@ -28,41 +28,33 @@ import collections
 import fcntl
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
-from datetime import datetime
 from pathlib import Path
 
 SETTLE_SECONDS = 1.0
 
 
-def parse_time(text):
-    try:
-        return float(text)
-    except ValueError:
-        return datetime.fromisoformat(text).timestamp()
+FIXTURE_SHA = re.compile(r"^([0-9a-f])\1{39}$")
 
 
-def build_matcher(args):
-    prs = set(args.pr)
-    prefixes = tuple(args.head_prefix)
-
-    def matches(row):
-        if not args.since <= row.get("ts", 0) <= args.until:
-            return False
-        if row.get("repo") == args.repo and row.get("pr") in prs:
-            return True
-        return str(row.get("head") or "").startswith(prefixes)
-
-    return matches
+def carries_fixture_sha(value):
+    if isinstance(value, str):
+        return bool(FIXTURE_SHA.match(value))
+    if isinstance(value, dict):
+        return any(carries_fixture_sha(item) for item in value.values())
+    if isinstance(value, list):
+        return any(carries_fixture_sha(item) for item in value)
+    return False
 
 
-def split_lines(lines, matches):
+def split_lines(lines):
     kept, taken = [], []
     for line in lines:
-        (taken if matches(json.loads(line)) else kept).append(line)
+        (taken if carries_fixture_sha(json.loads(line)) else kept).append(line)
     return kept, taken
 
 
@@ -102,20 +94,14 @@ def apply_rewrite(journal, fd, kept, taken):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("journal", type=Path)
-    parser.add_argument("--repo", default="shyamsivakumar/mac-ops")
-    parser.add_argument("--pr", type=int, action="append", default=[20, 34])
-    parser.add_argument("--head-prefix", action="append", default=["aaaa", "bbbb"])
-    parser.add_argument("--since", type=parse_time, required=True)
-    parser.add_argument("--until", type=parse_time, required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
 
-    matches = build_matcher(args)
     fd = os.open(args.journal, os.O_RDONLY)
     fcntl.flock(fd, fcntl.LOCK_EX)
     with os.fdopen(os.dup(fd), "rb") as stream:
         lines = stream.readlines()
-    kept, taken = split_lines(lines, matches)
+    kept, taken = split_lines(lines)
     print(f"journal: {args.journal}")
     print(f"rows: {len(lines)}  matched: {len(taken)}  kept: {len(kept)}")
     print(f"matched by event: {summarize(taken)}")
