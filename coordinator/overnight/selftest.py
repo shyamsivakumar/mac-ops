@@ -2864,10 +2864,10 @@ def stall():
     # The brief the thread receives tells it to re-read the ticket's open
     # pull requests before closing, so a pull request opened after the
     # snapshot is not missed.
-    brief = next(path for path in (ROOT / "unstick-brief.md",
-                                   ROOT.parent / "bin" / "unstick-brief.md")
-                 if path.is_file()).read_text()
+    brief = lane.unstick_brief_path().read_text()
     exact("re-read its open pull requests" in brief, True)
+    exact("leave the issue untouched" in brief, True)
+    exact("Refs #<n>" in brief, True)
     exact("{repo}" in brief, True)
     exact("{list}" in brief, True)
 
