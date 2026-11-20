@@ -8,10 +8,14 @@ from pathlib import Path
 _BIN_DIR = str(Path(__file__).resolve().parent)
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
+_OVERNIGHT_DIR = str(Path(_BIN_DIR).parent / "overnight")
+if os.path.isdir(_OVERNIGHT_DIR) and _OVERNIGHT_DIR not in sys.path:
+    sys.path.insert(0, _OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
 import prompt_paths
 from tick_health import tick_alarm
+import alarms
 import gh_gateway
 import journal
 
@@ -20,6 +24,8 @@ import journal
 gh_gateway.set_runner(lambda: subprocess.run)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+DECISIONS_PATH = os.environ.get(
+    "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 # The tick reads the threads with `coordq status`, so the t3mcp call it
 # makes is bounded: a call that hangs is skipped and named, never waited
@@ -161,6 +167,20 @@ def dispatch_stopped():
     return os.path.exists(path("dispatch.stopped"))
 
 
+def stop_dispatch(reason):
+    open(path("dispatch.stopped"), "w").close()
+    journal.emit("queue_fallback", "coordq", reason=reason)
+    item = {
+        "id": "factory-dispatch-stopped",
+        "group": "Coordinator",
+        "kind": "action",
+        "title": "The queue file was corrupt and dispatch is stopped.",
+        "why": ("Check queue.json against queue.json.prev in ~/Code/coordinator/queue, "
+                "then rm dispatch.stopped."),
+    }
+    alarms.route_update(DECISIONS_PATH, item["id"], "raise", item)
+
+
 def load():
     if not os.path.exists(path("queue.json")):
         return {"next": 1, "items": []}
@@ -168,12 +188,12 @@ def load():
         try:
             return json.load(f)
         except json.JSONDecodeError:
-            with open(path("queue.json.prev")) as prev:
-                data = json.load(prev)
-            open(path("dispatch.stopped"), "w").close()
-            journal.emit("queue_fallback", "coordq",
-                         reason="queue.json is not valid JSON, read queue.json.prev")
-            return data
+            if os.path.exists(path("queue.json.prev")):
+                stop_dispatch("queue.json is not valid JSON, read queue.json.prev")
+                with open(path("queue.json.prev")) as prev:
+                    return json.load(prev)
+            stop_dispatch("queue.json invalid and no queue.json.prev")
+            return {"next": 1, "items": []}
 
 
 def save(queue):
