@@ -16,6 +16,7 @@ import math
 import os
 import re
 import statistics
+import subprocess
 import sys
 from datetime import date as Date, datetime, time as Time, timedelta
 from zoneinfo import ZoneInfo
@@ -120,10 +121,11 @@ class GitHub:
         rows = json.loads(result.stdout)
         if len(rows) >= 1000:
             raise Unavailable(f"gh search {kind} hit the 1000 result limit")
+        names = {repo.lower(): repo for repo in self.repos}
         grouped = {repo: [] for repo in self.repos}
         for row in rows:
-            name = row["repository"]["nameWithOwner"]
-            if name in grouped:
+            name = names.get(row["repository"]["nameWithOwner"].lower())
+            if name:
                 grouped[name].append(row)
         return grouped
 
@@ -149,7 +151,8 @@ def fetch_github(repos, start, end, revert_window_closed):
         closed = github.closed_issues(start, end)
         reverted = github.reverts(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
         return {"merged": merged, "closed": closed, "reverts": reverted, "calls": github.calls}
-    except (Unavailable, ValueError) as exc:
+    except (Unavailable, gh_gateway.ApiBudgetExhausted, json.JSONDecodeError,
+            subprocess.TimeoutExpired, OSError) as exc:
         return {"error": f"GitHub read failed: {exc}", "calls": github.calls}
 
 
@@ -209,24 +212,33 @@ def alarms_open(events, end):
     return sorted(alarm for alarm, raised in state.items() if raised)
 
 
-def pick(live_day, backfill_day, name):
-    rows = [row for row in live_day if row["event"] == name]
-    if rows or live_day:
-        return rows, "journal"
-    rows = [row for row in backfill_day if row["event"] == name]
-    return rows, "backfill"
+def pick(covered, live_day, backfill_day, name):
+    if covered:
+        return [row for row in live_day if row["event"] == name], "journal"
+    return [row for row in backfill_day if row["event"] == name], "backfill"
+
+
+def coverage_of(first, start, end):
+    if first is None or first >= end:
+        return "none"
+    return "full" if first <= start else "partial"
 
 
 def build(day, live, backfill, bad_lines, github, today, repos):
     start, end = day_bounds(day)
     live_day = [row for row in live if start <= row["ts"] < end]
     backfill_day = [row for row in backfill if start <= row["ts"] < end]
-    covered = bool(live_day)
     hours = len({local_hour(row["ts"]) for row in live_day})
     first = min((row["ts"] for row in live), default=None)
-    no_journal = f"no live journal events on {day}" + (
-        f" (the journal starts {datetime.fromtimestamp(first, TZ).date()})" if first else " (no journal yet)")
-    seen = f"journal covers {hours} of 24 hours"
+    state = coverage_of(first, start, end)
+    covered = state == "full"
+    if state == "partial":
+        no_journal = f"journal started {datetime.fromtimestamp(first, TZ).strftime('%H:%M')} into the day"
+    elif first is None:
+        no_journal = "no journal"
+    else:
+        no_journal = f"no journal on {day} (it starts {datetime.fromtimestamp(first, TZ).date()})"
+    seen = f"journal ran the whole day ({hours} of 24 hours had events)"
 
     def counted(name):
         if not covered:
@@ -234,7 +246,7 @@ def build(day, live, backfill, bad_lines, github, today, repos):
         return metric(sum(1 for row in live_day if row["event"] == name), seen)
 
     def with_backfill(name):
-        rows, source = pick(live_day, backfill_day, name)
+        rows, source = pick(covered, live_day, backfill_day, name)
         if source == "backfill" and not backfill_day:
             return unknown(no_journal + " and no backfill")
         why = seen if source == "journal" else "from dispatch.log backfill"
@@ -297,7 +309,7 @@ def build(day, live, backfill, bad_lines, github, today, repos):
                          "outside the lane (hand or reviewer): every agent uses the same GitHub login",
                          merges=merge_touches, closes=close_touches)
 
-    launches, launch_source = pick(live_day, backfill_day, "launched")
+    launches, launch_source = pick(covered, live_day, backfill_day, "launched")
     gate_launches = [row for row in live_day if row["event"] == "launched" and row["kind"] == "gate"]
     heads = collections.Counter((row["repo"], row["pr"], row["head"]) for row in gate_launches)
     merges_in_day = {ref(row["repo"], row["pr"]) for row in live_day if row["event"] == "merged"}
@@ -318,22 +330,26 @@ def build(day, live, backfill, bad_lines, github, today, repos):
         verdicts = metric({name: mix.get(name, 0) for name in ("PASS", "FAIL", "SPLIT")},
                           "one verdict per gate thread and head; none and absent are not journaled")
 
-    slot_rows, slot_source = pick(live_day, backfill_day, "slots")
-    if not slot_rows:
-        reason = "no slots events on this day" if covered else no_journal + " and no backfill"
-        peak = unknown(reason)
-        over = unknown(reason)
-    else:
-        top, lines = slot_peak(slot_rows)
-        caps = {data_of(row).get("cap") for row in slot_rows}
-        peak = metric(top, "from slots events" if slot_source == "journal" else
-                      "from drain `at cap n/m` lines and the `(was n/m)` on starts, not the refill's count",
-                      lines=lines, cap=max(caps))
-        if slot_source == "journal":
-            history = [row for row in live if row["event"] == "slots" and row["ts"] < end]
-            over = metric(minutes_over_cap(history, start, min(end, today_ts())),
-                          "from the held slots state between changes")
+    if covered:
+        history = [row for row in live if row["event"] == "slots" and row["ts"] < end]
+        carried = [row for row in history if row["ts"] < start][-1:]
+        slot_rows = carried + [row for row in history if row["ts"] >= start]
+        if not slot_rows:
+            peak = over = unknown("no slots event in the journal yet")
         else:
+            top, lines = slot_peak(slot_rows)
+            peak = metric(top, "from slots events, seeded with the state carried into the day",
+                          lines=lines, cap=max(data_of(row)["cap"] for row in slot_rows))
+            over = metric(minutes_over_cap(slot_rows, start, min(end, today_ts())),
+                          "from the slots state held between changes, seeded with the state carried into the day")
+    else:
+        slot_rows = [row for row in backfill_day if row["event"] == "slots"]
+        if not slot_rows:
+            peak = over = unknown(no_journal + " and no backfill")
+        else:
+            top, lines = slot_peak(slot_rows)
+            peak = metric(top, "from drain `at cap n/m` lines and the `(was n/m)` on starts, not the refill's count",
+                          lines=lines, cap=max(data_of(row)["cap"] for row in slot_rows))
             above = sum(1 for row in slot_rows if data_of(row)["occupied"] > data_of(row)["cap"])
             over = unknown(f"backfill readings are samples, not changes ({above} readings above the cap)")
 
@@ -371,7 +387,8 @@ def build(day, live, backfill, bad_lines, github, today, repos):
         "machine": {"peak_concurrent_threads": peak, "minutes_over_cap": over},
         "board": {"alarms_raised": raised, "alarms_withdrawn": withdrawn, "alarms_open_at_end": still_open},
         "reconcile": reconcile,
-        "coverage": {"hours_with_journal_events": hours, "of": 24, "unreadable_lines": bad_lines},
+        "coverage": {"state": state, "journal_first_event": datetime.fromtimestamp(first, TZ).isoformat() if first else None,
+                     "hours_with_journal_events": hours, "of": 24, "unreadable_lines": bad_lines},
         "github_calls": github.get("calls", 0),
     }
     report["unknown_metrics"] = sorted(
@@ -408,7 +425,7 @@ def show(value):
 
 def summary(report):
     lines = [f"Factory scorecard {report['date']} ({report['timezone']}), "
-             f"journal {report['coverage']['hours_with_journal_events']}/24 hours, "
+             f"journal coverage {report['coverage']['state']}, "
              f"{report['github_calls']} GitHub calls"]
     for section in ("headline", "guardrails", "cost", "flow", "machine", "board"):
         lines.append(f"[{section}]")
@@ -434,8 +451,8 @@ def summary(report):
 
 def configured_repos():
     here = os.path.dirname(os.path.realpath(__file__))
-    for candidate in (os.path.join(here, "..", "config", "tickets.json"),
-                      os.path.expanduser("~/.coordinator/tickets.json")):
+    for candidate in (os.path.expanduser("~/.coordinator/tickets.json"),
+                      os.path.join(here, "..", "config", "tickets.json")):
         if os.path.exists(candidate):
             with open(candidate) as handle:
                 return sorted(json.load(handle)["repos"])
@@ -455,6 +472,9 @@ def cmd_report(args):
         github = fetch_github(repos, start, end, (today - day).days >= REVERT_DAYS)
     report = build(day, live, backfill, bad, github, today, repos)
     report["baseline"] = baseline(args.out_dir, day, args.baseline_days)
+    if "error" in github and not args.no_github:
+        print(summary(report))
+        sys.exit(f"scorecard: {github['error']}; the report for {day} was not written")
     os.makedirs(args.out_dir, exist_ok=True)
     target = os.path.join(args.out_dir, f"{day}.json")
     with open(target + ".tmp", "w") as handle:
@@ -463,9 +483,8 @@ def cmd_report(args):
     print(json.dumps(report, indent=1) if args.json else summary(report))
 
 
-def backfill_rows(path, since):
+def backfill_rows(path, since_ts):
     rows = []
-    since_ts = day_bounds(Date.fromisoformat(since))[0]
     with open(path) as handle:
         for number, line in enumerate(handle, 1):
             line = line.rstrip("\n")
@@ -507,16 +526,20 @@ def backfill_row(name, ts, item, data):
 def cmd_backfill(args):
     log = args.dispatch_log or os.path.join(
         os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue")), "dispatch.log")
-    rows = backfill_rows(log, args.since)
+    if not os.path.isfile(log):
+        sys.exit(f"scorecard: the dispatch log {log} does not exist")
+    since_ts = day_bounds(Date.fromisoformat(args.since))[0]
+    rows = backfill_rows(log, since_ts)
     directory = args.journal_dir or journal.journal_dir()
     os.makedirs(directory, exist_ok=True)
     target = os.path.join(directory, BACKFILL_FILE)
+    kept = [row for row in read_events(target)[0] if row["ts"] < since_ts]
     with open(target + ".tmp", "w") as handle:
-        for row in rows:
+        for row in kept + rows:
             handle.write(json.dumps(row, separators=(",", ":")) + "\n")
     os.replace(target + ".tmp", target)
     counts = collections.Counter(row["event"] for row in rows)
-    print(f"backfill: {len(rows)} events since {args.since} written to {target}: " + ", ".join(
+    print(f"backfill: {len(rows)} events since {args.since} written to {target} ({len(kept)} earlier rows kept): " + ", ".join(
         f"{name} {count}" for name, count in sorted(counts.items())))
 
 
