@@ -2838,10 +2838,28 @@ def stall():
     orphan = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
         {"number": 9, "title": "bot repair", "labels": []}]}}}
     from unittest.mock import mock_open
+    import datetime as dt
+    started = {f"ticket:{repo}#9:a1": "old"}
+    cooling = {f"cont:old": [dt.datetime.now(dt.timezone.utc).isoformat(), "receipt"]}
     with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
          patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data=json.dumps(started))):
+        exact(lane.unstick(repo, dict(cooling)), "DRY unstick [9]")
+
+    # A receipt is the proof a builder was started. A fresh ticket with no
+    # receipt was never started, so nothing finished and unstick leaves it
+    # alone; a started ticket with no pull request is still swept.
+    fresh = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
+        {"number": 8, "title": "bot repair", "labels": []},
+        {"number": 9, "title": "bot repair", "labels": []}]}}}
+    with patch.object(lane, "SNAPSHOT", fresh), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data=json.dumps(started))):
+        exact(lane.unstick(repo, dict(cooling)), "DRY unstick [9]")
+    with patch.object(lane, "SNAPSHOT", fresh), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
          patch("builtins.open", mock_open(read_data="{}")):
-        exact(lane.unstick(repo, {}), "DRY unstick [9]")
+        exact(lane.unstick(repo, {}), "nothing ready")
 
 
 def alarm_mute_on_one_board():
