@@ -13,11 +13,14 @@ against GitHub catches the missing line.
 
 import fcntl
 import functools
+import hashlib
 import json
 import os
 import re
 import sys
 import time
+
+_COORDINATOR_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 VERSION = 1
 COMMON = (
@@ -64,6 +67,22 @@ def installed_sha():
         return json.load(fh).get("source_sha")
 
 
+def manifest_hash(arm):
+    path = os.path.join(_COORDINATOR_DIR, "config", "factory.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        manifest = json.load(fh)
+    names = manifest["arms"].get(arm)
+    if names is None:
+        return None
+    digest = hashlib.sha256()
+    for name in names:
+        with open(os.path.join(_COORDINATOR_DIR, name), "rb") as fh:
+            digest.update(fh.read())
+    return digest.hexdigest()
+
+
 def emit(event, actor, **fields):
     now = time.time()
     row = {"v": VERSION, "ts": now, "event": event, "actor": actor}
@@ -71,6 +90,7 @@ def emit(event, actor, **fields):
         row[key] = fields.pop(key, None)
     row["data"] = {**(fields.pop("data", None) or {}), **fields}
     row["data"]["sha"] = installed_sha()
+    row["data"]["manifest"] = manifest_hash(row["arm"] or "control")
     line = json.dumps(row, default=str, separators=(",", ":")) + "\n"
     try:
         os.makedirs(journal_dir(), exist_ok=True)
