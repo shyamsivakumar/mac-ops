@@ -507,8 +507,11 @@ def gate_verdict(repo, number, head, base):
     if gate_in_flight(current):
         return "running", gate, ""
     reply = last_reply(current)
-    if read_verdict(reply)[0] == "FAIL":
+    primary = read_verdict(reply)[0]
+    if primary == "FAIL":
         return "FAIL", gate, reply
+    if primary == "CONFLICT":
+        return "SPLIT", gate, reply
     others = sorted({v for k, v in receipts.items() if k.startswith(key + ":") and v != current
                      and receipts.get(f"base:{v}") == base})
 
@@ -529,7 +532,7 @@ def gate_verdict(repo, number, head, base):
     for thread in others:
         if gate_in_flight(thread):
             return "running", {"threadId": thread}, ""
-    if any(read_verdict(last_reply(thread))[0] == "FAIL" for thread in others):
+    if any(read_verdict(last_reply(thread))[0] in ("FAIL", "CONFLICT") for thread in others):
         return "SPLIT", gate, reply
     return "PASS", gate, reply
 

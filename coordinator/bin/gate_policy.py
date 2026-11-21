@@ -49,12 +49,17 @@ JSON_VERDICT_ASK = """Machine-readable verdict. Before the final CHECK and VERDI
 
 - "verdict" is "PASS" or "FAIL" and must match the VERDICT line.
 - "findings" holds one entry per finding, in the order you list them in prose. Use an empty list when there are none.
-- Every entry carries all seven keys: id, severity, bar_clause, path, line, text, fixed_when. Use "n/a" for path or line when a finding has no file.
+- Every entry carries all seven keys: id, severity, bar_clause, path, line, text, fixed_when. Use "n/a" for path and null for line when a finding has no file.
 - Follow the block with a one-line prose summary of the verdict.
 - The VERDICT line stays last, after the json block and the summary."""
 
 
 JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+
+
+def valid_finding(entry):
+    return (isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("severity", "path", "text"))
+            and (entry.get("line") is None or (isinstance(entry["line"], int) and not isinstance(entry["line"], bool))))
 
 
 def parse_verdict(report):
@@ -63,21 +68,22 @@ def parse_verdict(report):
             data = json.loads(block)
         except ValueError:
             continue
-        if isinstance(data, dict) and data.get("verdict") in ("PASS", "FAIL") and isinstance(data.get("findings"), list):
+        if isinstance(data, dict) and data.get("verdict") in ("PASS", "FAIL") and isinstance(data.get("findings"), list) \
+                and all(valid_finding(f) for f in data["findings"]):
             return data
     return None
 
 
 def read_verdict(report):
     data = parse_verdict(report)
-    if data:
-        return (data["verdict"], data["findings"])
     if report.endswith("VERDICT: FAIL"):
         verdict = "FAIL"
     elif report.endswith("VERDICT: PASS"):
         verdict = "PASS"
     else:
         verdict = None
+    if data:
+        return (data["verdict"] if verdict in (None, data["verdict"]) else "CONFLICT", data["findings"])
     findings = [{"severity": s, "path": p, "line": int(l), "text": t.strip()}
                 for s, p, l, t in re.findall(r"\[(critical|major|minor)\]\s+(\S+?):(\d+)(.*)", report)]
     return (verdict, findings)
