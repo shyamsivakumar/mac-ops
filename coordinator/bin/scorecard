@@ -84,6 +84,23 @@ def read_events(path):
     return rows, bad
 
 
+def clean_rows(rows):
+    kept, seen = [], set()
+    for row in rows:
+        head = row.get("head")
+        if isinstance(head, str) and len(head) == 40 and len(set(head)) == 1:
+            continue
+        if head:
+            key = (row.get("event"), row.get("repo"), row.get("pr"), head)
+        else:
+            key = (row.get("event"), row.get("repo"), row.get("pr"), row.get("ts"))
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(row)
+    return kept
+
+
 def load_journal(directory):
     live, backfill, bad = [], [], 0
     if os.path.isdir(directory):
@@ -93,13 +110,36 @@ def load_journal(directory):
                 live += rows
                 bad += unreadable
     backfill, unreadable = read_events(os.path.join(directory, BACKFILL_FILE))
-    live.sort(key=lambda row: row["ts"])
-    backfill.sort(key=lambda row: row["ts"])
+    live = clean_rows(sorted(live, key=lambda row: row["ts"]))
+    backfill = clean_rows(sorted(backfill, key=lambda row: row["ts"]))
     return live, backfill, bad + unreadable
 
 
 def data_of(row):
     return row.get("data") or {}
+
+
+def first_gate_pass(rows, start=None, end=None):
+    assigned = {}
+    for row in rows:
+        ts = row.get("ts", 0)
+        if row["event"] == "assigned" and (start is None or start <= ts < end):
+            assigned.setdefault((row["repo"], row["ticket"]), ts)
+    pr_ticket = {(row["repo"], row["pr"]): row["ticket"] for row in rows
+                 if row.get("ticket") is not None and row.get("pr") is not None}
+    first = {}
+    for row in rows:
+        if row["event"] != "gate_verdict":
+            continue
+        ticket = row.get("ticket")
+        if ticket is None:
+            ticket = pr_ticket.get((row["repo"], row.get("pr")))
+        key = (row["repo"], ticket)
+        if key in assigned and row.get("ts", 0) >= assigned[key]:
+            first.setdefault(key, data_of(row).get("verdict"))
+    if not assigned:
+        return None
+    return sum(1 for key in assigned if first.get(key) == "PASS") / len(assigned)
 
 
 class GitHub:
@@ -130,7 +170,7 @@ class GitHub:
         return grouped
 
     def merged_prs(self, start, end):
-        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,closedAt")
+        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,body,closedAt")
 
     def closed_issues(self, start, end):
         return self.search("issues", ["--state", "closed", "--closed", span(start, end)], "number,title,closedAt")
@@ -138,6 +178,34 @@ class GitHub:
     def reverts(self, start, end):
         return self.search("prs", ["--match", "title", "--merged", "--merged-at", span(start, end)],
                            "number,title,body,closedAt", query=["Revert"])
+
+    def fixes(self, start, end):
+        return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,body,createdAt,closedAt")
+
+    def event_page(self, repo, page):
+        if self.calls >= CALL_LIMIT:
+            raise Unavailable(f"the {CALL_LIMIT} call limit for one report was reached")
+        self.calls += 1
+        result = gh_gateway.run(["gh", "api", f"repos/{repo}/issues/events?per_page=100&page={page}",
+                                 "--jq", ".[] | {event: .event, number: .issue.number, at: .created_at}"],
+                                timeout=90, caller_name=CALLER)
+        if result.returncode:
+            raise Unavailable(f"gh api issues/events failed for {repo}: {result.stderr.strip()[:120]}")
+        return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+    def reopened(self, start, end):
+        found = {}
+        for repo in sorted(self.repos):
+            found[repo] = []
+            page = 1
+            while True:
+                rows = self.event_page(repo, page)
+                found[repo] += [{"number": row["number"], "at": row["at"]} for row in rows
+                                if row["event"] == "reopened" and start <= iso_ts(row["at"]) <= end]
+                if len(rows) < 100 or iso_ts(rows[-1]["at"]) < start:
+                    break
+                page += 1
+        return found
 
 
 def span(start, end):
@@ -150,7 +218,11 @@ def fetch_github(repos, start, end, revert_window_closed):
         merged = github.merged_prs(start, end)
         closed = github.closed_issues(start, end)
         reverted = github.reverts(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
-        return {"merged": merged, "closed": closed, "reverts": reverted, "calls": github.calls}
+        fixes = github.fixes(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
+        tickets = github.closed_issues(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
+        reopened = github.reopened(start, end + REVERT_DAYS * 86400) if revert_window_closed else None
+        return {"merged": merged, "closed": closed, "reverts": reverted, "fixes": fixes,
+                "tickets": tickets, "reopened": reopened, "calls": github.calls}
     except (Unavailable, gh_gateway.ApiBudgetExhausted, json.JSONDecodeError,
             subprocess.TimeoutExpired, OSError) as exc:
         return {"error": f"GitHub read failed: {exc}", "calls": github.calls}
@@ -167,6 +239,40 @@ def reverted_merges(merged, reverts):
                 if (revert["title"] == quoted or names_it) and within:
                     found.append(ref(repo, pr["number"]))
                     break
+    return found
+
+
+def escaped_merges(merged, reverts, fixes, reopened, closed_tickets=None):
+    found = {}
+    for repo, prs in merged.items():
+        for pr in prs:
+            tickets = {int(n) for n in re.findall(r"(?:Refs|Fixes|Closes)\s+\S*#(\d+)", pr.get("body") or "")}
+            closed = iso_ts(pr["closedAt"])
+            best = None
+            for revert in reverts.get(repo, []):
+                names_it = re.search(rf"Reverts\s+\S*#{pr['number']}\b", revert.get("body") or "")
+                at = iso_ts(revert["closedAt"])
+                if (revert["title"] == f'Revert "{pr["title"]}"' or names_it) and 0 <= at - closed <= REVERT_DAYS * 86400:
+                    if best is None or (at, 0) < best[:2]:
+                        best = (at, 0, "revert")
+            ticket_closed = {row["number"]: iso_ts(row["closedAt"]) for row in (closed_tickets or {}).get(repo, [])}
+            for fix in fixes.get(repo, []):
+                if fix["number"] == pr["number"]:
+                    continue
+                named = {int(n) for n in re.findall(r"(?:Fixes|Follow-up to|Follow up to)\s+\S*#(\d+)",
+                                                    fix.get("body") or "")}
+                at = iso_ts(fix["closedAt"])
+                after_close = any(ticket_closed.get(n, at + 1) <= iso_ts(fix["createdAt"]) for n in named & tickets)
+                if (pr["number"] in named or after_close) and 0 <= at - closed <= REVERT_DAYS * 86400:
+                    if best is None or (at, 1) < best[:2]:
+                        best = (at, 1, "fix")
+            for row in reopened.get(repo, []):
+                at = iso_ts(row["at"])
+                if row["number"] in tickets and 0 <= at - closed <= REVERT_DAYS * 86400:
+                    if best is None or (at, 2) < best[:2]:
+                        best = (at, 2, "reopen")
+            if best:
+                found[ref(repo, pr["number"])] = best[2]
     return found
 
 
@@ -218,10 +324,12 @@ def pick(covered, live_day, backfill_day, name):
     return [row for row in backfill_day if row["event"] == name], "backfill"
 
 
-def coverage_of(first, start, end):
+def coverage_state(first, start, end, matched, total):
     if first is None or first >= end:
         return "none"
-    return "full" if first <= start else "partial"
+    if total is None or total == 0:
+        return "full" if first <= start else "partial"
+    return "full" if matched / total >= 0.95 else "partial"
 
 
 def build(day, live, backfill, bad_lines, github, window_closed, repos):
@@ -230,7 +338,15 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
     backfill_day = [row for row in backfill if start <= row["ts"] < end]
     hours = len({local_hour(row["ts"]) for row in live_day})
     first = min((row["ts"] for row in live), default=None)
-    state = coverage_of(first, start, end)
+    gh_ok = "error" not in github
+    gh_why = "" if gh_ok else github["error"]
+    merged = github["merged"] if gh_ok else {}
+    merged_refs = {ref(repo, pr["number"]) for repo, prs in merged.items() for pr in prs}
+    lane_merged = {ref(row["repo"], row["pr"]) for row in live if row["event"] == "merged"}
+    outside = {ref(row["repo"], row["pr"]) for row in live if row["event"] == "merged_outside_lane"}
+    matched_refs = (merged_refs & lane_merged) | (merged_refs & outside)
+    state = coverage_state(first, start, end, len(matched_refs) if gh_ok else None,
+                           len(merged_refs) if gh_ok else None)
     covered = state == "full"
     if state == "partial":
         no_journal = f"journal started {datetime.fromtimestamp(first, TZ).strftime('%H:%M')} into the day"
@@ -277,10 +393,6 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
         else:
             lead_metric = unknown("no accepted ticket with a ticket_started event")
 
-    gh_ok = "error" not in github
-    gh_why = "" if gh_ok else github["error"]
-    merged = github["merged"] if gh_ok else {}
-    merged_refs = {ref(repo, pr["number"]) for repo, prs in merged.items() for pr in prs}
     closed_refs = {ref(repo, issue["number"]) for repo, issues in (github["closed"] if gh_ok else {}).items()
                    for issue in issues}
 
@@ -290,11 +402,12 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
         change_failure = unknown(gh_why)
     else:
         reverted = reverted_merges(merged, github["reverts"] or {})
-        change_failure = metric({"reverted": reverted, "merges": len(merged_refs)},
-                                f"a merged PR whose revert merged within {REVERT_DAYS} days")
+        escaped = escaped_merges(merged, github["reverts"] or {}, github["fixes"] or {},
+                                 github["reopened"] or {}, github["tickets"] or {})
+        change_failure = metric({"reverted": reverted, "merges": len(merged_refs), "escaped": len(escaped),
+                                 "kinds": escaped},
+                                f"a merged PR with a revert, a fix PR or a reopened ticket within {REVERT_DAYS} days")
 
-    lane_merged = {ref(row["repo"], row["pr"]) for row in live if row["event"] == "merged"}
-    outside = {ref(row["repo"], row["pr"]) for row in live if row["event"] == "merged_outside_lane"}
     closed_in_journal = {ref(row["repo"], row["ticket"]) for row in live
                          if row["event"] in ("ticket_closed", "ticket_abandoned")}
     if not covered:
@@ -359,13 +472,14 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
         withdrawn = metric(sum(1 for row in live_day if row["event"] == "alarm_withdrawn"), seen)
         still_open = metric(alarms_open(live, end), "alarms whose last journal event is a raise")
 
-    matched = sorted((merged_refs & lane_merged) | (merged_refs & outside))
+    matched = sorted(matched_refs)
     journal_merged_day = {ref(row["repo"], row["pr"]) for row in live_day
                           if row["event"] in ("merged", "merged_outside_lane")}
     if not gh_ok:
         reconcile = unknown(gh_why)
     else:
         reconcile = metric({"github_merges": len(merged_refs), "matched": len(matched),
+                            "ratio": round(len(matched) / len(merged_refs), 3) if merged_refs else None,
                             "on_github_not_in_journal": sorted(merged_refs - lane_merged - outside),
                             "in_journal_not_on_github": sorted(journal_merged_day - merged_refs)},
                            "every PR merged that day on GitHub across the configured repos, by repo and number")
@@ -382,7 +496,11 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos):
                  "launches_per_accepted": per_accepted, "gate_launches_per_merge": per_merge,
                  "gate_heads": gate_heads, "duplicate_gate_heads": duplicates, "fix_rounds": fix_rounds,
                  "prs_at_round_cap": capped, "launch_failures": with_backfill("launch_failed"),
-                 "dropped": with_backfill("dropped"), "verdict_mix": verdicts},
+                 "dropped": with_backfill("dropped"), "verdict_mix": verdicts,
+                 "assigned": counted("assigned"),
+                 "first_gate_pass": (metric(round(first_gate_pass(live, start, end), 3), "tickets assigned that day whose first gate verdict is PASS, over all assigned tickets (blocked and abandoned included); a ticket counts once a closing row links its PR")
+                                     if covered and any(row["event"] == "assigned" for row in live_day)
+                                     else unknown(no_journal if not covered else "no assigned event"))},
         "machine": {"peak_concurrent_threads": peak, "minutes_over_cap": over},
         "board": {"alarms_raised": raised, "alarms_withdrawn": withdrawn, "alarms_open_at_end": still_open},
         "reconcile": reconcile,
@@ -441,7 +559,9 @@ def summary(report):
         lines.append(f"  unknown ({rec['why']})")
     else:
         value = rec["value"]
-        lines.append(f"  GitHub merges {value['github_merges']}, matched to a journal merge {value['matched']}")
+        ratio = value["ratio"]
+        lines.append(f"  GitHub merges {value['github_merges']}, matched to a journal merge {value['matched']} "
+                     f"(ratio {ratio if ratio is not None else 'n/a'})")
         lines.append(f"  on GitHub, not in journal: {len(value['on_github_not_in_journal'])}")
         lines.append(f"  in journal, not on GitHub: {len(value['in_journal_not_on_github'])}")
     lines.append(f"unknown metrics ({len(report['unknown_metrics'])}): " + ", ".join(report["unknown_metrics"]))
@@ -523,14 +643,32 @@ def backfill_row(name, ts, item, data):
     return row
 
 
+def merge_rows(directory, since_ts):
+    live = load_journal(directory)[0]
+    known = {ref(row["repo"], row["pr"]) for row in live
+             if row["event"] in ("merged", "merged_outside_lane")}
+    rows = []
+    for repo, prs in GitHub(configured_repos()).merged_prs(since_ts, today_ts()).items():
+        for pr in prs:
+            if ref(repo, pr["number"]) in known:
+                continue
+            row = backfill_row("merged", iso_ts(pr["closedAt"]), None, {"source": "backfill"})
+            row["repo"] = repo
+            row["pr"] = pr["number"]
+            rows.append(row)
+    return rows
+
+
 def cmd_backfill(args):
     log = args.dispatch_log or os.path.join(
         os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue")), "dispatch.log")
     if not os.path.isfile(log):
         sys.exit(f"scorecard: the dispatch log {log} does not exist")
     since_ts = day_bounds(Date.fromisoformat(args.since))[0]
-    rows = backfill_rows(log, since_ts)
     directory = args.journal_dir or journal.journal_dir()
+    rows = backfill_rows(log, since_ts)
+    if args.merges:
+        rows += merge_rows(directory, since_ts)
     os.makedirs(directory, exist_ok=True)
     target = os.path.join(directory, BACKFILL_FILE)
     kept = [row for row in read_events(target)[0] if row["ts"] < since_ts]
@@ -557,6 +695,7 @@ def main():
     fill.add_argument("--since", required=True)
     fill.add_argument("--dispatch-log")
     fill.add_argument("--journal-dir")
+    fill.add_argument("--merges", action="store_true")
     args = parser.parse_args()
     if args.command == "backfill":
         cmd_backfill(args)
