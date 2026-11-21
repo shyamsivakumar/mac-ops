@@ -39,6 +39,7 @@ LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
 PROVIDER_BLOCK_SECONDS = 3600
+PROBE_INTERVAL = float(os.environ.get("COORDQ_PROBE_MINUTES", "30")) * 60
 JOURNAL_TITLE_LIMIT = 120
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
@@ -398,6 +399,10 @@ def call(tool, args, rules=None):
             args = with_rules(args, rules)
     args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
+    return t3_call(tool, args)
+
+
+def t3_call(tool, args):
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
@@ -1496,6 +1501,7 @@ def cmd_dispatch(a):
             return
         drain()
     flush_provider_blocks()
+    probe_one_block()
     safe_refill(a)
 
 
@@ -1746,6 +1752,29 @@ def block_quota_provider(selection, failure, key):
     log(f"blocked provider {provider} for 1h: {word}")
     journal.emit("provider_blocked", "coordq", provider=provider, reason=word,
                  seconds=PROVIDER_BLOCK_SECONDS, **journal.parse_request_id(key))
+
+
+def probe_one_block():
+    """Probe the first blocked provider not set or probed in the last PROBE_INTERVAL.
+
+    The probe launches a scratch thread on that provider, which is the launch
+    coordq already makes, so a provider that refuses it stays blocked. At most
+    one provider is probed per run."""
+    due = model_list.stale_blocks(PROBE_INTERVAL)
+    if not due:
+        return
+    provider = due[0]
+    selection = model_list.selection_of(provider)
+    code, out = t3_call("t3_thread_launch", {"modelSelection": selection, "scratch": True,
+                                             "title": "provider probe", "message": "Reply with the word ok."})
+    if code == 0:
+        model_list.unblock(selection)
+        log(f"unblocked provider {provider}: probe succeeded")
+        journal.emit("provider_unblocked", "coordq", provider=provider)
+    else:
+        model_list.probe_failed(selection)
+        log(f"provider {provider} stays blocked: probe failed")
+        journal.emit("provider_probe_failed", "coordq", provider=provider, error=out[:200])
 
 
 def thread_selection(data):
