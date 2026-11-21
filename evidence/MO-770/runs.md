@@ -23,18 +23,21 @@ queued gate:o/off#3:cccccccccccccccccccccccccccccccccccccccc reviewer i m
 FileNotFoundError: [Errno 2] No such file or directory: '/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/gk770-9netx_xx/mac-ops-owner.json'
 ```
 
-After: head 1 (green) gated with the record, head 2 (red) no gate and one card, run 2 makes no new proof run, flag-off repo (#3) queued unchanged:
+After: head 1 (ticket opened with proof red, green) gated with the record, head 2 (red) no gate and one card, run 2 makes no new proof run, flag-off repo (#3) queued unchanged. Head 4 is a flag-on repo whose ticket has no `proof: red` ticket_opened row: gated, state legacy, no proof run (runs stay at 2), no card:
 ```
-queued gate:o/on#1:8bcf0a962163660e8a2d6efd598159e0b3c179d4 reviewer i m
+queued gate:o/on#1:40682d5e1bf67969b85937e375dda749de4467c9 reviewer i m
 queued gate:o/off#3:cccccccccccccccccccccccccccccccccccccccc reviewer i m
+queued gate:o/on#4:cccccccccccccccccccccccccccccccccccccccc reviewer i m
 --- run 1: proof runs so far 2
 --- run 2: proof runs so far 2
 queued t1 | proof in brief: True
 queued t3 | proof in brief: False
+queued t4 | proof in brief: False
 card: ['proof-MO-2']
 replay: ['head.txt', 'proof.txt', 'ticket.md']
-proof_run rows: ['"kind":"gate","model":null,"arm":null,"data":{"state":"green","sha":null,"manifest":null}}', '":"gate","model":null,"arm":null,"data":{"state":"unresolved","sha":null,"manifest":null}}']
-proofHeads: {'o/on#1': 'green', 'o/on#2': 'unresolved'}
+proof_run rows: ['"kind":"gate","model":null,"arm":null,"data":{"state":"green","sha":null,"manifest":null}}', '":"gate","model":null,"arm":null,"data":{"state":"unresolved","sha":null,"manifest":null}}', 'kind":"gate","model":null,"arm":null,"data":{"state":"legacy","sha":null,"manifest":null}}']
+legacy head 4 (no red opened row): legacy | proof runs 2
+proofHeads: {'o/on#1': 'green', 'o/on#2': 'unresolved', 'o/on#4': 'legacy'}
 ```
 
 Note: the ticket proof command is the expected shape; it ran as written.
