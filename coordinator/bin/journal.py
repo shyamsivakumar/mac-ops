@@ -1,7 +1,8 @@
 """The factory event journal: one append-only JSON line per lifecycle event.
 
-The file is `events-YYYY-MM.jsonl` (UTC month) in `~/Library/Logs/coordinator`,
-or in `COORD_JOURNAL_DIR` when that is set. Every writer appends one line with
+The file is `events-YYYY-MM.jsonl` (UTC month) in
+`~/.local/state/coordinator/journal`, or in `COORD_JOURNAL_DIR` when that is
+set. Every writer appends one line with
 one `write()` on an `O_APPEND` descriptor under `flock`, so processes that
 share no other lock (coordq, the lane, ticket, alarms) never interleave a
 line. The file is never rewritten and never rotated by deletion.
@@ -13,13 +14,18 @@ against GitHub catches the missing line.
 
 import fcntl
 import functools
+import glob
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
 VERSION = 1
+LEGACY_DIR = "~/Library/Logs/coordinator"
+DEFAULT_DIR = "~/.local/state/coordinator/journal"
+_MIGRATED = set()
 COMMON = (
     "repo",
     "ticket",
@@ -43,10 +49,28 @@ _ATTEMPT = re.compile(r"^(?P<work>.+):a(?P<attempt>\d+)$")
 _WORK_REF = re.compile(_REPO)
 
 
+def _migrate_legacy(new, old):
+    if not os.path.isdir(old):
+        return
+    if glob.glob(os.path.join(new, "events-*.jsonl")):
+        return
+    for path in glob.glob(os.path.join(old, "events-*.jsonl")):
+        os.makedirs(new, exist_ok=True)
+        name = os.path.basename(path)
+        tmp = os.path.join(new, f"{name}.{os.getpid()}.tmp")
+        shutil.copy2(path, tmp)
+        os.replace(tmp, os.path.join(new, name))
+
+
 def journal_dir():
-    return os.environ.get("COORD_JOURNAL_DIR") or os.path.expanduser(
-        "~/Library/Logs/coordinator"
-    )
+    override = os.environ.get("COORD_JOURNAL_DIR")
+    if override:
+        return override
+    new = os.path.expanduser(DEFAULT_DIR)
+    if new not in _MIGRATED:
+        _MIGRATED.add(new)
+        _migrate_legacy(new, os.path.expanduser(LEGACY_DIR))
+    return new
 
 
 def journal_path(now):
