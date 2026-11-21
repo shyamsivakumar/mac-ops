@@ -31,6 +31,7 @@ import gate_policy
 import journal
 from gate_policy import LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode
 import prompt_paths
+from lane_briefs import OPEN_FINDINGS_NONE, UNSTICK_BRIEF
 
 # The lane driver loads inside the overnight command, so it names itself on
 # its own calls. A process-wide name would charge every later overnight call
@@ -45,8 +46,9 @@ SCORECARD_MAX_SECONDS = 600
 SCORECARD_TRIES = 3
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
-RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
-QUEUE = "/Users/shyamsivakumar/Code/coordinator/queue/queue.json"
+QUEUE_DIR = os.environ.get("COORDQ_DIR", "/Users/shyamsivakumar/Code/coordinator/queue")
+RECEIPTS = os.path.join(QUEUE_DIR, "dispatch-receipts.json")
+QUEUE = os.path.join(QUEUE_DIR, "queue.json")
 # The decisions board the lane raises one item on. The path comes from the
 # environment, so a test or a dry run writes its item to a scratch file
 # and never to the board Shyam reads.
@@ -446,11 +448,52 @@ def journal_once(event, repo, number, head, ledger, key, **fields):
         journal_event(event, repo, number, head, **fields)
 
 
-def journal_verdict(repo, number, head, verdict, gate, ledger):
+def journal_has_merged(repo, number):
+    path = journal.journal_path(time.time())
+    if not os.path.exists(path):
+        return False
+    with open(path) as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("event") in ("merged", "merged_outside_lane") and row.get("repo") == repo and row.get("pr") == number:
+                return True
+    return False
+
+
+def journal_merged(repo, number, head, ledger, **fields):
+    event = fields.pop("event", "merged")
+    key = f"journal-merged:{repo}#{number}"
+    if DRY or key in ledger or journal_has_merged(repo, number):
+        return
+    ledger[key] = event
+    journal_event(event, repo, number, head, **fields)
+
+
+def classify_failure(report, size, prev_lines):
+    if size == "recut":
+        return "size"
+    if "fails the same on origin/main" in report.lower():
+        return "environment"
+    findings = re.findall(r"\[(critical|major|minor)\]\s+(\S+?):(\d+)", report)
+    if not findings:
+        return "logic"
+    blocking = [(path, line) for severity, path, line in findings if severity in ("critical", "major")]
+    if not blocking:
+        return "minor_only"
+    if all(int(line) in prev_lines.get(path, ()) for path, line in blocking):
+        return "moved_bar"
+    return "logic"
+
+
+def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_lines=None):
     if verdict in ("PASS", "FAIL", "SPLIT"):
+        extra = {"class": classify_failure(report, size, prev_lines or {})} if verdict == "FAIL" else {}
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
-                     thread=gate["threadId"], kind="gate", verdict=verdict)
+                     thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
 def gate_verdict(repo, number, head, base):
@@ -771,13 +814,6 @@ def record_failed_review(repo, number, head, ledger):
     return count
 
 
-OPEN_FINDINGS_NONE = "Open critical or major findings: none"
-OPEN_FINDINGS_INSTRUCTION = (
-    "This is the last review round. The second-to-last line of your report must be exactly "
-    f"`{OPEN_FINDINGS_NONE}` or `Open critical or major findings: <n>` (the count of critical "
-    "and major findings still open), after your CHECK line and followed by the final VERDICT line.")
-
-
 def no_open_findings(reply, head):
     """True when a FAIL report fails only for the round cap.
 
@@ -992,7 +1028,7 @@ def prompt_merge_item(repo, number, head):
 
 def herdr_build_card(repo, number, head, need):
     key = CFG[repo]["key"]
-    item = {"id": f"herdr-build-{key}-{number}-{head[:8]}", "group": "Coordinator", "kind": "action",
+    item = {"id": f"herdr-build-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": f"{key}-{number} needs work on head {head[:8]}: {need}. The Herdr session builds {repo}, so no builder thread was sent it.",
             "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch."}
     if not DRY:
@@ -1295,8 +1331,8 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     merged, note = merge_on_reviewed_base(repo, number, head, base)
     landed = LANDED_ELSEWHERE.pop((repo, number, head), None)
     if merged or landed:
-        journal_once("merged", repo, number, head, ledger, f"journal-outside:{repo}#{number}:{head}",
-                     thread=gate["threadId"], base=base, landed_base=landed or base)
+        journal_merged(repo, number, head, ledger,
+                       thread=gate["threadId"], base=base, landed_base=landed or base)
     if not merged:
         return note
     close_after_merge(repo, number, head, issue, gate, ledger)
@@ -1396,7 +1432,11 @@ def settle_merged_prs(repo, ledger):
         number, head = pr["number"], pr["headRefOid"]
         lkey = f"after-merge:{repo}#{number}:{head}"
         found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
-        if lkey in ledger or not found or issue_record(SNAPSHOT, repo, found.group(1)) is None:
+        ticketed = found and issue_record(SNAPSHOT, repo, found.group(1)) is not None
+        if not ticketed:
+            journal_merged(repo, number, head, ledger, event="merged_outside_lane", ticket=None)
+            continue
+        if lkey in ledger:
             continue
         if DRY:
             print(f"DRY after-merge #{number}")
@@ -1404,9 +1444,9 @@ def settle_merged_prs(repo, ledger):
         verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
         if verdict == "running":
             continue
-        journal_once("merged_outside_lane", repo, number, head, ledger,
-                     f"journal-outside:{repo}#{number}:{head}",
-                     thread=gate["threadId"] if gate else None, verdict=verdict)
+        journal_merged(repo, number, head, ledger, event="merged_outside_lane",
+                       thread=gate["threadId"] if gate else None, verdict=verdict,
+                       ticket=found.group(1))
         if verdict == "PASS":
             if close_after_merge(repo, number, head, found.group(1), gate, ledger):
                 print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
@@ -1435,11 +1475,11 @@ def merge_candidates(repo, ledger):
 
 def merge_pass(repo, ledger):
     for number, head, thread, base in merge_candidates(repo, ledger):
-        verdict, gate, _ = gate_verdict(repo, number, head, base)
+        verdict, gate, reply = gate_verdict(repo, number, head, base)
         settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
         if verdict in ("running", "none", "absent"):
             continue
-        journal_verdict(repo, number, head, verdict, gate, ledger)
+        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply)
         if verdict == "SPLIT":
             journal_once("merge_held", repo, number, head, ledger,
                          f"journal-held:{repo}#{number}:{head}:split", reason="split")
@@ -1522,7 +1562,7 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if gate:
-        journal_verdict(repo, number, head, verdict, gate, ledger)
+        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply)
     if verdict == "SPLIT":
         journal_once("merge_held", repo, number, head, ledger,
                      f"journal-held:{repo}#{number}:{head}:split", reason="split")
@@ -1657,30 +1697,6 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
             ledger[f"start:{ref}:{len(ledger)}"] = out
             return f"start {t['key']} #{t['number']}: {out[:60]}"
     return unstick(repo, ledger, excl)
-
-
-# The unstick brief. It is tracked here, in the driver the thread runs,
-# because the close check judges a pull request against the files the
-# ticket names, and the brief has no path of its own to name.
-UNSTICK_BRIEF = """Type: design · gpt-6.1-sol (unstick orphaned tickets; Shyam 2026-11-14: "push on the rest of the backlog and complete it", "dont wait on anything", "no testing is needed")
-
-These open tickets in {repo} were started, their builder finished, and there is no PR and no live thread: {list}. Each one holds up the tickets blocked behind it. Lane spec: /Users/shyamsivakumar/Code/coordinator/specs/lane.md. Standing decisions: /Users/shyamsivakumar/Code/coordinator/notes.md.
-
-For EACH issue: read it, its comments (the `coordinator-ticket` receipt comments name the builder's T3 thread; read that thread's last report with `t3mcp call t3_thread_read '{"threadId":"<id>","view":"messages","limit":6}'`), and check origin/main. Before you close or re-cut an issue, re-read its open pull requests: `gh pr list --repo {repo} --state open --limit 200 --json number,body`, then match `Refs #<n>` exactly. The lane's snapshot can be older than a pull request opened minutes ago.
-
-Two outcomes end the work on an issue at once, and both are finished, not unfinished:
-- A pull request matches: report it and leave the issue untouched. It is not orphaned, so do not close or re-cut it.
-- The lookup is incomplete (the command fails, or the list reaches the limit): report it and leave the issue alone.
-
-Only an issue that is still a confirmed orphan after both checks goes on to exactly one of:
-1. Already delivered on main: close it as completed with the commit or PR that delivered it.
-2. Umbrella spec or map (not buildable itself): remove it as a blocker from its children (`gh issue edit <child> --remove-blocked-by <this>`), label it `stage:backlog`, comment that it closes when its children close.
-3. Too big or stopped mid-way: cut the remaining work into at most two ordered tickets that each fit a 5-minute builder turn (12-section template in ~/.coordinator/tickets.json, Requires/Provides, Design fit, labels stage:todo,type:<type>,priority:<same>, keys after the repo's highest key), chain them with --add-blocked-by, repoint its children to the last new ticket, and close it as not planned naming the new tickets. If the builder left commits on a branch, name that branch as the base in the first new ticket.
-4. Stopped on a question: answer it yourself from the ticket, notes.md and the testing waiver (device, live-service and owner testing are waived; never ask Shyam), post the answer under the heading `## Coordinator decisions (override the body)`, and label it `stage:todo`.
-
-Every confirmed orphan must end closed, `stage:todo` and ready, or an umbrella in `stage:backlog`. An issue skipped for a matching pull request or an incomplete lookup is done for this pass: report it and move on, and do not come back to it. Start nothing and change no code. 15 minutes; if time runs short, finish the issues you can and list the rest.
-Report one line per issue: number, action taken (or `skipped: matching PR #<n>` / `skipped: incomplete PR lookup`), new tickets.
-"""
 
 
 def unstick(repo, ledger, excl=frozenset()):

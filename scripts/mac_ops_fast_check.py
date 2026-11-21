@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -267,11 +268,9 @@ def check_isolation(run, isolation, env):
 
     The two suites are the ones that reached GitHub and the live skip log
     before the environment was set for them. Their own result is recorded
-    in the detail and does not decide this check: the check is about the
-    live files, and a suite that is already red on this machine is not a
-    finding about the isolation. What the run must do is discover the suite
-    and finish it, so a run that never got as far as the tests cannot pass
-    by leaving the live files alone.
+    in the detail, and a red suite fails this check and names the failing
+    tests. The run must also discover the suite and finish it, so a run that
+    never got as far as the tests cannot pass by leaving the live files alone.
 
     Each suite runs under `env`, which names a temp root and nothing else,
     so the entry point has to install the isolation itself. The check then
@@ -337,6 +336,12 @@ def check_isolation(run, isolation, env):
         raise AssertionError(
             f"the suite did not run: {found} tests, expected at least {MIN_TESTS} "
             f"(unittest exited {suite.returncode})")
+    if suite.returncode != 0:
+        failing = [line for line in (suite.stdout + suite.stderr).splitlines()
+                   if line.startswith(('FAIL:', 'ERROR:'))]
+        raise AssertionError(
+            f"the unittest suite is red (exited {suite.returncode}): "
+            f"{' | '.join(failing)}")
     if selftest.returncode != 0:
         raise AssertionError(
             f"the overnight selftest did not run: exited {selftest.returncode}")
@@ -418,6 +423,7 @@ class Proof:
             "# Check proof",
             "",
             "Command: `python3 scripts/mac_ops_fast_check.py`",
+            f"Host: {socket.gethostname()}",
             f"Checked commit: `{head}`",
             f"Working tree clean when the checks ran: {'no' if dirty else 'yes'}",
             f"Run result: {result}",
@@ -623,14 +629,16 @@ def main():
         return
     isolation = load_isolation()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+           **isolation.environment(),
            "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR")),
-           **isolation.environment()}
+           "COORDQ_DIR": tempfile.mkdtemp(prefix="check-queue-", dir=os.environ.get("TMPDIR"))}
     # The suites that prove the entry points install the isolation run under
     # this environment instead: it carries no fake `gh` on PATH and no temp
     # log path, so an entry point that lost its installer is not covered for
     # by this side.
     entry_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"]}
+                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"],
+                 "COORDQ_DIR": env["COORDQ_DIR"]}
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
     dirty = [line for line in git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
