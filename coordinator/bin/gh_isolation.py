@@ -165,11 +165,11 @@ def _alive(pid):
 def _safe_base(base):
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     info = base.lstat()
-    return (
-        stat.S_ISDIR(info.st_mode)
-        and info.st_uid == os.getuid()
-        and stat.S_IMODE(info.st_mode) == 0o700
-    )
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        return False
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        os.chmod(base, 0o700)
+    return True
 
 
 def expire(base):

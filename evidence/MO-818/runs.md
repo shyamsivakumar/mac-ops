@@ -62,3 +62,10 @@ Run in a temp sandbox on the fixed code (`python3 -I proof.py`):
 3 old no owner.pid kept = True
 4 old dead pid removed = True
 ```
+
+## A pre-existing 0755 base is repaired (coordinator follow-up)
+
+```
+0755 base now mode 0o700 | used as parent = True | expiry ran (dead removed) = True
+symlink still rejected = True
+```
