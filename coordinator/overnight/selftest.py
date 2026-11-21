@@ -1959,10 +1959,10 @@ def gate_round_cap():
             ledger[lkey] = "sent"
             return "sent"
 
-        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")):
+        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=()):
             """Run the lane over one pull request at one head."""
             current[0] = head
-            pr = dict(number=number, state="OPEN", headRefOid=head,
+            pr = dict(number=number, state="OPEN", headRefOid=head, labels=[{"name": n} for n in labels],
                       body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
             snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
@@ -1985,7 +1985,7 @@ def gate_round_cap():
         exact(len(items), 1)
         exact(items[0]["kind"], "ask")
         exact(items[0]["title"].startswith("Shyam,"), True)
-        exact(len(items[0]["options"]), 2)
+        exact(len(items[0]["options"]), 3)
         # The fix rounds of the pull request are its failed reviews before
         # the one in hand.
         exact(lane.failed_reviews(repo, 20, ledger), (4, heads[3]))
@@ -2024,6 +2024,24 @@ def gate_round_cap():
         exact(sorted(item["id"] for item in json.loads(board.read_text())["items"])[-1],
               "lane-gate-rounds-shyamsivakumar-mac-ops-23")
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # The gate:keep-fixing label lifts the cap for one pull request: it
+        # gets its fix round, the card of PR 24 is withdrawn, and the waiver
+        # is journaled once per head. Without the label PR 23 is unchanged.
+        waived = {f"fix:{repo}#24:{head}": "sent" for head in heads[:3]}
+        act(24, heads[2], waived)
+        exact(f"rounds-decision:{repo}#24" in waived, True)
+        emitted = []
+        with patch.object(lane.journal, "emit", lambda event, *a, **kw: emitted.append(event)):
+            result = act(24, heads[3], waived, labels=["gate:keep-fixing"])
+            act(24, heads[3], waived, verdict=("absent", None, ""), labels=["gate:keep-fixing"])
+        exact(result.startswith("#24 fix:"), True)
+        exact(f"fix:{repo}#24:{heads[3]}" in waived, True)
+        exact(f"rounds-decision:{repo}#24" in waived, False)
+        exact(emitted.count("gate_cap_waived"), 1)
+        exact("lane-gate-rounds-shyamsivakumar-mac-ops-24" in [
+            item["id"] for item in json.loads(board.read_text())["items"]], False)
+        exact(lane.cap_waived({"labels": [{"name": "gate:keep-fixing"}]}), True)
+        exact(lane.cap_waived({"labels": []}), False)
         # A capped pull request that later passes while the board removal
         # fails is not merged: the command stub raises on any merge call.
         # The ledger key stays, so the next pass retries the removal.
