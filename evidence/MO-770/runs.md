@@ -41,3 +41,16 @@ proofHeads: {'o/on#1': 'green', 'o/on#2': 'unresolved', 'o/on#4': 'legacy'}
 ```
 
 Note: the ticket proof command is the expected shape; it ran as written.
+
+## Fetch retry (evidence/MO-770/fetch_retry_proof.py, temp COORDQ_DIR, COORD_JOURNAL_DIR, HOME, fake PR data)
+
+PR 1 fetch fails once then works; PR 2 fetch always fails. Before this fix a failed fetch cached `unresolved` on tick 1 and the head was never retried. After: PR 1 is gated green on tick 2; PR 2 is retried on ticks 1 to 3 (3 fetch attempts), cached unresolved with one card `proof-MO-2` on tick 3, and ticks 4 and 5 make no more attempts.
+```
+tick 1: fetch attempts {1: 1, 2: 1} | queued [] | proofHeads {} | cards []
+queued gate:o/on#1:91d8bfe64d2e9b2024f3e6c4fc0d7040d400456f reviewer i m
+tick 2: fetch attempts {1: 2, 2: 2} | queued ['t1'] | proofHeads {'o/on#1': 'green'} | cards []
+tick 3: fetch attempts {1: 2, 2: 3} | queued ['t1'] | proofHeads {'o/on#1': 'green', 'o/on#2': 'unresolved'} | cards ['proof-MO-2']
+tick 4: fetch attempts {1: 2, 2: 3} | queued ['t1'] | proofHeads {'o/on#1': 'green', 'o/on#2': 'unresolved'} | cards ['proof-MO-2']
+tick 5: fetch attempts {1: 2, 2: 3} | queued ['t1'] | proofHeads {'o/on#1': 'green', 'o/on#2': 'unresolved'} | cards ['proof-MO-2']
+proofFetch: {'o/on#1': (1, 'cannot fetch the head: fatal: unable to '), 'o/on#2': (3, 'cannot fetch the head: fatal: unable to ')}
+```
