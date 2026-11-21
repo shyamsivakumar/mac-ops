@@ -1,0 +1,10 @@
+{
+  "arms": {
+    "control": [
+      "models.json",
+      "bin/gate_bar.py",
+      "config/AGENT-RULES.md"
+    ]
+  },
+  "experiments": []
+}
