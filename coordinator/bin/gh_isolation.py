@@ -15,6 +15,7 @@ import os
 import shutil
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 # The caller name every row the run writes carries. The proof counts the
@@ -137,6 +138,68 @@ ROOT_VAR = "COORDINATOR_TEST_ISOLATION_DIR"
 QUEUE_CONFIG = {"cap": 8}
 STATE_DIRS = {"COORD_JOURNAL_DIR": "journal", "COORDQ_DIR": "queue"}
 
+BASE_NAME = "mac-ops-test"
+EXPIRY_SECONDS = 86400
+OWNER_FILE = "owner.pid"
+
+
+def base_dir():
+    """Return the one directory every run's temp root lives under."""
+    tmp = Path(tempfile.gettempdir()).resolve()
+    home = Path.home().resolve()
+    if tmp == home or home / "Code" in (tmp, *tmp.parents):
+        tmp = Path("/tmp").resolve()
+    return tmp / BASE_NAME
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _safe_base(base):
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = base.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        return False
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        os.chmod(base, 0o700)
+    return True
+
+
+def expire(base):
+    """Remove the roots under `base` whose owner pid is dead and that are old."""
+    now = time.time()
+    for child in base.iterdir():
+        if child.is_symlink() or not child.is_dir():
+            continue
+        owner = child / OWNER_FILE
+        try:
+            pid = int(owner.read_text().strip())
+            age = now - owner.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if _alive(pid) or age < EXPIRY_SECONDS:
+            continue
+        shutil.rmtree(child, ignore_errors=True)
+
+
+def make_dir(prefix):
+    """Make a temp root under `base_dir()` and claim it for this process."""
+    base = base_dir()
+    if _safe_base(base):
+        expire(base)
+    else:
+        base = Path(tempfile.gettempdir())
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=base))
+    (root / OWNER_FILE).write_text(str(os.getpid()))
+    return root
+
 
 def environment(base=None):
     """Return the environment a test run needs, with the fake `gh` first.
@@ -157,7 +220,7 @@ def environment(base=None):
         root = Path(named)
         root.mkdir(parents=True, exist_ok=True)
     else:
-        root = Path(tempfile.mkdtemp(prefix="mac-ops-test-"))
+        root = make_dir("mac-ops-test-")
         atexit.register(shutil.rmtree, str(root), True)
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)
