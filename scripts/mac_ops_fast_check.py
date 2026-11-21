@@ -295,8 +295,7 @@ def check_isolation(run, isolation, env):
     ):
         # The root carries the run's own prefix, because the isolation tests
         # read the log paths and expect the run's name in them.
-        root = Path(tempfile.mkdtemp(prefix=f"{isolation.CALLER}-check-{name}-",
-                                     dir=os.environ.get("TMPDIR")))
+        root = isolation.make_dir(f"{isolation.CALLER}-check-{name}-")
         roots[name] = root
         child_env = {**env, isolation.ROOT_VAR: str(root)}
         results[name] = run(command, timeout=timeout, check=False, capture=True,
@@ -631,8 +630,8 @@ def main():
     isolation = load_isolation()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
            **isolation.environment(),
-           "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="check-journal-", dir=os.environ.get("TMPDIR")),
-           "COORDQ_DIR": tempfile.mkdtemp(prefix="check-queue-", dir=os.environ.get("TMPDIR"))}
+           "COORD_JOURNAL_DIR": isolation.make_dir("check-journal-"),
+           "COORDQ_DIR": isolation.make_dir("check-queue-")}
     # The suites that prove the entry points install the isolation run under
     # this environment instead: it carries no fake `gh` on PATH and no temp
     # log path, so an entry point that lost its installer is not covered for
@@ -671,7 +670,7 @@ def main():
     proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
     proof.check("mypy", shlex.join(mypy_command()), check_mypy)
 
-    scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
+    scratch = isolation.make_dir("heavy-queue-tlc-")
     model_dir = ROOT / "formal" / "heavy-queue"
     java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java" if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file() else "java")
     jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
