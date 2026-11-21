@@ -4250,7 +4250,6 @@ def provider_until():
     real = importlib.util.module_from_spec(spec)
     loader.exec_module(real)
     key = model_list.identity(model_list.entries("review")[0]["selection"])
-    now = 1_000_000_000.0
 
     def blocked(name, entry):
         with tempfile.TemporaryDirectory() as scratch, \
@@ -4265,7 +4264,6 @@ def provider_until():
     exact("gone:retired-model" in blocked("gone:retired-model", {"expires_at": 4102444800}), False)
 
     coordq = load_coordq()
-    selection = model_list.entries("review")[0]["selection"]
 
     def probe(entry, outcome, runs=1):
         with tempfile.TemporaryDirectory() as scratch, \
