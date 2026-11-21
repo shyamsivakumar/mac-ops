@@ -40,6 +40,10 @@ LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
 PROVIDER_BLOCK_SECONDS = 3600
+PROBE_INTERVAL = float(os.environ.get("COORDQ_PROBE_MINUTES", "30")) * 60
+PROBE_WAIT = 90
+PROBE_POLL = 5
+PROBE_ARCHIVE_WAIT = 5
 JOURNAL_TITLE_LIMIT = 120
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
@@ -399,13 +403,18 @@ def call(tool, args, rules=None):
             args = with_rules(args, rules)
     args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
+    return t3_call(tool, args)
+
+
+def t3_call(tool, args, timeout=None):
+    timeout = T3MCP_TIMEOUT if timeout is None else timeout
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
         run = subprocess.run([T3MCP, "call", tool, "-"], input=json.dumps(args),
-                             capture_output=True, text=True, timeout=T3MCP_TIMEOUT)
+                             capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return 1, f"t3 call {tool} timed out after {T3MCP_TIMEOUT}s"
+        return 1, f"t3 call {tool} timed out after {timeout:g}s"
     return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
 
 
@@ -1498,6 +1507,7 @@ def cmd_dispatch(a):
         drain()
     flush_provider_blocks()
     safe_refill(a)
+    probe_one_block()
 
 
 def cmd_create(a):
@@ -1747,6 +1757,61 @@ def block_quota_provider(selection, failure, key):
     log(f"blocked provider {provider} for 1h: {word}")
     journal.emit("provider_blocked", "coordq", provider=provider, reason=word,
                  seconds=PROVIDER_BLOCK_SECONDS, **journal.parse_request_id(key))
+
+
+def time_left(deadline):
+    return max(0.0, deadline - time.monotonic())
+
+
+def probe_reply(thread_id, deadline):
+    """The thread's last assistant reply once its run ended, else None at the deadline."""
+    while time_left(deadline) > 0:
+        code, out = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 20, "runLimit": 5},
+                            min(T3MCP_TIMEOUT, time_left(deadline)))
+        if code == 0:
+            data = json.loads(out)
+            thread, runs = data.get("thread") or {}, data.get("recentRuns") or []
+            run = next((r for r in runs if r.get("runId") == thread.get("latestRunId")), thread)
+            if run.get("status") in TERMINAL_STATUSES:
+                texts = [i.get("text") or "" for i in (data.get("items") or []) if i.get("type") == "assistant_message"]
+                return run["status"], texts[-1] if texts else ""
+        time.sleep(min(PROBE_POLL, time_left(deadline)))
+    return None
+
+
+def probe_one_block():
+    """Probe the first blocked provider not set or probed in the last PROBE_INTERVAL.
+
+    The probe launches a scratch thread named `probe <identity>` on that
+    provider and succeeds only when its run completes with a reply containing
+    "ok" inside PROBE_WAIT seconds in all: one deadline covers the launch and
+    every read, and the archive call keeps the last PROBE_ARCHIVE_WAIT. The
+    thread is archived either way. The check time is written before the launch, so a second run skips the
+    provider while this one waits. At most one provider is probed per run."""
+    due = model_list.stale_blocks(PROBE_INTERVAL)
+    if not due:
+        return
+    deadline = time.monotonic() + PROBE_WAIT - PROBE_ARCHIVE_WAIT
+    provider = due[0]
+    selection = model_list.selection_of(provider)
+    model_list.probe_started(selection)
+    code, out = t3_call("t3_thread_launch", {"modelSelection": selection, "scratch": True,
+                                             "title": f"probe {provider}", "message": "Reply with the word ok."},
+                        min(T3MCP_TIMEOUT, time_left(deadline)))
+    result, reason = None, out
+    if code == 0:
+        thread = json.loads(out)
+        thread_id = thread.get("thread", thread).get("threadId")
+        result = probe_reply(thread_id, deadline)
+        reason = "run did not finish in time" if result is None else f"run {result[0]}"
+        t3_call("t3_thread_organize", {"threadId": thread_id, "action": "archive"}, PROBE_ARCHIVE_WAIT)
+    if result and result[0] == "completed" and re.search(r"\bok\b", result[1], re.IGNORECASE):
+        model_list.unblock(selection)
+        log(f"unblocked provider {provider}: probe succeeded")
+        journal.emit("provider_unblocked", "coordq", provider=provider)
+    else:
+        log(f"provider {provider} stays blocked: probe failed ({reason})")
+        journal.emit("provider_probe_failed", "coordq", provider=provider, error=reason[:200])
 
 
 def thread_selection(data):

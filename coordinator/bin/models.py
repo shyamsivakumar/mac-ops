@@ -7,12 +7,14 @@ Lists: `build` (every build type; an entry's optional `leads` names the task typ
 
 A provider that fails for a blocking reason is recorded in
 `providers-blocked.json` in the queue folder, so every caller skips the same
-blocked providers. `block_provider` writes an entry with an `expires_at`
-epoch time; the reader drops an entry once that time has passed. An entry
-written before that rule carries only an ISO 8601 `until`, which the reader
-honours when `expires_at` is absent. An entry with neither is a manual block
-and stays until removed. The reader also drops an entry whose model is no
-longer listed in `models.json`.
+blocked providers. An entry stays until `unblock` removes it, which coordq
+does after a probe of the provider succeeds; time alone never clears it.
+`block_provider` writes `blocked_at`, and a failed probe refreshes it, so
+`stale_blocks` names the entries that are due a probe. An entry without a
+`blocked_at` (one written before that rule) is due at once. A manual block (no
+finite `expires_at` or `until`) is never probed and only an operator removes it.
+`expires_at` and `until` are kept as a record of when the block was meant to
+end. The reader drops an entry whose model is no longer listed in `models.json`.
 """
 
 import contextlib
@@ -323,11 +325,31 @@ def known_identities():
     return known
 
 
-def blocked_identities(now=None):
+def blocked_identities():
+    blocked = read_blocked_file(blocked_path())["blocked"]
+    return set(blocked) & known_identities()
+
+
+def blocked_at(entry):
+    value = entry.get("blocked_at") if isinstance(entry, dict) else None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
+def stale_blocks(max_age_seconds, now=None):
+    """The temporary blocked identities not set or probed in the last `max_age_seconds`. A manual block is never listed."""
     now = time.time() if now is None else now
     blocked = read_blocked_file(blocked_path())["blocked"]
-    known = known_identities()
-    return {key for key, entry in blocked.items() if key in known and expiry(entry) > now}
+    return [key for key in sorted(set(blocked) & known_identities()) if expiry(blocked[key]) != math.inf and now - blocked_at(blocked[key]) > max_age_seconds]
+
+
+def selection_of(key):
+    """The selection a blocked identity names, from the lists or from its own text."""
+    for name in LISTS:
+        for entry in entries(name):
+            if identity(entry["selection"]) == key:
+                return entry["selection"]
+    instance, _, model = key.partition(":")
+    return {"instanceId": instance, "model": model}
 
 
 @contextlib.contextmanager
@@ -357,25 +379,48 @@ def block_provider(selection, expires_at, now=None):
         except ModelsError as e:
             print(f"models: refusing to write {file_path}: {e}", file=sys.stderr)
             raise
-        blocked = {k: v for k, v in data["blocked"].items() if expiry(v) > now}
+        blocked = data["blocked"]
         if expires_at <= now or (key in blocked and expiry(blocked[key]) >= expires_at):
             return
-        data["blocked"] = {**blocked, key: {**blocked.get(key, {}), "expires_at": expires_at}}
-        try:
-            text = json.dumps(data, allow_nan=False)
-        except ValueError as e:
-            print(f"models: refusing to write {file_path}: {e}", file=sys.stderr)
-            raise ModelsError(f"{BLOCKED_FILE} holds a number JSON cannot store: {e}") from e
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(file_path), prefix=f".{BLOCKED_FILE}.")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(text)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, file_path)
-        except BaseException:
-            os.unlink(tmp)
-            raise
+        data["blocked"] = {**blocked, key: {**blocked.get(key, {}), "expires_at": expires_at, "blocked_at": now}}
+        write_blocked(file_path, data)
+
+
+def write_blocked(file_path, data):
+    try:
+        text = json.dumps(data, allow_nan=False)
+    except ValueError as e:
+        print(f"models: refusing to write {file_path}: {e}", file=sys.stderr)
+        raise ModelsError(f"{BLOCKED_FILE} holds a number JSON cannot store: {e}") from e
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(file_path), prefix=f".{BLOCKED_FILE}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, file_path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+def unblock(selection):
+    """Remove the block after a probe of the provider succeeded."""
+    with blocked_lock():
+        data = read_blocked_file(blocked_path())
+        if data["blocked"].pop(identity(selection), None) is not None:
+            write_blocked(blocked_path(), data)
+
+
+def probe_started(selection, now=None):
+    """Keep the block and record the time of the probe as the new `blocked_at`, so a failed probe waits a full interval."""
+    key = identity(selection)
+    with blocked_lock():
+        data = read_blocked_file(blocked_path())
+        if key in data["blocked"]:
+            entry = data["blocked"][key]
+            data["blocked"][key] = {**(entry if isinstance(entry, dict) else {}), "blocked_at": time.time() if now is None else now}
+            write_blocked(blocked_path(), data)
 
 
 def is_blocked(selection, blocked=None):
