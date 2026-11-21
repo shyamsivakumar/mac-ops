@@ -70,10 +70,12 @@ def drift_alarm():
                 "checked": now,
                 "in_sync": status["in_sync"],
                 "differs": status["differs"],
+                "config_key_drift": status["config_key_drift"],
             }
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(report))
-        if report["in_sync"]:
+        key_drift = report.get("config_key_drift", [])
+        if report["in_sync"] and not key_drift:
             marker.unlink(missing_ok=True)
             return ""
         if not marker.exists():
@@ -82,7 +84,9 @@ def drift_alarm():
         first_seen = float(marker.read_text())
         if now - first_seen < 1800:
             return ""
-        names = ", ".join(Path(path).name for path in report["differs"][:5])
+        names = ", ".join(
+            [Path(path).name for path in report["differs"][:5]] + key_drift[:5]
+        )
         minutes = int((now - first_seen) / 60)
         return (
             f"ALARM: installed coordinator differs from {checkout} "
