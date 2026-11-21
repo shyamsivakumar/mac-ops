@@ -60,6 +60,7 @@ DECISIONS_PATH = alarms.DECISIONS_PATH
 # Shyam, and it is not reviewed a 4th time as it is. So the 3rd failed
 # review raises one decisions item instead of a fix round.
 GATE_ROUND_CAP = 3
+KEEP_FIXING_LABEL = "gate:keep-fixing"
 DRY = False
 SNAPSHOT = {}
 # Where each lane repository is checked out. The path is the shared root
@@ -113,7 +114,7 @@ def read_json(cmd, fresh=False):
     return json.loads(result.stdout)
 
 
-PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles"
+PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles,labels"
 PASS_PRS = {}
 PASS_WORKTREES = set()
 
@@ -851,8 +852,30 @@ def gate_round_item(repo, number, head):
             {"label": "Take it over",
              "detail": "Shyam reads the pull request and the last gate report and decides what happens to it.",
              "recommended": False},
+            {"label": f"Keep fixing (adds the {KEEP_FIXING_LABEL} label)",
+             "detail": "The lane keeps sending fix rounds for this pull request past the cap and drops this card.",
+             "recommended": False},
         ],
     }
+
+
+def cap_waived(pr):
+    """True when the pull request carries the owner's keep-fixing label."""
+    return any(label["name"] == KEEP_FIXING_LABEL for label in pr.get("labels") or [])
+
+
+def waive_round_cap(repo, number, head, pr, ledger):
+    """Lift the round cap for a labelled pull request and drop its card.
+
+    The waiver is journaled once per head. A card that could not be
+    withdrawn stays in the ledger, so the next pass retries it.
+    """
+    if not cap_waived(pr):
+        return False
+    journal_once("gate_cap_waived", repo, number, head, ledger,
+                 f"journal-cap-waived:{repo}#{number}:{head}")
+    clear_gate_round_decision(repo, number, ledger)
+    return True
 
 
 def card_on_board(alarm_id):
@@ -1581,7 +1604,7 @@ def act_on_pr(repo, number, ledger):
         # The cap is asked before the same-head retry, so a pull request
         # at the cap is never sent "Continue fixing".
         reviews = record_failed_review(repo, number, head, ledger)
-        if reviews >= GATE_ROUND_CAP:
+        if reviews >= GATE_ROUND_CAP and not waive_round_cap(repo, number, head, pr, ledger):
             if no_open_findings(reply, head):
                 return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
             return gate_round_decision(repo, number, head, ledger)
@@ -1604,7 +1627,7 @@ def act_on_pr(repo, number, ledger):
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + report_for_builder(reply)[-6000:])
         return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
-    if gate_rounds_used(repo, number, ledger):
+    if gate_rounds_used(repo, number, ledger) and not waive_round_cap(repo, number, head, pr, ledger):
         # The pull request has used the three reviews the rule gives it.
         # It is re-cut into smaller pull requests, or Shyam takes it
         # over, and it is not reviewed a 4th time as it is.
