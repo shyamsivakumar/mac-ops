@@ -4369,7 +4369,29 @@ def provider_until():
     exact(probe({**lapsed, "blocked_at": fresh}, started, ("completed", "ok"))[:2], ([], fresh))
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here}
+def journal_migration():
+    """A second writer's file exists before first-use migration runs.
+
+    The destination month file already holds a new row when the old folder
+    is migrated, so migration must merge the old rows in rather than skip
+    the file, and a second run must not duplicate anything.
+    """
+    import journal
+    with tempfile.TemporaryDirectory() as root:
+        old, new = Path(root, "old"), Path(root, "new")
+        old.mkdir()
+        new.mkdir()
+        (old / "events-2026-11.jsonl").write_text('{"a":1}\n{"b":2}\n')
+        (old / "events-backfill.jsonl").write_text('{"z":0}\n')
+        (new / "events-2026-11.jsonl").write_text('{"b":2}\n{"c":3}\n')
+        journal._migrate_legacy(str(new), str(old))
+        journal._migrate_legacy(str(new), str(old))
+        exact((new / "events-2026-11.jsonl").read_text().splitlines(), ['{"a":1}', '{"b":2}', '{"c":3}'])
+        exact((new / "events-backfill.jsonl").read_text().splitlines(), ['{"z":0}'])
+        exact((new / ".migrated").exists(), True)
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration}
 
 
 def main():
