@@ -12,9 +12,9 @@ This is ticket 2 of 8 cutting SRW #1579, which counts 798 code lines in 4 code f
 ## Scope and non-goals
 
 In:
-- `thala_executor/order_identity.cjs`: `capacityOf`, `invariantOf`, `assertInvariant`, `noteInvariant`, `linkReservation`, `readSellReservation`
+- `thala_executor/order_identity.cjs`: `capacityOf`, `invariantOf`, `assertInvariant`, `noteInvariant`, `linkReservation`, `readSellReservation`, and its `module.exports` entry
 
-Size: about 72 code lines, 1 code file.
+Size: about 73 code lines, 1 code file.
 
 Out: every other file of #1579. Activation of the reservation book (P54, #1464).
 
@@ -32,7 +32,7 @@ Provides: the pieces named above, taken from #1579 head `cd544b89` without chang
 1. `heavy scripts/check.sh` passes on the final head.
 2. Proof command: node -e "const m=require('./thala_executor/order_identity.cjs');console.log(typeof m.readSellReservation)"
 Expected red signature: undefined
-Green on the PR head: function
+Green with its blockers merged: function
 3. `Builder check: PASS <full sha>` on its own line in the PR body.
 
 ## CI

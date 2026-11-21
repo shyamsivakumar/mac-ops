@@ -1,6 +1,6 @@
 ## Goal and why
 
-Finish the book's read methods and export the owner so the executors can use it.
+Finish the book's read methods and `close`. The book is already exported by ticket 3.
 
 This is ticket 6 of 8 cutting SRW #1579, which counts 798 code lines in 4 code files, over the cap of 150 lines and 3 files.
 
@@ -12,9 +12,9 @@ This is ticket 6 of 8 cutting SRW #1579, which counts 798 code lines in 4 code f
 ## Scope and non-goals
 
 In:
-- `thala_executor/order_identity.cjs`: the book methods `capacity`, `reservationFor`, `snapshot`, `close`, and the new names in `module.exports`
+- `thala_executor/order_identity.cjs`: the book methods `capacity`, `reservationFor`, `snapshot`, `close`
 
-Size: about 72 code lines, 1 code file.
+Size: about 61 code lines, 1 code file.
 
 Out: every other file of #1579. Activation of the reservation book (P54, #1464).
 
@@ -32,7 +32,7 @@ Provides: the pieces named above, taken from #1579 head `cd544b89` without chang
 1. `heavy scripts/check.sh` passes on the final head.
 2. Proof command: node -e "const s={d:'{}',load(){return JSON.parse(this.d)},save(v){this.d=JSON.stringify(v)},compareAndSwap(e,n){if(JSON.stringify(e)!==this.d)return false;this.d=JSON.stringify(n);return true}};const m=require('./thala_executor/order_identity.cjs');const b=m.createSellReservationBook({store:s,environment:'paper',accountId:'a'});console.log(['capacity', 'reservationFor', 'snapshot', 'close'].map(k=>typeof b[k]).join())"
 Expected red signature: undefined|is not a function
-Green on the PR head: function,function,function,function
+Green with its blockers merged: function,function,function,function
 3. `Builder check: PASS <full sha>` on its own line in the PR body.
 
 ## CI

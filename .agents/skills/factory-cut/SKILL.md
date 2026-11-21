@@ -64,6 +64,8 @@ Expected red signature: <regex that matches the output on origin/main>
 
 - Where `proofOnOpen` is on for the repo, `ticket open` runs the proof on `origin/main` and refuses unless it is red and the output matches the signature. It refuses a proof that passes ("nothing to build") and a body with no signature line. See `docs/ticket-open-proof.md`.
 - A chained ticket is opened while its blockers are unmerged, so main still lacks the blocker's code. Write a signature that matches main as it is now (for example `undefined|is not a function`), not main after the blockers land.
+- A ticket's proof must pass on (main plus that ticket's blockers plus that ticket), never only on the finished upstream PR. If a proof needs something a later ticket adds (an export, a helper, a fixture), move that part into this ticket or prove through what is already reachable.
+- To check it, build the chain on a scratch branch one ticket at a time from the source's base commit. At each step run that ticket's proof: red on the step before, green on the step after. Never push the scratch branch.
 - A docs or config ticket says `Proof command: none (prose)` and states the prose acceptance.
 - Also add `Builder check: PASS <full sha>` as the last acceptance line.
 
@@ -87,13 +89,13 @@ Oversized pull request: SRW #1579, 798 code lines in 4 code files. The cut has 8
 
 | Ticket | Code files | Code lines | Blocked by |
 | --- | --- | --- | --- |
-| 1 constants, identity keys, position helpers | order_identity.cjs | about 101 | nothing |
-| 2 capacity, invariants, `readSellReservation` | order_identity.cjs | about 72 | 1 |
-| 3 book plumbing: store, epoch, fenced commit | order_identity.cjs | about 125 | 2 |
+| 1 constants, identity keys, position helpers, their exports | order_identity.cjs | about 110 | nothing |
+| 2 capacity, invariants, `readSellReservation` | order_identity.cjs | about 73 | 1 |
+| 3 book plumbing: store, epoch, fenced commit | order_identity.cjs | about 126 | 2 |
 | 4 `proveHoldings`, `allocateRow`, `reserve`, `markUnknown` | order_identity.cjs | about 104 | 3 |
 | 5 `recordExecution`, `observeOrder`, `reconcile`, `release` | order_identity.cjs | about 117 | 4 |
-| 6 `capacity`, `reservationFor`, `snapshot`, `close`, exports | order_identity.cjs | about 72 | 5 |
+| 6 `capacity`, `reservationFor`, `snapshot`, `close` | order_identity.cjs | about 61 | 5 |
 | 7 executor wiring | thala_v2_executor.js | about 137 | 6 |
 | 8 bot 2 and ledger hooks, proof script, fixtures | trade_machine.js, alpaca_paper_execution.js | about 70 | 7 |
 
-The bodies are in `evidence/MO-766/srw1579-cut/`; `evidence/MO-766/example-ticket.md` is ticket 1.
+Each helper is exported by the ticket that adds it, so every proof passes at its own step (`evidence/MO-766/runs.md`). The bodies are in `evidence/MO-766/srw1579-cut/`; `evidence/MO-766/example-ticket.md` is ticket 1.
