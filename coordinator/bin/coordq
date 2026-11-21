@@ -13,7 +13,7 @@ if _OVERNIGHT_DIR not in sys.path:
     sys.path.append(_OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
-from gate_policy import parse_verdict
+from gate_policy import parse_verdict, verdict
 import lane_briefs
 import prompt_paths
 from tick_health import tick_alarm
@@ -239,8 +239,7 @@ def gate_state(value):
 
 
 def has_verdict(report):
-    lines = [line.rstrip() for line in report.splitlines() if line.strip()]
-    return parse_verdict(report) is not None or (bool(lines) and lines[-1] in ("VERDICT: PASS", "VERDICT: FAIL"))
+    return verdict(report) is not None or parse_verdict(report) is not None
 
 
 def gate_thread_to_judge(queue, key, receipts):
@@ -2574,7 +2573,7 @@ def cmd_fix(a):
     texts = [i.get("text") or "" for i in (data.get("items") or [])
              if i.get("type") == "assistant_message"]
     report = texts[-1] if texts else ""
-    if not report.rstrip().endswith("VERDICT: FAIL"):
+    if verdict(report) != "FAIL":
         die(f"refused: the gate of {repo}#{number} did not end VERDICT: FAIL")
     issue = 0
     for line in (pr.get("body") or "").splitlines():
