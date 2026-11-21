@@ -162,24 +162,29 @@ def _alive(pid):
     return True
 
 
+def _safe_base(base):
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = base.lstat()
+    return (
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.getuid()
+        and stat.S_IMODE(info.st_mode) == 0o700
+    )
+
+
 def expire(base):
-    """Remove the roots under `base` whose owner is gone and that are old."""
+    """Remove the roots under `base` whose owner pid is dead and that are old."""
     now = time.time()
     for child in base.iterdir():
-        if not child.is_dir():
+        if child.is_symlink() or not child.is_dir():
             continue
         owner = child / OWNER_FILE
         try:
             pid = int(owner.read_text().strip())
+            age = now - owner.stat().st_mtime
         except (OSError, ValueError):
-            pid = None
-        if pid is not None and _alive(pid):
             continue
-        try:
-            age = now - (owner if owner.exists() else child).stat().st_mtime
-        except OSError:
-            continue
-        if age < EXPIRY_SECONDS:
+        if _alive(pid) or age < EXPIRY_SECONDS:
             continue
         shutil.rmtree(child, ignore_errors=True)
 
@@ -187,8 +192,10 @@ def expire(base):
 def make_dir(prefix):
     """Make a temp root under `base_dir()` and claim it for this process."""
     base = base_dir()
-    base.mkdir(parents=True, exist_ok=True)
-    expire(base)
+    if _safe_base(base):
+        expire(base)
+    else:
+        base = Path(tempfile.gettempdir())
     root = Path(tempfile.mkdtemp(prefix=prefix, dir=base))
     (root / OWNER_FILE).write_text(str(os.getpid()))
     return root
