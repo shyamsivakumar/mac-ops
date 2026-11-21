@@ -24,6 +24,7 @@ import journal
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
 gh_gateway.set_runner(lambda: subprocess.run)
+gh_gateway.set_etag_dir(lambda: DIR)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 DECISIONS_PATH = os.environ.get(
