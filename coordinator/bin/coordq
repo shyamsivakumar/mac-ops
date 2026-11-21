@@ -2122,6 +2122,15 @@ def run_head_proof(settings, repo, number, issue, head):
 
 
 PROOF_FETCH_ATTEMPTS = 3
+PROOF_PASSING = ("green", "prose", "legacy")
+
+
+def gate_allowed(state, required):
+    return not required or state in PROOF_PASSING
+
+
+def proof_required(settings):
+    return bool(settings.get("proofRequired") or os.environ.get("COORD_PROOF_REQUIRED"))
 
 
 def proof_gate(settings, repo, number, event, key, dry_run):
@@ -2160,8 +2169,9 @@ def proof_gate(settings, repo, number, event, key, dry_run):
         if state == "green":
             write_replay(REPLAY_DIR, f"{settings['key']}-{event['issue']}", body, cmd, event["head"])
             alarms.route_update(DECISIONS_PATH, card_id, "remove")
-    if kept["state"] in ("green", "prose", "legacy"):
+    if gate_allowed(kept["state"], proof_required(settings)):
         return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
+    print(f"no proof record for {event['pr']}", flush=True)
     if not kept["carded"] and not dry_run:
         item = {"id": f"proof-{settings['key']}-{number}", "group": "Coordinator", "kind": "ask",
                 "title": f"{repo}#{number} head {event['head'][:8]}: the proof does not pass",
@@ -2173,6 +2183,7 @@ def proof_gate(settings, repo, number, event, key, dry_run):
                 queue = load()
                 queue["proofHeads"][key]["carded"] = True
                 save(queue)
+            journal.emit("gate_skipped", "gatekeep", reason="no_proof", **journal.parse_request_id(key))
         else:
             print(f"proof {event['pr']}: the card could not be published", flush=True)
     return None
