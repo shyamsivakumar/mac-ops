@@ -57,9 +57,16 @@ def _migrate_legacy(new, old):
     for path in glob.glob(os.path.join(old, "events-*.jsonl")):
         os.makedirs(new, exist_ok=True)
         name = os.path.basename(path)
+        dest = os.path.join(new, name)
+        if os.path.exists(dest):
+            continue
         tmp = os.path.join(new, f"{name}.{os.getpid()}.tmp")
         shutil.copy2(path, tmp)
-        os.replace(tmp, os.path.join(new, name))
+        try:
+            os.link(tmp, dest)
+        except FileExistsError:
+            pass
+        os.unlink(tmp)
 
 
 def journal_dir():
