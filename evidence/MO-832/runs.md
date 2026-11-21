@@ -25,3 +25,9 @@ tick.log
 run 3 after removing events-backfill from new (new still has events: copies nothing):
 /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.zvUXsv6mKD/.local/state/coordinator/journal ['events-2026-11.jsonl']
 ```
+
+## Pre-existing destination is left untouched (per-file guard, os.link)
+```
+events-2026-11.jsonl old
+events-backfill.jsonl KEEP
+```
