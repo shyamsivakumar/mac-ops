@@ -4242,7 +4242,7 @@ def close_evidence():
 
 
 def provider_until():
-    """A provider block ends at its own time, and an unknown model is dropped."""
+    """A provider block ends by a successful probe, never by its time, and an unknown model is dropped."""
     import lane_driver as lane
     model_list = lane.model_list
     loader = importlib.machinery.SourceFileLoader("fixture_models", str(Path(model_list.__file__)))
@@ -4257,12 +4257,37 @@ def provider_until():
              patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
              patch.object(model_list, "blocked_identities", real.blocked_identities):
             Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {name: entry}}))
-            return model_list.blocked_identities(now)
+            return model_list.blocked_identities()
 
-    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}), False)
+    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}), True)
     exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-10T00:00:00Z"}), True)
     exact(key in blocked(key, {"by": "manual"}), True)
     exact("gone:retired-model" in blocked("gone:retired-model", {"expires_at": 4102444800}), False)
+
+    coordq = load_coordq()
+    selection = model_list.entries("review")[0]["selection"]
+
+    def probe(entry, outcome, runs=1):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(model_list, "blocked_identities", real.blocked_identities), \
+             patch.object(model_list, "stale_blocks", real.stale_blocks), \
+             patch.object(model_list, "unblock", real.unblock), \
+             patch.object(model_list, "probe_failed", real.probe_failed), \
+             patch.object(coordq, "t3_call", return_value=outcome) as called:
+            Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {key: entry}}))
+            for _ in range(runs):
+                coordq.probe_one_block()
+            stored = model_list.read_blocked_file(str(Path(scratch, model_list.BLOCKED_FILE)))["blocked"]
+            return called.call_count, stored.get(key, {}).get("blocked_at")
+
+    lapsed = {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}
+    exact(probe(lapsed, (0, "{}")), (1, None))
+    exact(probe({"by": "manual"}, (0, "{}")), (1, None))
+    calls, checked = probe(lapsed, (1, "no credits remaining"), runs=2)
+    exact((calls, checked > time.time() - 60), (1, True))
+    fresh = time.time()
+    exact(probe({**lapsed, "blocked_at": fresh}, (0, "{}")), (0, fresh))
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "close-evidence": close_evidence, "build-here": build_here}
