@@ -190,6 +190,7 @@ GATEWAY_MARK = "COORDINATOR_GH_VIA"
 # getter for the launcher, so every gh call still goes through the one it
 # can see. Resolved at call time, never captured at import time.
 _RUNNER = None
+_ETAG_DIR = None
 _REMAINING = {}
 _REMAINING_TTL = 30.0
 
@@ -218,6 +219,12 @@ def set_runner(getter):
     """Use the caller's own subprocess launcher, looked up on every call."""
     global _RUNNER
     _RUNNER = getter
+
+
+def set_etag_dir(getter):
+    """Keep the etag entries in the caller's own directory, looked up on every call."""
+    global _ETAG_DIR
+    _ETAG_DIR = getter
 
 
 def gateway_env():
@@ -520,8 +527,10 @@ def single_object(argv):
 def conditional(argv):
     """True when a read can be made conditional, so a 304 costs no core call.
 
-    Only a single-page `gh api` GET of a list or of one object qualifies: a paginated read answers with
-    one header block per page, and a write is never conditional."""
+    A `gh api` GET of a list or of one object qualifies, and so does a
+    paginated slurp read: it is probed one page at a time, and a page that
+    fills up falls back to the caller's full read. A write is never
+    conditional."""
     if not (cacheable(argv) or single_object(argv)):
         return False
     words = [str(word) for word in argv[1:]]
@@ -532,21 +541,32 @@ def conditional(argv):
     # short form of `--include`.
     if include_requested(argv):
         return False
-    if paginated(argv) or has_flag(argv, "--slurp"):
+    # Only the slurp form is probed: one page is then one JSON array, and a
+    # short array is the whole list.
+    if paginated(argv) != has_flag(argv, "--slurp"):
         return False
     return not any(word in ("-X", "--method") for word in words)
 
 
 def _etag_path(argv):
-    return CACHE_DIR / "etag" / _key(argv)
+    base = Path(_ETAG_DIR()) / "gh-etag" if _ETAG_DIR else CACHE_DIR / "etag"
+    return base / _key(argv)
 
 
 def _read_etag(argv):
+    path = _etag_path(argv)
     try:
-        state = json.loads(_etag_path(argv).read_text())
-        return state if isinstance(state, dict) and state.get("etag") else None
+        state = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
+    if (isinstance(state, dict) and isinstance(state.get("etag"), str)
+            and isinstance(state.get("stdout"), str)):
+        return state
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return None
 
 
 def _atomic_write(path, text):
@@ -599,13 +619,42 @@ def _status(headers):
     return int(codes[-1]) if codes else None
 
 
+def _per_page(argv):
+    """Return the page size the endpoint asks for, or GitHub's default."""
+    match = re.search(r"[?&]per_page=(\d+)", endpoint(argv))
+    return int(match.group(1)) if match else 30
+
+
+def _one_page(argv, body, etag):
+    """Return the slurp-shaped body of a one-page read, or None for a full page.
+
+    A page holding as many rows as it asked for may have a next page, so
+    only the caller's full read can answer it."""
+    try:
+        rows = json.loads(body)
+    except ValueError:
+        rows = None
+    if not isinstance(rows, list) or len(rows) >= _per_page(argv):
+        _etag_path(argv).unlink(missing_ok=True)
+        return None
+    stdout = "[" + body.strip() + "]"
+    if etag:
+        _write_etag(argv, etag, stdout)
+    store(argv, stdout)
+    return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+
 def _conditional_run(argv, timeout, caller_name=None):
     """Run one api GET with If-None-Match; only a 304 answers from the file."""
     state = _read_etag(argv)
     extra = ["--include"]
     if state:
         extra += ["-H", f"If-None-Match: {state['etag']}"]
-    result = _launch()(argv + extra, capture_output=True, text=True, timeout=timeout)
+    command = argv
+    if paginated(argv):
+        command = [word for word in argv
+                   if word.split("=", 1)[0] not in ("--paginate", "--slurp")]
+    result = _launch()(command + extra, capture_output=True, text=True, timeout=timeout)
     headers, body = _split_headers(result.stdout or "")
     status = _status(headers)
     if status == 304 and state:
@@ -622,6 +671,8 @@ def _conditional_run(argv, timeout, caller_name=None):
     # be answered with a cached error and exit zero.
     if result.returncode == 0 and status is not None and 200 <= status < 300:
         header = re.search(r"(?im)^etag:\s*(\S+)\s*$", headers)
+        if paginated(argv):
+            return _one_page(argv, body, header.group(1) if header else "")
         if header:
             _write_etag(argv, header.group(1), body)
         # Keep the body for the short TTL as well. A response with no ETag
@@ -1125,7 +1176,9 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
                     host=argv_host(argv) or None)
         timeout = max(1, int(timeout - (time.monotonic() - started)))
     if stdin is None and conditional(argv):
-        return _conditional_run(argv, timeout, caller_name)
+        answered = _conditional_run(argv, timeout, caller_name)
+        if answered is not None:
+            return answered
     command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)
     result = _launch()(command, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
