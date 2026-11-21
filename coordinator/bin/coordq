@@ -406,7 +406,8 @@ def call(tool, args, rules=None):
     return t3_call(tool, args)
 
 
-def t3_call(tool, args, timeout=T3MCP_TIMEOUT):
+def t3_call(tool, args, timeout=None):
+    timeout = T3MCP_TIMEOUT if timeout is None else timeout
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:

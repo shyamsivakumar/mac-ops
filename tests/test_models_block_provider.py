@@ -47,9 +47,10 @@ class BlockProviderTest(unittest.TestCase):
 
     def test_stale_blocks_lists_entries_not_set_or_probed_recently(self):
         self.file.write_text(json.dumps({"blocked": {
-            "cursor:default": {"reason": "x"},
-            "codex:gpt-6.2-sol": {"blocked_at": 100},
-            "openai-api:gpt-6.2-astra": {"blocked_at": 900},
+            "cursor:default": {"reason": "x", "expires_at": 500},
+            "codex:gpt-6.2-sol": {"blocked_at": 100, "expires_at": 500},
+            "openai-api:gpt-6.2-astra": {"blocked_at": 900, "expires_at": 500},
+            "codex:gpt-6.1-terra": {"by": "manual"},
         }}))
         self.assertEqual(models.stale_blocks(200, now=1000), ["codex:gpt-6.2-sol", "cursor:default"])
         models.probe_started(pick("cursor", "default"), now=950)
