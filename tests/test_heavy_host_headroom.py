@@ -1,6 +1,7 @@
 """Per-host memory headroom tests cover the host floor and governor recovery."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -40,6 +41,13 @@ class HostHeadroomTests(unittest.TestCase):
     def floor_for(self, path, hostname):
         with patch.object(heavy.socket, "gethostname", return_value=hostname):
             return heavy.host_headroom_bytes(path)
+
+    def test_a_slow_native_command_gets_one_longer_retry(self):
+        with patch.object(heavy.subprocess, "run", side_effect=[
+            subprocess.TimeoutExpired("ps", 2.5), Mock(returncode=0, stdout="ok"),
+        ]) as run:
+            self.assertEqual(heavy._run_native(["ps"]), "ok")
+        self.assertEqual(run.call_args_list[1].kwargs["timeout"], heavy.NATIVE_RETRY_TIMEOUT)
 
     def test_a_named_host_gets_its_own_floor(self):
         path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
