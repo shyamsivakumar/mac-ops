@@ -18,6 +18,8 @@ Traceback (most recent call last):
 TypeError: __init__() got an unexpected keyword argument 'shutdown_simulator'
 ```
 
+(The last scenario cannot run on origin/main: it has no shutdown hook, so the script stops with the TypeError above. No simulator is shut down there in any scenario.)
+
 ## After (branch)
 ```
 [job boots NEW, OLD booted before] still booted: ['OLD']  simctl shutdown calls: ['shutdown NEW']
