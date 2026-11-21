@@ -765,7 +765,9 @@ def scope_files(body):
         for token in re.findall(r"^- `([^`\s]+)`", line):
             if not ("/" in token or re.search(r"\.\w+$", token)):
                 continue
-            if token.startswith(("evidence/", "docs/")) or token.endswith(".md"):
+            if token.startswith(("evidence/", "docs/", "evals/harbor/tasks/")) or token.endswith(".md"):
+                continue
+            if "fixtures" in token.split("/") or "proof" in token.rsplit("/", 1)[-1]:
                 continue
             if token not in files:
                 files.append(token)

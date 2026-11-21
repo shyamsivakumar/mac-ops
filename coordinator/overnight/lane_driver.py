@@ -52,8 +52,7 @@ QUEUE = os.path.join(QUEUE_DIR, "queue.json")
 # The decisions board the lane raises one item on. The path comes from the
 # environment, so a test or a dry run writes its item to a scratch file
 # and never to the board Shyam reads.
-DECISIONS_PATH = os.environ.get(
-    "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
+DECISIONS_PATH = alarms.DECISIONS_PATH
 # The failed gate reviews one pull request gets before it goes to Shyam.
 # The convergence rule (Shyam, 2026-11-18): after 3 review rounds without
 # PASS the pull request is re-cut into smaller pull requests or brought to
@@ -1432,7 +1431,11 @@ def settle_merged_prs(repo, ledger):
         number, head = pr["number"], pr["headRefOid"]
         lkey = f"after-merge:{repo}#{number}:{head}"
         found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
-        if lkey in ledger or not found or issue_record(SNAPSHOT, repo, found.group(1)) is None:
+        ticketed = found and issue_record(SNAPSHOT, repo, found.group(1)) is not None
+        if not ticketed:
+            journal_merged(repo, number, head, ledger, event="merged_outside_lane", ticket=None)
+            continue
+        if lkey in ledger:
             continue
         if DRY:
             print(f"DRY after-merge #{number}")
@@ -1441,7 +1444,8 @@ def settle_merged_prs(repo, ledger):
         if verdict == "running":
             continue
         journal_merged(repo, number, head, ledger, event="merged_outside_lane",
-                       thread=gate["threadId"] if gate else None, verdict=verdict)
+                       thread=gate["threadId"] if gate else None, verdict=verdict,
+                       ticket=found.group(1))
         if verdict == "PASS":
             if close_after_merge(repo, number, head, found.group(1), gate, ledger):
                 print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
