@@ -1,4 +1,4 @@
-# MO-1184 proof
+# MO-797 proof
 
 Adapted from the ticket stub: the proof drives `_board_control_tick` with fake board and a 6-active, limit-0 fixture; a fresh sample raises the limit to the floor (7), a stale one holds at 0.
 
