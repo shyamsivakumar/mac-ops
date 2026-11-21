@@ -4292,11 +4292,17 @@ def provider_until():
 
     coordq = load_coordq()
 
-    def probe(entry, launch, run=None, runs=1):
+    def probe(entry, launch, run=None, runs=1, hang=False):
         calls = []
+        clock = [1000.0]
+        timeouts = []
 
-        def t3(tool, args):
+        def t3(tool, args, timeout=coordq.T3MCP_TIMEOUT):
             calls.append((tool, args.get("action") or args.get("title")))
+            if hang and tool != "t3_thread_launch":
+                timeouts.append(timeout)
+                clock[0] += timeout
+                return 1, "t3 call timed out"
             if tool == "t3_thread_launch":
                 return launch
             if tool == "t3_thread_read":
@@ -4311,12 +4317,15 @@ def provider_until():
              patch.object(model_list, "stale_blocks", real.stale_blocks), \
              patch.object(model_list, "unblock", real.unblock), \
              patch.object(model_list, "probe_started", real.probe_started), \
-             patch.object(coordq.time, "sleep"), \
+             patch.object(coordq.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch.object(coordq.time, "monotonic", side_effect=lambda: clock[0]), \
              patch.object(coordq, "t3_call", side_effect=t3):
             Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {key: entry}}))
             for _ in range(runs):
                 coordq.probe_one_block()
             stored = model_list.read_blocked_file(str(Path(scratch, model_list.BLOCKED_FILE)))["blocked"]
+            probe.elapsed = clock[0] - 1000.0
+            probe.timeouts = timeouts
             return [name for name, _ in calls], stored.get(key, {}).get("blocked_at"), [label for name, label in calls if name != "t3_thread_read"]
 
     lapsed = {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}
@@ -4324,13 +4333,16 @@ def provider_until():
     archived = ["t3_thread_launch", "t3_thread_read", "t3_thread_organize"]
     names, at, labels = probe(lapsed, started, ("completed", "ok"))
     exact((names, at, labels), (archived, None, [f"probe {key}", "archive"]))
-    exact(probe({"by": "manual"}, started, ("completed", "Ok."))[:2], (archived, None))
+    names, at, _ = probe({"by": "manual"}, started, ("completed", "Ok."))
+    exact((names, at), ([], None))
     names, at, _ = probe(lapsed, started, ("failed", "no credits remaining"))
     exact((names, at > time.time() - 60), (archived, True))
     names, at, _ = probe(lapsed, started, ("completed", "no"))
     exact((names, at > time.time() - 60), (archived, True))
     names, at, _ = probe(lapsed, started, ("running", ""))
-    exact((names.count("t3_thread_read"), names[-1], at > time.time() - 60), (18, "t3_thread_organize", True))
+    exact((names.count("t3_thread_read"), names[-1], at > time.time() - 60), (17, "t3_thread_organize", True))
+    names, at, _ = probe(lapsed, started, hang=True)
+    exact((names[-1], probe.elapsed <= 90, max(probe.timeouts) <= 60, at > time.time() - 60), ("t3_thread_organize", True, True, True))
     names, at, _ = probe(lapsed, (1, "launch refused"))
     exact((names, at > time.time() - 60), (["t3_thread_launch"], True))
     names, at, _ = probe(lapsed, (1, "launch refused"), runs=2)

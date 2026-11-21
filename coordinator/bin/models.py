@@ -11,7 +11,8 @@ blocked providers. An entry stays until `unblock` removes it, which coordq
 does after a probe of the provider succeeds; time alone never clears it.
 `block_provider` writes `blocked_at`, and a failed probe refreshes it, so
 `stale_blocks` names the entries that are due a probe. An entry without a
-`blocked_at` (a manual block, or one written before that rule) is due at once.
+`blocked_at` (one written before that rule) is due at once. A manual block (no
+finite `expires_at` or `until`) is never probed and only an operator removes it.
 `expires_at` and `until` are kept as a record of when the block was meant to
 end. The reader drops an entry whose model is no longer listed in `models.json`.
 """
@@ -335,10 +336,10 @@ def blocked_at(entry):
 
 
 def stale_blocks(max_age_seconds, now=None):
-    """The blocked identities not set or probed in the last `max_age_seconds`."""
+    """The temporary blocked identities not set or probed in the last `max_age_seconds`. A manual block is never listed."""
     now = time.time() if now is None else now
     blocked = read_blocked_file(blocked_path())["blocked"]
-    return [key for key in sorted(set(blocked) & known_identities()) if now - blocked_at(blocked[key]) > max_age_seconds]
+    return [key for key in sorted(set(blocked) & known_identities()) if expiry(blocked[key]) != math.inf and now - blocked_at(blocked[key]) > max_age_seconds]
 
 
 def selection_of(key):
