@@ -26,3 +26,8 @@ writes nothing.
 The first remote fast check failed only on `watchdog`, which compares EVALS to
 `EXPECTED` in coordinator/bin/hourly_selftest.py; `builder-receipt` was added there
 and the check rerun.
+
+The second remote run failed on `gate-pipeline` because a gatekeep-time call to
+`record_builder` read the issue. That call was removed: `coordq fix` is the only
+caller, so the receipt is written when the first fix needs it. `builder-receipt`
+and `gate-pipeline` both pass in a local single-case run.

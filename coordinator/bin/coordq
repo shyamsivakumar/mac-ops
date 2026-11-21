@@ -2443,8 +2443,6 @@ def cmd_gatekeep(a):
                 if proof is None:
                     continue
                 args["message"] += proof
-            if event.get("issue") and not a.dry_run:
-                record_builder(repo_name, event["issue"])
             observed = load()
             adopted = lane_gated(load_receipts(), key)
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
