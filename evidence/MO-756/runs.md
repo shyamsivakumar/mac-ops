@@ -27,3 +27,18 @@ Result: 7 escaped of 255 merges. Each of the 7 was checked by hand against the f
 | #408 lane passes | #409 | counted | body says "Follow-up to #408"; restores the item failure raise |
 
 Dropped by the new rule: none. All 7 name the PR number, so the ticket-only rule changed nothing today. Ticket-only matches that the old code counted were zero.
+
+## Bounded events fetch (gate finding, scorecard reopened)
+
+Approach: page `repos/<repo>/issues/events?per_page=100&page=N` by hand, newest first. Each page charges one call against the 60 call limit. Paging stops at the first page whose oldest event is older than the window start, or at a short page.
+
+Stub proof, `gh` stubbed to return 5 pages where page 2 already predates the window:
+```
+pages fetched [1, 2] calls charged 2 reopens kept [{'number': 1, 'at': '1970-01-18T08:40:00+00:00'}]
+```
+
+Real mac-ops count after the change (merges 2026-11-13 to 2026-11-20, read-only gh):
+```
+escaped 7 of 255 calls 53
+```
+The 53 calls are 5 searches plus 48 event pages: this repo logs about 4800 events in the week, so a weekly window pages deep. A one day window pages about 14 times.

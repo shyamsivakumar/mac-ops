@@ -182,19 +182,29 @@ class GitHub:
     def fixes(self, start, end):
         return self.search("prs", ["--merged", "--merged-at", span(start, end)], "number,title,body,createdAt,closedAt")
 
+    def event_page(self, repo, page):
+        if self.calls >= CALL_LIMIT:
+            raise Unavailable(f"the {CALL_LIMIT} call limit for one report was reached")
+        self.calls += 1
+        result = gh_gateway.run(["gh", "api", f"repos/{repo}/issues/events?per_page=100&page={page}",
+                                 "--jq", ".[] | {event: .event, number: .issue.number, at: .created_at}"],
+                                timeout=90, caller_name=CALLER)
+        if result.returncode:
+            raise Unavailable(f"gh api issues/events failed for {repo}: {result.stderr.strip()[:120]}")
+        return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
     def reopened(self, start, end):
         found = {}
         for repo in sorted(self.repos):
-            if self.calls >= CALL_LIMIT:
-                raise Unavailable(f"the {CALL_LIMIT} call limit for one report was reached")
-            self.calls += 1
-            result = gh_gateway.run(["gh", "api", "--paginate", f"repos/{repo}/issues/events?per_page=100",
-                                     "--jq", '.[] | select(.event=="reopened") | {number: .issue.number, at: .created_at}'],
-                                    timeout=90, caller_name=CALLER)
-            if result.returncode:
-                raise Unavailable(f"gh api issues/events failed for {repo}: {result.stderr.strip()[:120]}")
-            rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-            found[repo] = [row for row in rows if start <= iso_ts(row["at"]) <= end]
+            found[repo] = []
+            page = 1
+            while True:
+                rows = self.event_page(repo, page)
+                found[repo] += [{"number": row["number"], "at": row["at"]} for row in rows
+                                if row["event"] == "reopened" and start <= iso_ts(row["at"]) <= end]
+                if len(rows) < 100 or iso_ts(rows[-1]["at"]) < start:
+                    break
+                page += 1
         return found
 
 
