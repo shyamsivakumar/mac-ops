@@ -1892,18 +1892,22 @@ def unreadable_ticket_reason(error, issue, body, title):
     return reason
 
 
-SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/")
+SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
 OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
 RECUT_LINES = 300
 RECUT_FILES = 6
+RECUT_RULE = 2
+GATE_WHOLE_LABEL = "gate:whole"
 
 
 def counted_code_file(f):
     name = f["filename"]
+    base = name.rsplit("/", 1)[-1]
     if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
         return False
-    base = name.rsplit("/", 1)[-1]
+    if "fixtures" in name.split("/") or "proof" in base:
+        return False
     is_test = (base.startswith("test_") or base.endswith("_test.py")
                or "selftest" in name or "tests" in name.split("/"))
     if f.get("status") != "added" and is_test:
@@ -1916,19 +1920,24 @@ def code_size(files):
     return sum(f["additions"] + f["deletions"] for f in code), len(code)
 
 
-def size_class(files):
+def gate_whole(pr):
+    return any(label["name"] == GATE_WHOLE_LABEL for label in pr.get("labels") or [])
+
+
+def size_class(files, whole=False):
     lines, count = code_size(files)
     if lines > RECUT_LINES or count > RECUT_FILES:
-        return "recut"
+        return "over_cap" if whole else "recut"
     if lines > OVER_CAP_LINES or count > OVER_CAP_FILES:
         return "over_cap"
     return "ok"
 
 
-def pr_size(repo, number):
+def pr_size(repo, number, pr):
     files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
     lines, count = code_size(files)
-    return {"size": size_class(files), "lines": lines, "files": count}
+    whole = gate_whole(pr)
+    return {"size": size_class(files, whole), "lines": lines, "files": count, "whole": whole}
 
 
 def recut_item(repo_key, repo, number, head, lines, count):
@@ -1981,7 +1990,8 @@ def gate_candidates(config, rounds=None):
                        "reason": "at the gate round cap"}
                 continue
             gated_key = retarget_key(f"gate:{repo}#{number}:{head}", pr, receipts)
-            if gated_key in queue.get("recutHeads", {}):
+            if (queue.get("recutHeads", {}).get(gated_key, {}).get("rule", 0) >= RECUT_RULE
+                    and not gate_whole(pr)):
                 continue
             if gated_key in queue.get("gatedHeads", {}) or lane_gated(receipts, gated_key):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
@@ -2063,7 +2073,7 @@ def gate_candidates(config, rounds=None):
                            "reason": "changed-file list unreadable, gate deferred"}
                     break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "builderModels": models, **pr_size(repo, number),
+                       "builderModels": models, **pr_size(repo, number, pr),
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
@@ -2084,7 +2094,7 @@ def gate_candidates(config, rounds=None):
                         key, args = gated_key, {**args, "clientRequestId": gated_key}
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
                            "key": key, "builderModels": models, "args": args,
-                           **pr_size(repo, number)}
+                           **pr_size(repo, number, pr)}
 
 
 def executed_models(value):
@@ -2123,6 +2133,9 @@ def cmd_gatekeep(a):
             counts.pop(event["pr"], None)
             key, args = event["key"], event["args"]
             size = event.get("size")
+            if event.get("whole") and key in load().get("recutHeads", {}) and not a.dry_run:
+                repo_name, pr_number = event["pr"].rsplit("#", 1)
+                alarms.route_update(DECISIONS_PATH, f"recut-{config['repos'][repo_name]['key']}-{pr_number}", "remove")
             if size == "recut":
                 repo_name, pr_number = event["pr"].rsplit("#", 1)
                 if a.dry_run:
@@ -2135,7 +2148,7 @@ def cmd_gatekeep(a):
                     continue
                 with Lock(True):
                     queue = load()
-                    queue.setdefault("recutHeads", {})[key] = {"at": time.time()}
+                    queue.setdefault("recutHeads", {})[key] = {"at": time.time(), "rule": RECUT_RULE}
                     save(queue)
                 journal.emit("recut", "gatekeep", lines=event["lines"], files=event["files"],
                              **journal.parse_request_id(key))
