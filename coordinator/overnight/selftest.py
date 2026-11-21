@@ -4391,7 +4391,25 @@ def journal_migration():
         exact((new / ".migrated").exists(), True)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration}
+def builder_receipt():
+    coordq = load_coordq()
+    repo = "shyamsivakumar/strategy-replay-workbench"
+    with tempfile.TemporaryDirectory() as scratch, patch.object(coordq, "DIR", scratch):
+        Path(scratch, "dispatch-receipts.json").write_text(json.dumps({f"ticket:{repo}#7:a2": "older"}))
+        with patch.object(coordq, "builder_thread_for_issue", return_value="shift-thread") as lookup:
+            exact(coordq.record_builder(repo, 1580), "shift-thread")
+            exact(coordq.record_builder(repo, 1580), "shift-thread")
+            exact(coordq.record_builder(repo, 7), "older")
+            exact(lookup.call_count, 1)
+        receipts = json.loads(Path(scratch, "dispatch-receipts.json").read_text())
+        exact(receipts[f"ticket:{repo}#1580:a1"], "shift-thread")
+        with patch.object(coordq, "builder_thread_for_issue", return_value=None):
+            exact(coordq.record_builder(repo, 99), None)
+        exact(sorted(json.loads(Path(scratch, "dispatch-receipts.json").read_text())),
+              [f"ticket:{repo}#1580:a1", f"ticket:{repo}#7:a2"])
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt}
 
 
 def main():
