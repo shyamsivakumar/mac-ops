@@ -1703,17 +1703,14 @@ def _shutdown_job_simulators(
     leftovers = sorted(after - before)
     if not leftovers:
         return
-    with registry.lock():
-        others = registry.records()
-    if others:
-        _log_event(
-            registry.directory,
-            "simulator-cleanup-skipped",
-            record,
-            detail=",".join(leftovers),
-        )
-        return
     for udid in leftovers:
+        with registry.lock():
+            others = registry.records()
+        if others:
+            _log_event(
+                registry.directory, "simulator-cleanup-skipped", record, detail=udid
+            )
+            continue
         ok = deps.shutdown_simulator(udid)
         _log_event(
             registry.directory,
