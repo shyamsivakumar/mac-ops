@@ -1993,6 +1993,125 @@ def recut_item(repo_key, repo, number, head, lines, count):
     }
 
 
+REPLAY_DIR = os.path.join(os.path.dirname(DIR), "replay")
+
+
+def write_replay(root, key, body, cmd, head):
+    folder = os.path.join(root, key)
+    os.makedirs(folder, exist_ok=True)
+    for name, text in (("ticket.md", body), ("proof.txt", cmd), ("head.txt", head)):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as handle:
+            handle.write(text.rstrip("\n") + "\n")
+
+
+def opened_red(repo, issue):
+    folder = journal.journal_dir()
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not name.startswith("events-"):
+            continue
+        with open(os.path.join(folder, name), encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if (isinstance(row, dict) and row.get("event") == "ticket_opened" and row.get("repo") == repo
+                        and row.get("ticket") == int(issue) and (row.get("data") or {}).get("proof") == "red"):
+                    return True
+    return False
+
+
+def run_head_proof(settings, repo, number, issue, head):
+    """The green proof of one head, run in a clean checkout by the runner.
+
+    The state is green, red, unresolved, prose or fetch_failed, and the
+    tail is the runner's own record, never the builder's paste. A
+    fetch_failed head has not been proved yet.
+    """
+    import tempfile
+    import proof_run
+    body = (gh_json(f"repos/{repo}/issues/{issue}").get("body") or "")
+    try:
+        cmd = proof_run.parse_body(body)["cmd"]
+    except ValueError:
+        return "prose", "", body, ""
+    if cmd.lower().startswith("none (prose)"):
+        return "prose", "", body, cmd
+    if not settings.get("checkout"):
+        return "unresolved", "the repo has no checkout path in tickets.json", body, cmd
+    repo_dir = os.path.expanduser(settings["checkout"])
+    fetch = subprocess.run(["git", "-C", repo_dir, "fetch", "origin", f"refs/pull/{number}/head"],
+                           capture_output=True, text=True)
+    if fetch.returncode:
+        return "fetch_failed", f"cannot fetch the head: {fetch.stderr.strip()[-200:]}", body, cmd
+    fd, record = tempfile.mkstemp(prefix="proof-record-")
+    os.close(fd)
+    try:
+        result = proof_run.run("green", repo_dir, head, cmd, None, record)
+        with open(record, encoding="utf-8") as handle:
+            tail = handle.read()[-1500:]
+    finally:
+        os.unlink(record)
+    return ("green" if result["state"] == "green" else "unresolved"), tail, body, cmd
+
+
+PROOF_FETCH_ATTEMPTS = 3
+
+
+def proof_gate(settings, repo, number, event, key, dry_run):
+    """The proof text for the gate brief, or None when this head gets no gate.
+
+    The proof runs once per head: the result is kept under the head's
+    key, so a later run reads it instead of running again. A head that
+    does not pass gets a board card and no gate.
+    """
+    kept = load().get("proofHeads", {}).get(key)
+    if kept is None:
+        if dry_run:
+            print(f"would run the proof of {event['pr']}", flush=True)
+            return ""
+        if opened_red(repo, event["issue"]):
+            state, tail, body, cmd = run_head_proof(settings, repo, number, event["issue"], event["head"])
+        else:
+            state, tail, body, cmd = "legacy", "", "", ""
+        if state == "fetch_failed":
+            with Lock(True):
+                queue = load()
+                tries = queue.setdefault("proofFetch", {}).get(key, {}).get("attempts", 0) + 1
+                queue["proofFetch"][key] = {"attempts": tries, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "error": tail}
+                save(queue)
+            journal.emit("proof_fetch_failed", "gatekeep", attempts=tries, **journal.parse_request_id(key))
+            if tries < PROOF_FETCH_ATTEMPTS:
+                return None
+            state = "unresolved"
+        kept = {"state": state, "tail": tail, "pr": event["pr"], "carded": False}
+        with Lock(True):
+            queue = load()
+            queue.setdefault("proofHeads", {})[key] = kept
+            save(queue)
+        journal.emit("proof_run", "gatekeep", state=state, **journal.parse_request_id(key))
+        card_id = f"proof-{settings['key']}-{number}"
+        if state == "green":
+            write_replay(REPLAY_DIR, f"{settings['key']}-{event['issue']}", body, cmd, event["head"])
+            alarms.route_update(DECISIONS_PATH, card_id, "remove")
+    if kept["state"] in ("green", "prose", "legacy"):
+        return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
+    if not kept["carded"] and not dry_run:
+        item = {"id": f"proof-{settings['key']}-{number}", "group": "Coordinator", "kind": "ask",
+                "title": f"{repo}#{number} head {event['head'][:8]}: the proof does not pass",
+                "cause": kept["tail"][-600:] or "the proof could not run",
+                "why": "Gatekeep queued no gate for this head. Fix the head and push it again.",
+                "options": [{"label": "Fix and push", "detail": "", "recommended": True}]}
+        if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) == "wrote":
+            with Lock(True):
+                queue = load()
+                queue["proofHeads"][key]["carded"] = True
+                save(queue)
+        else:
+            print(f"proof {event['pr']}: the card could not be published", flush=True)
+    return None
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -2114,7 +2233,7 @@ def gate_candidates(config, rounds=None):
                            "reason": "changed-file list unreadable, gate deferred"}
                     break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "builderModels": models, **pr_size(repo, number, pr),
+                       "issue": issue, "builderModels": models, **pr_size(repo, number, pr),
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
@@ -2212,6 +2331,13 @@ def cmd_gatekeep(a):
                 continue
             if key in attempted:
                 continue
+            repo_name, pr_number = event["pr"].rsplit("#", 1)
+            settings = config.get("repos", {}).get(repo_name, {})
+            if settings.get("proofOnOpen") and event.get("issue"):
+                proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run)
+                if proof is None:
+                    continue
+                args["message"] += proof
             observed = load()
             adopted = lane_gated(load_receipts(), key)
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
