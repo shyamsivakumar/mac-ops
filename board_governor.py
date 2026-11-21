@@ -973,7 +973,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
     cpu_for_veto = None
     if sample is not None:
         sample_age = now_mono - sample.captured_monotonic
-        sample_is_fresh = (0 <= sample_age <= getattr(helper, "SAMPLE_MAX_AGE", 4.5))
+        sample_is_fresh = (0 <= sample_age <= helper.sample_max_age(sample.load_per_core))
         cpu_for_veto, cpu_busy_note = _cpu_busy_for_board_veto(helper, sample, cfg, now_mono)
         if cpu_for_veto is None:
             cpu_for_veto = 0.0
@@ -1194,7 +1194,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         elif target > current:
             latest_age = helper.monotonic() - sample.captured_monotonic if sample is not None else math.inf
             if (latest_ids != active_ids or not (floor_raise_fits if floor_raise else catchup_raise or safe)
-                    or latest_age < 0 or latest_age > getattr(helper, "SAMPLE_MAX_AGE", 4.5)
+                    or latest_age < 0 or latest_age > helper.sample_max_age(sample.load_per_core)
                     or admission_elapsed + recheck_elapsed >= cfg["board_response_seconds_threshold"]):
                 result.update(target=current, reason="growth_sample_expired", start_allowed=False)
                 state["healthy_since_monotonic"] = None
