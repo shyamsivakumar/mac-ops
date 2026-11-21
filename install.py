@@ -16,6 +16,7 @@ import time
 
 FILES = ("heavy.py", "heavy.sh", "board_governor.py", "board_resources.py", "board_restart.py",
          "board_governor.json", "load_backstop.py", "agent_heavy_wait_pause.py")
+HOST_CONFIG = "heavy_hosts.json"
 LABELS = ("com.shyam.load-backstop", "com.shyam.board-governor")
 OBSOLETE = ("com.shyam.multica-sweep", "com.shyam.multica-failover")
 
@@ -58,8 +59,10 @@ def paths(home, checkout):
             "agents": home / "Library/LaunchAgents", "legacy": home / ".multica-codex"}
 
 
-def service_specs(p):
+def service_specs(p, host_role="full"):
     specs = {}
+    if host_role == "runner":
+        return specs
     for label in LABELS:
         script = "load_backstop.py" if label == LABELS[0] else "board_governor.py"
         action = "run" if label == LABELS[0] else "once"
@@ -206,7 +209,9 @@ def require_main_checkout(checkout):
     return head
 
 
-def install(p, checkout, migrate=False, no_start=False, source_commit=None):
+def install(p, checkout, migrate=False, no_start=False, source_commit=None, host_role="full"):
+    if host_role == "runner" and migrate:
+        raise RuntimeError("Runner hosts cannot migrate legacy load tools")
     if p["legacy"].exists() and not migrate:
         raise RuntimeError("Legacy load tools exist; use install --migrate to preserve their live jobs")
     local = p["state"].parent.parent
@@ -223,13 +228,17 @@ def install(p, checkout, migrate=False, no_start=False, source_commit=None):
             raise RuntimeError("Unsafe private directory: " + str(p[name]))
     for name in FILES:
         atomic(p["release"] / name, (checkout / name).read_bytes(), 0o700 if name.endswith(".sh") else 0o600)
+    host_config = p["release"].parent / HOST_CONFIG
+    if host_config.is_file():
+        atomic(p["release"] / HOST_CONFIG, host_config.read_bytes())
     jobs = p["state"] / "heavy-jobs"
     jobs.mkdir(mode=0o700, exist_ok=True)
     helper = load_heavy(p["release"] / "heavy.py")
     helper.Registry(jobs).ensure_protocol()
-    config = p["state"] / "board-governor.json"
-    if not config.exists():
-        atomic(config, (checkout / "board_governor.json").read_bytes())
+    if host_role == "full":
+        config = p["state"] / "board-governor.json"
+        if not config.exists():
+            atomic(config, (checkout / "board_governor.json").read_bytes())
     if migrate:
         prepare_migration(p)
     p["bin"].parent.mkdir(parents=True, exist_ok=True)
@@ -237,20 +246,22 @@ def install(p, checkout, migrate=False, no_start=False, source_commit=None):
         archive(p["bin"], p["state"] / "install-backups")
     atomic(p["bin"], ('#!/bin/sh\nexec /usr/bin/python3 -I ' + shell_quote(str(p["release"] / "heavy.py")) + ' "$@"\n').encode(), 0o755)
     brew_wrapper = Path("/opt/homebrew/bin/heavy")
-    if migrate and brew_wrapper.is_symlink() and ".multica-codex" in os.readlink(brew_wrapper):
+    if host_role == "full" and migrate and brew_wrapper.is_symlink() and ".multica-codex" in os.readlink(brew_wrapper):
         archive(brew_wrapper, p["state"] / "install-backups")
         brew_wrapper.symlink_to(p["bin"])
-    p["agents"].mkdir(parents=True, exist_ok=True)
-    for label, spec in service_specs(p).items():
+    services = service_specs(p, host_role)
+    if services:
+        p["agents"].mkdir(parents=True, exist_ok=True)
+    for label, spec in services.items():
         if not no_start:
             bootout(label)
         plist = p["agents"] / (label + ".plist")
         archive(plist, p["agents"] / "_archive")
         atomic(plist, plistlib.dumps(spec), 0o644)
-    atomic(p["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(p["release"]), "installed_at": time.time(), "source_commit": source_commit}).encode())
+    atomic(p["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(p["release"]), "installed_at": time.time(), "source_commit": source_commit, "host_role": host_role}).encode())
     if migrate:
         finalize(p)
-    if not no_start:
+    if not no_start and host_role == "full":
         run(["/bin/launchctl", "enable", f"gui/{os.getuid()}/{LABELS[0]}"])
         run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", p["agents"] / (LABELS[0] + ".plist")])
     print("Installed heavy in " + str(p["bin"]))
@@ -298,15 +309,19 @@ def activate_release(p, checkout, release_dir, source_commit, no_start=False):
     atomic(rolled["bin"], ('#!/bin/sh\nexec /usr/bin/python3 -I ' + shell_quote(str(release_dir / "heavy.py")) + ' "$@"\n').encode(), 0o755)
     if rolled["legacy"].exists():
         legacy_helpers(rolled)
-    rolled["agents"].mkdir(parents=True, exist_ok=True)
-    for label, spec in service_specs(rolled).items():
+    receipt = rolled["state"] / "installation.json"
+    host_role = json.loads(receipt.read_text()).get("host_role", "full") if receipt.is_file() else "full"
+    services = service_specs(rolled, host_role)
+    if services:
+        rolled["agents"].mkdir(parents=True, exist_ok=True)
+    for label, spec in services.items():
         if not no_start:
             bootout(label)
         plist = rolled["agents"] / (label + ".plist")
         archive(plist, rolled["agents"] / "_archive")
         atomic(plist, plistlib.dumps(spec), 0o644)
-    atomic(rolled["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(release_dir), "installed_at": time.time(), "source_commit": source_commit}).encode())
-    if not no_start:
+    atomic(rolled["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(release_dir), "installed_at": time.time(), "source_commit": source_commit, "host_role": host_role}).encode())
+    if not no_start and host_role == "full":
         run(["/bin/launchctl", "enable", f"gui/{os.getuid()}/{LABELS[0]}"])
         run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", rolled["agents"] / (LABELS[0] + ".plist")])
     print("Rolled back heavy to " + str(release_dir) + " (" + str(source_commit) + ")")
@@ -331,6 +346,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--release", type=Path)
     parser.add_argument("--source-commit")
+    parser.add_argument("--host-role", choices=("full", "runner"), default="full")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parent
     p = paths(Path.home(), checkout)
@@ -342,13 +358,14 @@ def main():
             raise RuntimeError("Installed release path is invalid")
         p["release"] = release
     if args.dry_run:
-        print(json.dumps({"action": args.action, "paths": {k:str(v) for k,v in p.items()}, "services": service_specs(p), "brew_dependencies": []}, indent=2))
+        host_config = p["release"].parent / HOST_CONFIG
+        print(json.dumps({"action": args.action, "paths": {k:str(v) for k,v in p.items()}, "host_role": args.host_role, "carry_host_config": str(host_config) if host_config.is_file() else None, "services": service_specs(p, args.host_role), "brew_dependencies": []}, indent=2))
         return
     if sys.platform != "darwin":
         raise RuntimeError("Mac load tools require macOS")
     if args.action == "install":
         source_commit = require_main_checkout(checkout)
-        install(p, checkout, args.migrate, args.no_start, source_commit)
+        install(p, checkout, args.migrate, args.no_start, source_commit, host_role=args.host_role)
     elif args.action == "rollback":
         if args.release is None or not args.source_commit:
             raise RuntimeError("rollback requires --release and --source-commit")
