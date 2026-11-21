@@ -18,7 +18,7 @@ stub.write_text(f"""#!/bin/bash
 S={state}; L={log}; touch $S
 case "$2" in
   list) python3 -c "import json;print(json.dumps({{'devices':{{'iOS 18':[{{'udid':u.strip(),'state':'Booted'}} for u in open('$S') if u.strip()]}}}}))" ;;
-  boot) echo "$3" >> $S ;;
+  boot) for u in "${{@:3}}"; do echo $u >> $S; done ;;
   shutdown) grep -vx "$3" $S > $S.n; mv $S.n $S; echo "shutdown $3" >> $L ;;
   erase|delete) echo "FORBIDDEN $2" >> $L ;;
 esac
@@ -37,7 +37,7 @@ deps = heavy.SupervisorDeps(
     legacy_slots=lambda table: 0)
 
 
-def scenario(name, jobs):
+def scenario(name, jobs, deps=deps):
     state.write_text("OLD\n")
     log.write_text("")
     reg = heavy.Registry(Path(tempfile.mkdtemp(dir=work)))
@@ -56,3 +56,38 @@ def scenario(name, jobs):
 scenario("job boots NEW, OLD booted before", [["xcrun", "simctl", "boot", "NEW"]])
 scenario("job boots NEW while another heavy job runs", [["sleep", "4"], ["xcrun", "simctl", "boot", "NEW"]])
 scenario("job boots nothing", [["xcrun", "simctl", "list", "devices"]])
+
+
+def second_job_after_first_shutdown():
+    holder = {}
+    late = []
+
+    def shutdown_then_register(udid):
+        ok = heavy.shutdown_simulator(udid)
+        if not late:
+            reg = holder["reg"]
+            t = threading.Thread(target=lambda: heavy.run_supervisor(["sleep", "3"], registry=reg, task_key="late", task_id="late", deps=deps))
+            t.start()
+            late.append(t)
+            while not reg.records():
+                time.sleep(0.1)
+        return ok
+
+    chained = dataclasses.replace(deps, shutdown_simulator=shutdown_then_register)
+    orig = heavy.Registry
+
+    class Capturing(orig):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            holder["reg"] = self
+
+    heavy.Registry = Capturing
+    try:
+        scenario("job boots A and B, a second job registers after A is shut down", [["xcrun", "simctl", "boot", "A", "B"]], chained)
+    finally:
+        heavy.Registry = orig
+    for t in late:
+        t.join()
+
+
+second_job_after_first_shutdown()
