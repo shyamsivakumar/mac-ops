@@ -473,11 +473,28 @@ def journal_merged(repo, number, head, ledger, **fields):
     journal_event(event, repo, number, head, **fields)
 
 
-def journal_verdict(repo, number, head, verdict, gate, ledger):
+def classify_failure(report, size, prev_lines):
+    if size == "recut":
+        return "size"
+    if "fails the same on origin/main" in report.lower():
+        return "environment"
+    findings = re.findall(r"\[(critical|major|minor)\]\s+(\S+?):(\d+)", report)
+    if not findings:
+        return "logic"
+    blocking = [(path, line) for severity, path, line in findings if severity in ("critical", "major")]
+    if not blocking:
+        return "minor_only"
+    if all(int(line) in prev_lines.get(path, ()) for path, line in blocking):
+        return "moved_bar"
+    return "logic"
+
+
+def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_lines=None):
     if verdict in ("PASS", "FAIL", "SPLIT"):
+        extra = {"class": classify_failure(report, size, prev_lines or {})} if verdict == "FAIL" else {}
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
-                     thread=gate["threadId"], kind="gate", verdict=verdict)
+                     thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
 def gate_verdict(repo, number, head, base):
@@ -1418,7 +1435,11 @@ def settle_merged_prs(repo, ledger):
         number, head = pr["number"], pr["headRefOid"]
         lkey = f"after-merge:{repo}#{number}:{head}"
         found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
-        if lkey in ledger or not found or issue_record(SNAPSHOT, repo, found.group(1)) is None:
+        ticketed = found and issue_record(SNAPSHOT, repo, found.group(1)) is not None
+        if not ticketed:
+            journal_merged(repo, number, head, ledger, event="merged_outside_lane", ticket=None)
+            continue
+        if lkey in ledger:
             continue
         if DRY:
             print(f"DRY after-merge #{number}")
@@ -1427,7 +1448,8 @@ def settle_merged_prs(repo, ledger):
         if verdict == "running":
             continue
         journal_merged(repo, number, head, ledger, event="merged_outside_lane",
-                       thread=gate["threadId"] if gate else None, verdict=verdict)
+                       thread=gate["threadId"] if gate else None, verdict=verdict,
+                       ticket=found.group(1))
         if verdict == "PASS":
             if close_after_merge(repo, number, head, found.group(1), gate, ledger):
                 print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
@@ -1456,11 +1478,11 @@ def merge_candidates(repo, ledger):
 
 def merge_pass(repo, ledger):
     for number, head, thread, base in merge_candidates(repo, ledger):
-        verdict, gate, _ = gate_verdict(repo, number, head, base)
+        verdict, gate, reply = gate_verdict(repo, number, head, base)
         settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
         if verdict in ("running", "none", "absent"):
             continue
-        journal_verdict(repo, number, head, verdict, gate, ledger)
+        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply)
         if verdict == "SPLIT":
             journal_once("merge_held", repo, number, head, ledger,
                          f"journal-held:{repo}#{number}:{head}:split", reason="split")
@@ -1543,7 +1565,7 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if gate:
-        journal_verdict(repo, number, head, verdict, gate, ledger)
+        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply)
     if verdict == "SPLIT":
         journal_once("merge_held", repo, number, head, ledger,
                      f"journal-held:{repo}#{number}:{head}:split", reason="split")

@@ -56,12 +56,16 @@ def journal_path(now):
 
 
 @functools.lru_cache(maxsize=1)
-def installed_sha():
+def installation_receipt():
     path = os.path.expanduser("~/.local/state/mac-ops/coordinator-installation.json")
     if not os.path.exists(path):
-        return None
+        return {}
     with open(path) as fh:
-        return json.load(fh).get("source_sha")
+        return json.load(fh)
+
+
+def installed_sha():
+    return installation_receipt().get("source_sha")
 
 
 def emit(event, actor, **fields):
@@ -71,6 +75,7 @@ def emit(event, actor, **fields):
         row[key] = fields.pop(key, None)
     row["data"] = {**(fields.pop("data", None) or {}), **fields}
     row["data"]["sha"] = installed_sha()
+    row["data"]["manifest"] = installation_receipt().get("manifest", {}).get(row["arm"] or "control")
     line = json.dumps(row, default=str, separators=(",", ":")) + "\n"
     try:
         os.makedirs(journal_dir(), exist_ok=True)
