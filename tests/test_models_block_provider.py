@@ -52,7 +52,7 @@ class BlockProviderTest(unittest.TestCase):
             "openai-api:gpt-6.2-astra": {"blocked_at": 900},
         }}))
         self.assertEqual(models.stale_blocks(200, now=1000), ["codex:gpt-6.2-sol", "cursor:default"])
-        models.probe_failed(pick("cursor", "default"), now=950)
+        models.probe_started(pick("cursor", "default"), now=950)
         self.assertEqual(models.stale_blocks(200, now=1000), ["codex:gpt-6.2-sol"])
 
     def test_until_only_entry_stays_past_its_until(self):

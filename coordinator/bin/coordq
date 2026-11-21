@@ -41,6 +41,8 @@ LANE_STATUSES = LIVE_STATUSES + ["waiting"]
 MAX_ATTEMPTS = 3
 PROVIDER_BLOCK_SECONDS = 3600
 PROBE_INTERVAL = float(os.environ.get("COORDQ_PROBE_MINUTES", "30")) * 60
+PROBE_WAIT = 90
+PROBE_POLL = 5
 JOURNAL_TITLE_LIMIT = 120
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
 # A launch learns its thread only after the call, so its reservedThreads record
@@ -1502,8 +1504,8 @@ def cmd_dispatch(a):
             return
         drain()
     flush_provider_blocks()
-    probe_one_block()
     safe_refill(a)
+    probe_one_block()
 
 
 def cmd_create(a):
@@ -1755,27 +1757,51 @@ def block_quota_provider(selection, failure, key):
                  seconds=PROVIDER_BLOCK_SECONDS, **journal.parse_request_id(key))
 
 
+def probe_reply(thread_id):
+    """The thread's last assistant reply once its run ended, else None after PROBE_WAIT seconds."""
+    for _ in range(int(PROBE_WAIT // PROBE_POLL)):
+        code, out = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 20, "runLimit": 5})
+        if code == 0:
+            data = json.loads(out)
+            thread, runs = data.get("thread") or {}, data.get("recentRuns") or []
+            run = next((r for r in runs if r.get("runId") == thread.get("latestRunId")), thread)
+            if run.get("status") in TERMINAL_STATUSES:
+                texts = [i.get("text") or "" for i in (data.get("items") or []) if i.get("type") == "assistant_message"]
+                return run["status"], texts[-1] if texts else ""
+        time.sleep(PROBE_POLL)
+    return None
+
+
 def probe_one_block():
     """Probe the first blocked provider not set or probed in the last PROBE_INTERVAL.
 
-    The probe launches a scratch thread on that provider, which is the launch
-    coordq already makes, so a provider that refuses it stays blocked. At most
-    one provider is probed per run."""
+    The probe launches a scratch thread named `probe <identity>` on that
+    provider and succeeds only when its run completes with a reply containing
+    "ok" within PROBE_WAIT seconds. The thread is archived either way. The
+    check time is written before the launch, so a second run skips the
+    provider while this one waits. At most one provider is probed per run."""
     due = model_list.stale_blocks(PROBE_INTERVAL)
     if not due:
         return
     provider = due[0]
     selection = model_list.selection_of(provider)
+    model_list.probe_started(selection)
     code, out = t3_call("t3_thread_launch", {"modelSelection": selection, "scratch": True,
-                                             "title": "provider probe", "message": "Reply with the word ok."})
+                                             "title": f"probe {provider}", "message": "Reply with the word ok."})
+    result, reason = None, out
     if code == 0:
+        thread = json.loads(out)
+        thread_id = thread.get("thread", thread).get("threadId")
+        result = probe_reply(thread_id)
+        reason = "run did not finish in time" if result is None else f"run {result[0]}"
+        t3_call("t3_thread_organize", {"threadId": thread_id, "action": "archive"})
+    if result and result[0] == "completed" and re.search(r"\bok\b", result[1], re.IGNORECASE):
         model_list.unblock(selection)
         log(f"unblocked provider {provider}: probe succeeded")
         journal.emit("provider_unblocked", "coordq", provider=provider)
     else:
-        model_list.probe_failed(selection)
-        log(f"provider {provider} stays blocked: probe failed")
-        journal.emit("provider_probe_failed", "coordq", provider=provider, error=out[:200])
+        log(f"provider {provider} stays blocked: probe failed ({reason})")
+        journal.emit("provider_probe_failed", "coordq", provider=provider, error=reason[:200])
 
 
 def thread_selection(data):

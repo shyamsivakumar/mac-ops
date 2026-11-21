@@ -411,8 +411,8 @@ def unblock(selection):
             write_blocked(blocked_path(), data)
 
 
-def probe_failed(selection, now=None):
-    """Keep the block and record the time of the failed probe as the new `blocked_at`."""
+def probe_started(selection, now=None):
+    """Keep the block and record the time of the probe as the new `blocked_at`, so a failed probe waits a full interval."""
     key = identity(selection)
     with blocked_lock():
         data = read_blocked_file(blocked_path())

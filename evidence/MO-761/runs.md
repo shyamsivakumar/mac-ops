@@ -1,10 +1,18 @@
 # MO-761 runs
 
-Probe choice: the probe is a `t3_thread_launch` of a scratch thread on the blocked provider with the message "Reply with the word ok." (the launch call coordq already makes, sent through `t3_call` so the blocked-model refusal in `with_model` does not stop it). UNCERTAIN: the launch returns when the run starts, so a provider that accepts the launch and fails inside the run counts as recovered; the next failure re-blocks it through the existing quota path. Default interval: 30 minutes (`COORDQ_PROBE_MINUTES`), at most one provider probed per dispatch run. Failed probes journal `provider_probe_failed` and refresh `blocked_at`, so the next probe of that provider is N minutes later. The proof stubs `t3_call`; no provider is called.
+## Probe design
 
-## Ticket proof command (adapted: run from the worktree, models.json from the checkout)
+- The probe launches a scratch thread titled `probe <identity>` on the blocked provider (message "Reply with the word ok.") through `t3_call`, which skips the blocked-model refusal in `with_model`. This is the launch coordq already makes.
+- Success is a completed run whose last assistant reply contains the word "ok". coordq reads a thread the way `quota_failure` and the gate reader do: `t3_thread_read`, the latest run's status, the last `assistant_message` item. It polls every 5 seconds, 18 reads at most (90 seconds). A failed run, a wrong reply, a launch refusal, a launch with no result and a timeout all keep the block.
+- The thread is archived after the read, success or failure, with `t3_thread_organize {action: "archive"}`. coordq had no archive call before; `t3mcp schema t3_thread_organize` lists `archive` as an action. If archiving fails the thread keeps its `probe <identity>` title.
+- The check time (`blocked_at`) is written before the launch, so a failure waits a full interval, and a second dispatch run skips the provider while the first still polls.
+- Default interval 30 minutes (`COORDQ_PROBE_MINUTES`), at most one provider per dispatch run.
+- Where it runs: dispatch runs every 30 seconds as its own launchd job (a job does not overlap itself). The probe runs after the drain and the refill, with the queue lock released, so a probe holds only the next dispatch run, for at most 60 seconds of launch plus 90 seconds of polling, once per 30 minutes per blocked provider. The 30-minute coord-tick would equal the probe interval and sits in another script, so dispatch stays the host.
+- The stubs replace `t3_call`; no provider is called.
 
-### origin/main 475627f9
+## Ticket proof command (adapted: run from the worktree, temp COORDQ_DIR)
+
+### origin/main
 ```
 AttributeError: module 'models' has no attribute 'stale_blocks'
 ```
@@ -14,13 +22,13 @@ AttributeError: module 'models' has no attribute 'stale_blocks'
 ['openai-api:gpt-6.2-astra']
 ```
 
-## Lapsed block clears on time alone on origin/main; needs a stubbed probe on the branch
+## Selftest case `provider_until`
 
-Case: `provider_until` in coordinator/overnight/selftest.py (new version copied onto an origin/main checkout, then the branch). It writes a block whose until is in the past and asserts it still blocks; on the branch it also drives `probe_one_block` with `t3_call` stubbed: success clears (also for a manual entry), failure keeps the block and writes a fresh `blocked_at`, a second run inside the interval makes no second call, and a fresh `blocked_at` makes no call.
+The new selftest copied onto an origin/main checkout, then on the branch. It asserts a block whose `until` has passed still blocks, and drives `probe_one_block` with stubbed t3 calls: a completed "ok" reply (also "Ok." on a manual entry) unblocks and archives; an accepted launch with a failed run keeps the block, writes a fresh `blocked_at` and archives; a completed run with another reply keeps it and archives; a run still running after 18 reads keeps it and archives; a refused launch keeps it; a second run inside the interval makes no call; a fresh `blocked_at` makes no call. Archive calls are asserted by name in each case.
 
 ### origin/main
 ```
-  File "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.qECe6UDKK7/main/coordinator/overnight/selftest.py", line 85, in exact
+  File "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.VtnKzq0cua/main/coordinator/overnight/selftest.py", line 85, in exact
     raise AssertionError(f"expected {expected!r}, got {actual!r}")
 AssertionError: expected True, got False
 ```
@@ -30,9 +38,16 @@ AssertionError: expected True, got False
 provider_until: PASS
 ```
 
+## Dry run writes nothing
+
+`cmd_dispatch` with `dry_run=True`, a stale block, `t3_call` set to raise, temp dirs:
+```
+dry run: t3 calls 0, block file unchanged: True , journal rows: 0
+```
+
 ## Unit module (existing, updated to the new rule)
 ```
-Ran 16 tests in 0.048s
+Ran 16 tests in 0.030s
 
 OK
 ```
