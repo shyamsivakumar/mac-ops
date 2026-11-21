@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, signal, subprocess, sys, time
+import argparse, fcntl, json, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 # The modules below live next to this script. A caller that loads this file
@@ -8,10 +8,15 @@ from pathlib import Path
 _BIN_DIR = str(Path(__file__).resolve().parent)
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
+_OVERNIGHT_DIR = str(Path(_BIN_DIR).parent / "overnight")
+if _OVERNIGHT_DIR not in sys.path:
+    sys.path.append(_OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
+import lane_briefs
 import prompt_paths
 from tick_health import tick_alarm
+import alarms
 import gh_gateway
 import journal
 
@@ -20,6 +25,8 @@ import journal
 gh_gateway.set_runner(lambda: subprocess.run)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+DECISIONS_PATH = os.environ.get(
+    "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 # The tick reads the threads with `coordq status`, so the t3mcp call it
 # makes is bounded: a call that hangs is skipped and named, never waited
@@ -133,6 +140,7 @@ def journal_item(event, item, **fields):
     args = item.get("args") or {}
     row = {"item": item["id"], "thread": args.get("threadId"), "tool": item.get("tool"),
            "title": journal_title(item.get("title")),
+           "model": (args.get("modelSelection") or {}).get("model"), "model_source": "requested",
            **journal.parse_request_id(args.get("clientRequestId")), **fields}
     journal.emit(event, "coordq", **row)
 
@@ -157,17 +165,47 @@ def cap():
         return json.load(f)["cap"]
 
 
+def dispatch_stopped():
+    return os.path.exists(path("dispatch.stopped"))
+
+
+def stop_dispatch(reason):
+    open(path("dispatch.stopped"), "w").close()
+    journal.emit("queue_fallback", "coordq", reason=reason)
+    item = {
+        "id": "factory-dispatch-stopped",
+        "group": "Coordinator",
+        "kind": "action",
+        "title": "The queue file was corrupt and dispatch is stopped.",
+        "why": ("Check queue.json against queue.json.prev in ~/Code/coordinator/queue, "
+                "then rm dispatch.stopped."),
+    }
+    alarms.route_update(DECISIONS_PATH, item["id"], "raise", item)
+
+
 def load():
     if not os.path.exists(path("queue.json")):
         return {"next": 1, "items": []}
     with open(path("queue.json")) as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            if os.path.exists(path("queue.json.prev")):
+                stop_dispatch("queue.json is not valid JSON, read queue.json.prev")
+                with open(path("queue.json.prev")) as prev:
+                    return json.load(prev)
+            stop_dispatch("queue.json invalid and no queue.json.prev")
+            return {"next": 1, "items": []}
 
 
 def save(queue):
     tmp = path("queue.json.tmp")
     with open(tmp, "w") as f:
         json.dump(queue, f, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    if os.path.exists(path("queue.json")) and not dispatch_stopped():
+        shutil.copyfile(path("queue.json"), path("queue.json.prev"))
     os.replace(tmp, path("queue.json"))
 
 
@@ -701,6 +739,9 @@ def drain():
     statuses = {}
     while True:
         queue = load()
+        if dispatch_stopped():
+            log("dispatch.stopped exists, nothing started")
+            return
         dispatchable = []
         dropped = set()
         for item in queue["items"]:
@@ -1000,6 +1041,7 @@ def cmd_start(a):
         save(queue)
         journal.emit("enqueued", "coordq", item=item["id"], thread=args.get("threadId"), tool=tool, title=label,
                      taskType=args.get("taskType"), modelSelection=args.get("modelSelection"),
+                     model=(args.get("modelSelection") or {}).get("model"), model_source="requested",
                      **journal.parse_request_id(request_id))
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -1327,6 +1369,9 @@ def refill(a):
     the tickets that cannot start and reaches the tickets further down the
     board, which the old first-REFILL_MAX window never did.
     """
+    if dispatch_stopped():
+        log("dispatch.stopped exists, refill refused")
+        return
     with Lock(False, "refill.lock") as lock:
         if lock is None:
             log("refill skipped: another refill is running")
@@ -1437,6 +1482,9 @@ def safe_refill(a):
 
 
 def cmd_dispatch(a):
+    if dispatch_stopped():
+        log("dispatch.stopped exists, dispatch refused")
+        return
     with open(path("dispatch.last"), "w") as f:
         f.write(str(int(time.time())))
     if a.dry_run:
@@ -1746,6 +1794,7 @@ def gate_changed_count(repo, number):
     return count if isinstance(count, int) else None
 
 
+DECISIONS_PATH = alarms.DECISIONS_PATH
 BASE_PIN_TTL = 60
 _base_pins = {}
 
@@ -1884,6 +1933,66 @@ def unreadable_ticket_reason(error, issue, body, title):
     return reason
 
 
+SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
+OVER_CAP_LINES = 150
+OVER_CAP_FILES = 3
+RECUT_LINES = 300
+RECUT_FILES = 6
+RECUT_RULE = 2
+GATE_WHOLE_LABEL = "gate:whole"
+
+
+def counted_code_file(f):
+    name = f["filename"]
+    base = name.rsplit("/", 1)[-1]
+    if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
+        return False
+    if "fixtures" in name.split("/") or "proof" in base:
+        return False
+    is_test = (base.startswith("test_") or base.endswith("_test.py")
+               or "selftest" in name or "tests" in name.split("/"))
+    if f.get("status") != "added" and is_test:
+        return False
+    return True
+
+
+def code_size(files):
+    code = [f for f in files if counted_code_file(f)]
+    return sum(f["additions"] + f["deletions"] for f in code), len(code)
+
+
+def gate_whole(pr):
+    return any(label["name"] == GATE_WHOLE_LABEL for label in pr.get("labels") or [])
+
+
+def size_class(files, whole=False):
+    lines, count = code_size(files)
+    if lines > RECUT_LINES or count > RECUT_FILES:
+        return "over_cap" if whole else "recut"
+    if lines > OVER_CAP_LINES or count > OVER_CAP_FILES:
+        return "over_cap"
+    return "ok"
+
+
+def pr_size(repo, number, pr):
+    files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
+    lines, count = code_size(files)
+    whole = gate_whole(pr)
+    return {"size": size_class(files, whole), "lines": lines, "files": count, "whole": whole}
+
+
+def recut_item(repo_key, repo, number, head, lines, count):
+    return {
+        "id": f"recut-{repo_key}-{number}",
+        "group": "Coordinator",
+        "kind": "ask",
+        "title": f"{repo}#{number} head {head[:8]} is {lines} code lines in {count} code files: re-cut it",
+        "cause": f"{repo}#{number} head {head[:8]}: over {RECUT_LINES} code lines or {RECUT_FILES} code files",
+        "why": "Gatekeep queued no gate for a pull request this large. It is re-cut into smaller pull requests.",
+        "options": [{"label": "Re-cut it into smaller pull requests", "detail": "", "recommended": True}],
+    }
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -1922,6 +2031,9 @@ def gate_candidates(config, rounds=None):
                        "reason": "at the gate round cap"}
                 continue
             gated_key = retarget_key(f"gate:{repo}#{number}:{head}", pr, receipts)
+            if (queue.get("recutHeads", {}).get(gated_key, {}).get("rule", 0) >= RECUT_RULE
+                    and not gate_whole(pr)):
+                continue
             if gated_key in queue.get("gatedHeads", {}) or lane_gated(receipts, gated_key):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
                     continue
@@ -2002,7 +2114,7 @@ def gate_candidates(config, rounds=None):
                            "reason": "changed-file list unreadable, gate deferred"}
                     break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "builderModels": models,
+                       "builderModels": models, **pr_size(repo, number, pr),
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
@@ -2022,7 +2134,8 @@ def gate_candidates(config, rounds=None):
                     if key != gated_key:
                         key, args = gated_key, {**args, "clientRequestId": gated_key}
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
-                           "key": key, "builderModels": models, "args": args}
+                           "key": key, "builderModels": models, "args": args,
+                           **pr_size(repo, number, pr)}
 
 
 def executed_models(value):
@@ -2060,6 +2173,43 @@ def cmd_gatekeep(a):
                 continue
             counts.pop(event["pr"], None)
             key, args = event["key"], event["args"]
+            size = event.get("size")
+            if event.get("whole") and key in load().get("recutHeads", {}) and not a.dry_run:
+                repo_name, pr_number = event["pr"].rsplit("#", 1)
+                alarms.route_update(DECISIONS_PATH, f"recut-{config['repos'][repo_name]['key']}-{pr_number}", "remove")
+            if size == "recut":
+                repo_name, pr_number = event["pr"].rsplit("#", 1)
+                if a.dry_run:
+                    print(f"would recut #{pr_number}", flush=True)
+                    continue
+                entry = model_list.first_available("build", preferred="sol", task_type="design")
+                if entry is None:
+                    print(f"recut #{pr_number}: waits, every builder is blocked", flush=True)
+                    continue
+                settings = config["repos"][repo_name]
+                item = recut_item(settings["key"], repo_name, pr_number, event["head"],
+                                  event["lines"], event["files"])
+                if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+                    print(f"recut #{pr_number}: the card could not be published", flush=True)
+                    continue
+                with Lock(True):
+                    queue = load()
+                    queue.setdefault("recutHeads", {})[key] = {"at": time.time(), "rule": RECUT_RULE}
+                    save(queue)
+                journal.emit("recut", "gatekeep", lines=event["lines"], files=event["files"],
+                             **journal.parse_request_id(key))
+                title = f"{settings['key']} re-cut #{pr_number}"
+                brief = lane_briefs.RECUT_BRIEF.format(
+                    model=entry["id"], repo=repo_name, number=pr_number, head=event["head"],
+                    lines=event["lines"], files=event["files"],
+                    cap_lines=OVER_CAP_LINES, cap_files=OVER_CAP_FILES)
+                launch = {"projectId": settings["projectId"], "title": title, "taskType": "design",
+                          "modelSelection": model_list.selection_for(entry, "design"),
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": brief}
+                cmd_start(argparse.Namespace(args=json.dumps(launch), title=title, priority=900,
+                                             tool="t3_thread_launch", action_key=f"recut:{key}"))
+                print(f"recut #{pr_number}", flush=True)
+                continue
             if key in attempted:
                 continue
             observed = load()
@@ -2132,7 +2282,9 @@ def cmd_gatekeep(a):
                     heads[key]["retryOf"] = retry_of
                 save(queue)
                 journal.emit("gate_queued", "gatekeep", item=item["id"],
-                             reviewer=args["modelSelection"]["model"], **journal.parse_request_id(key))
+                             reviewer=args["modelSelection"]["model"],
+                             model=args["modelSelection"]["model"], model_source="requested",
+                             size=size, **journal.parse_request_id(key))
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so

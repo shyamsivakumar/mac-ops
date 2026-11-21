@@ -55,6 +55,7 @@ import journal
 
 # How long a key stays quiet after it was answered or routed.
 MUTE_SECONDS = 4 * 60 * 60
+DECISIONS_PATH = os.environ.get("COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
 # The key of the mute state inside the state file.
 STATE_KEY = "alarms"
 # The minutes of a quiet log and the minutes of a stuck run change on

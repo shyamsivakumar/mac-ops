@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
+import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, tempfile, time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -9,6 +9,7 @@ from gate_bar import GATE_BAR
 from gate_policy import complete_pass
 import gh_gateway
 import journal
+import proof_run
 import prompt_paths
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
@@ -36,6 +37,8 @@ COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- coordinator-ticket (\{.*\}) -->")
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+MAX_CODE_FILES = 3
+MAX_CODE_LINES = 150
 # The key and the title are joined the way a ticket reads: `MO-1017 · name`.
 KEY_SEPARATOR = " · "
 # A page holds 100 issues. The cap keeps a broken page from looping forever.
@@ -100,6 +103,12 @@ ASCEND_MARKERS = ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "
 
 class Refuse(Exception):
     pass
+
+
+class Overlap(Refuse):
+    def __init__(self, overlaps):
+        super().__init__(f"overlaps #{overlaps[0][0]} on {overlaps[0][1]}")
+        self.overlaps = overlaps
 
 
 class GhError(Exception):
@@ -524,6 +533,48 @@ def with_open_lock(repo):
     return f
 
 
+SIGNATURE_HELP = ("a behavior ticket needs an `Expected red signature:` line under its proof command, "
+                  "a regex the proof's output must match on main, for example "
+                  "`Expected red signature: AttributeError: .*repo_dir`")
+
+
+def run_proof_on_main(rcfg, body, repo_dir):
+    """unchecked, prose or red; a proof that is not red on origin/main is refused."""
+    if not rcfg.get("proofOnOpen"):
+        return "unchecked"
+    repo_dir = repo_dir or (os.path.expanduser(rcfg["checkout"]) if rcfg.get("checkout") else None)
+    if repo_dir is None:
+        raise Refuse("proofOnOpen is set for this repo but it has no `checkout` path and no --repo-dir was given")
+    try:
+        spec = proof_run.parse_body(body)
+    except ValueError as e:
+        raise Refuse(str(e))
+    if spec["cmd"].lower().startswith("none (prose)"):
+        return "prose"
+    if not spec["signature"]:
+        raise Refuse(SIGNATURE_HELP)
+    try:
+        re.compile(spec["signature"])
+    except re.error as e:
+        raise Refuse(f"the expected red signature is not a valid regex: {e}")
+    fetch = subprocess.run(["git", "-C", repo_dir, "fetch", "origin", "main"], capture_output=True, text=True)
+    if fetch.returncode:
+        raise Refuse(f"cannot fetch origin/main in {repo_dir}: {fetch.stderr.strip()[-200:]}")
+    fd, record = tempfile.mkstemp(prefix="proof-record-")
+    os.close(fd)
+    try:
+        result = proof_run.run("red", repo_dir, "origin/main", spec["cmd"], spec["signature"], record)
+        with open(record, encoding="utf-8") as handle:
+            tail = handle.read()[-600:]
+    finally:
+        os.unlink(record)
+    if result["state"] == "red":
+        return "red"
+    if result["exit"] == 0:
+        raise Refuse("proof passes on main: nothing to build")
+    raise Refuse(f"proof is unresolved on main (exit {result['exit']}, signature matched: {result['matched']}): {tail}")
+
+
 def cmd_open(a):
     """Open a ticket. The key is minted here, so a ticket is born startable."""
     cfg = load_config()
@@ -537,15 +588,22 @@ def cmd_open(a):
     title = " ".join(a.title.split())
     if not title:
         die("refused: the title is empty", 2)
+    body = a.body or ""
+    if a.body_file:
+        with open(a.body_file) as handle:
+            body = handle.read()
+    refusal = check_body(cfg, body, [n.strip() for n in (a.label or "").split(",")])
+    if refusal:
+        die(f"refused: {refusal}", 2)
     allowed = {name for _, name in label_names(cfg)}
     labels = [name.strip() for name in (a.label or "").split(",") if name.strip()]
     unknown = [name for name in labels if name not in allowed]
     if unknown:
         die(f"refused: unknown labels: {', '.join(unknown)}", 2)
-    body = a.body or ""
-    if a.body_file:
-        with open(a.body_file) as handle:
-            body = handle.read()
+    try:
+        proof = run_proof_on_main(rcfg, body, a.repo_dir)
+    except Refuse as e:
+        die(f"refused: {e}", 2)
     try:
         lock = with_open_lock(repo)
         state = read_last_key(repo, rcfg["key"])
@@ -579,7 +637,7 @@ def cmd_open(a):
         if duplicate is not None:
             die(f"refused: issue #{duplicate['number']} already has this title", 2)
         if a.dry_run:
-            print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "dryRun": True}))
+            print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "proof": proof, "dryRun": True}))
             return
         # The key is recorded before the create, so a create that lands and
         # then loses its answer is never handed out again: the record stays
@@ -607,8 +665,8 @@ def cmd_open(a):
         die(f"gh failed ({e.kind}): {e}")
     number = url.rsplit("/", 1)[-1]
     journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(number) if number.isdigit() else None,
-                 key=key, labels=labels)
-    print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "url": url}))
+                 key=key, labels=labels, proof=proof)
+    print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "proof": proof, "url": url}))
 
 
 def cmd_list(a):
@@ -739,6 +797,50 @@ def body_section(body, name):
                 end = j
                 break
         return "\n".join(lines[i + 1:end]).strip()
+    return None
+
+
+def scope_files(body):
+    lines = body.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == "In:"), None)
+    files = []
+    if start is None:
+        return files
+    for line in lines[start + 1:]:
+        if line.startswith(("Out:", "Size:", "#")):
+            break
+        for token in re.findall(r"^- `([^`\s]+)`", line):
+            if not ("/" in token or re.search(r"\.\w+$", token)):
+                continue
+            if token.startswith(("evidence/", "docs/", "evals/harbor/tasks/")) or token.endswith(".md"):
+                continue
+            if "fixtures" in token.split("/") or "proof" in token.rsplit("/", 1)[-1]:
+                continue
+            if token not in files:
+                files.append(token)
+    return files
+
+
+def check_body(cfg, body, labels):
+    for name, status in template_status(cfg, body).items():
+        if status != "ok":
+            return f"template section '{name}' is {status}"
+    lines = body.splitlines()
+    files = scope_files(body)
+    cap = cfg.get("limits", {}).get("maxCodeFiles", MAX_CODE_FILES)
+    if len(files) > cap and "type:large" not in labels:
+        return f"Scope In names {len(files)} code files, the cap is {cap}"
+    size = next((line for line in lines if line.startswith("Size:")), None)
+    match = re.search(r"(\d[\d,]*) code lines", size or "")
+    if match:
+        value = match.group(1)
+        cap = cfg.get("limits", {}).get("maxCodeLines", MAX_CODE_LINES)
+        if int(value.replace(",", "")) > cap and "type:large" not in labels:
+            return f"Size names {value} code lines, the cap is {cap}"
+    proofs = proof_run.PROOF_LINE.findall(body)
+    if not proofs:
+        return ("a behavior ticket needs a `Proof command:` block "
+                "(docs and config tickets say `Proof command: none (prose)`)")
     return None
 
 
@@ -1185,6 +1287,24 @@ def ledger_of(issue, login):
     return entries
 
 
+def scope_overlap(repo, issue):
+    own = scope_files(issue["body"])
+    if not own:
+        return []
+    started = gh_json(["issue", "list", "-R", repo, "--label", STARTED_LABEL, "--state", "open",
+                       "--json", "number,body"])
+    prs = gh_json(["pr", "list", "-R", repo, "--state", "open", "--json", "number,body,files"])
+    hits = set()
+    for other in started:
+        if other["number"] != issue["number"]:
+            hits.update((other["number"], p) for p in scope_files(other.get("body") or "") if p in own)
+    for pull in prs:
+        if references_issue(pull.get("body"), issue["number"], repo):
+            continue
+        hits.update((pull["number"], f["path"]) for f in pull.get("files") or [] if f["path"] in own)
+    return sorted(hits)
+
+
 def validate_start(cfg, repo, issue, check_text=True):
     rcfg = repo_config(cfg, repo)
     t = parse_ticket(cfg, repo, issue)
@@ -1240,6 +1360,9 @@ def validate_start(cfg, repo, issue, check_text=True):
         raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers) + suffix)
     if reasons:
         raise Refuse("text blockers: " + "; ".join(reasons))
+    overlaps = scope_overlap(repo, issue)
+    if overlaps:
+        raise Overlap(overlaps)
     builder, reviewer = resolve_models(cfg, t)
     t["builderAlias"], t["reviewerAlias"] = builder["id"], reviewer["id"]
     t["builderSelection"] = builder["selection"]
@@ -1430,6 +1553,9 @@ def cmd_start(a):
         except Refuse as e:
             refusal = e
             t = parse_ticket(cfg, repo, issue)
+        if isinstance(refusal, Overlap) and not a.dry_run:
+            journal.emit("start_deferred", "ticket", repo=repo, ticket=n,
+                         overlaps=[{"ref": r, "path": p} for r, p in refusal.overlaps])
         if refusal is not None and not a.print_brief:
             raise refusal
         ledger = ledger_of(issue, authed_login())
@@ -1465,6 +1591,8 @@ def cmd_start(a):
         if a.print_brief:
             print("brief:\n" + brief)
         return
+    if attempt == 1:
+        journal.emit("assigned", "ticket", repo=repo, ticket=n, attempt=attempt, arm=os.environ.get("COORD_ARM"))
     post_comment(repo, n, intent_text)
     try:
         result = run(command, COORDQ_TIMEOUT)
@@ -2066,6 +2194,7 @@ def main():
     s.add_argument("--label", default="", help="comma separated labels")
     s.add_argument("--require-key", action="store_true", help="refuse a title without a key instead of minting one")
     s.add_argument("--dry-run", action="store_true", help="print the title this would use and stop")
+    s.add_argument("--repo-dir", help="checkout that holds origin/main for the proof run (overrides the repo checkout in tickets.json)")
     s.set_defaults(fn=cmd_open)
     s = sub.add_parser("list")
     s.add_argument("--json", action="store_true")
