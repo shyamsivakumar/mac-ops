@@ -81,7 +81,7 @@ Expected red signature: <regex that matches the output on origin/main>
 ticket open --repo <owner/name> --title "<title>" --body-file <file> --label stage:<stage>,type:<type>,priority:<n> --dry-run
 ```
 
-Run the same command without `--dry-run` to open. The tool mints the key: never type one, never run `gh issue create`, never edit an issue by hand to add the template. If `ticket open` refuses, fix the body and retry; a dry run writes nothing.
+Run the same command without `--dry-run` to open. The tool mints the key: never type one, never run `gh issue create`, never edit an issue by hand to add the template. When the source PR's ticket title carries `Parity <Pxx>`, each piece's `--title` is `Parity <Pxx>.<k> · <title>`, numbered from 1; `ticket open` refuses a malformed Parity label and adds the key. If `ticket open` refuses, fix the body or title and retry; a dry run writes nothing.
 
 ## Worked example
 
