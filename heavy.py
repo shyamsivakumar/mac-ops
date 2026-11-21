@@ -334,24 +334,25 @@ def sample_host(
             continue
         _LAST_GOOD_SAMPLE = sample
         return sample
-    if (
-        _LAST_GOOD_SAMPLE is None
-        or clock() - _LAST_GOOD_SAMPLE.captured_monotonic > SAMPLE_MAX_AGE_LOADED
-    ):
+    cached = _LAST_GOOD_SAMPLE
+    if cached is None or clock() - cached.captured_monotonic > SAMPLE_MAX_AGE_LOADED:
+        raise StaleSampleError("host telemetry sample was stale on arrival")
+    pressure = parse_pressure_level(
+        command_runner(
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            NATIVE_TIMEOUT,
+        )
+    )
+    load_per_core = parse_sysctl_load(
+        command_runner(["/usr/sbin/sysctl", "-n", "vm.loadavg"], NATIVE_TIMEOUT),
+        cached.physical_cores,
+    )
+    if clock() - cached.captured_monotonic > sample_max_age(load_per_core):
         raise StaleSampleError("host telemetry sample was stale on arrival")
     return replace(
-        _LAST_GOOD_SAMPLE,
-        pressure_level=parse_pressure_level(
-            command_runner(
-                ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
-                NATIVE_TIMEOUT,
-            )
-        ),
-        load_per_core=parse_sysctl_load(
-            command_runner(["/usr/sbin/sysctl", "-n", "vm.loadavg"], NATIVE_TIMEOUT),
-            _LAST_GOOD_SAMPLE.physical_cores,
-        ),
-        captured_monotonic=clock(),
+        cached,
+        pressure_level=pressure,
+        load_per_core=load_per_core,
         degraded=True,
     )
 
