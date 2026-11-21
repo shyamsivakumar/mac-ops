@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -2566,6 +2567,32 @@ def build_here():
             exact(head[:8] in items[0]["title"], True)
 
 
+def refill_busy():
+    coordq = load_coordq()
+    repo = "shyamsivakumar/mac-ops"
+    started = [649, 633, 614, 611, 610, 607, 605, 591, 543, 530]
+    page = [{"number": number, "labels": [{"name": label}], "body": "", "updated_at": "2026-11-19T22:50:00Z"}
+            for label, numbers in (("stage:started", started), ("stage:todo", range(673, 682)))
+            for number in numbers]
+    def candidates(occupied, refs):
+        with tempfile.TemporaryDirectory() as scratch:
+            config = Path(scratch, "tickets.json")
+            config.write_text(json.dumps({"repos": {repo: {}}}))
+            with patch.object(coordq, "DIR", scratch), patch.object(coordq, "TICKETS_CONFIG", str(config)), \
+                 patch.object(coordq, "live_lane_repositories", return_value=occupied), \
+                 patch.object(coordq, "open_pr_refs", return_value=refs), \
+                 patch.object(coordq.gh_gateway, "run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps([page]))):
+                picked = [row["number"] for row in coordq.board_candidates()]
+            log = Path(scratch, "dispatch.log")
+            lines = [line.split(" ", 2)[2] for line in log.read_text().splitlines()] if log.exists() else []
+            return picked, lines
+    picked, lines = candidates(set(), {533, 514, 548, 576, 504, 505, 596, 662, 663, 671})
+    exact(picked, [673])
+    exact(lines, [f"refill: #{number} is stage:started with no live thread or open PR" for number in started])
+    exact(candidates({repo}, set())[0], [])
+    exact(candidates(set(), {675})[0], [])
+
+
 def root_workspace():
     """Pull request work never works in the shared root of a repository.
 
@@ -4111,7 +4138,7 @@ def key_mint():
 
     def open_ticket(title, body=ready_body):
         args = SimpleNamespace(repo=repo, title=title, body=body, body_file=None,
-                               label="", require_key=False, dry_run=False)
+                               label="", require_key=False, dry_run=False, repo_dir=None)
         with contextlib.redirect_stdout(io.StringIO()) as output:
             ticket.cmd_open(args)
         return json.loads(output.getvalue())
@@ -4312,7 +4339,7 @@ def provider_until():
     exact(probe({**lapsed, "blocked_at": fresh}, started, ("completed", "ok"))[:2], ([], fresh))
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "close-evidence": close_evidence, "build-here": build_here}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here}
 
 
 def main():
