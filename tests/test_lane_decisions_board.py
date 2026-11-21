@@ -47,7 +47,9 @@ class DecisionsBoardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             board = Path(scratch) / "decisions.json"
             with patch.dict(os.environ, {"COORDINATOR_DECISIONS": str(board)}):
+                importlib.reload(lane.alarms)
                 fresh = load_lane("lane_driver_with_environment")
+            importlib.reload(lane.alarms)
             self.assertEqual(fresh.DECISIONS_PATH, str(board))
 
     def test_the_item_is_written_to_the_scratch_board_and_to_no_other_path(self):

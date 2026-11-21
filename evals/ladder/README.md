@@ -20,3 +20,28 @@ The report prints the interval half-width, which is the gap the run can detect a
 ## Quota unit
 
 `providers.json` gives each provider a `quota_unit` (`requests`: assistant turns counted from the pi `trajectory.json`; or `tokens`: Harbor's input plus output counts), a `quota_unit_source`, and `quota_unit_confirmed`. A quota figure is UNVERIFIED when any trial lacks the data to count it.
+
+## Mining traces for failed runs
+
+`mine_traces.py` flags real Coordinator failures with deterministic rules and no LLM, so a person labels only the flagged runs.
+
+```
+python3 evals/ladder/mine_traces.py --since 2026-11-13
+```
+
+It reads `ticks.log`, `decisions.md`, `gatekeep.log`, `gatekeep-stuck.txt`, `lanes.log`, `gh-usage.jsonl` and the pi session jsonl under `~/.pi/agent/sessions/` and `~/.pi/agent-coordinator/sessions/`, prints a count per rule, and writes `traces/flagged-<date>.jsonl` (gitignored). `--since` is a UTC date. Logs without timestamps (`gatekeep.log`) are read whole when the file changed since that date. Other flags: `--max-minutes` (long run threshold, default 60), `--samples` (success samples, default 5), `--seed`, `--out-dir`.
+
+Rules: `tool_failure` (error lines in logs; a pi session with 5 or more failed tool calls or an assistant error), `loop` (the same log line or the same pi tool call with the same arguments 3 or more times in a row), `retry`, `rate_limit` (rate limit, API floor and "optional reads stopped" lines, plus minutes with 60 or more `gh` calls in `gh-usage.jsonl`), `context_overflow`, `long_run` (pi session longer than `--max-minutes`). Runs that no rule flags are sampled at random as `success_sample`.
+
+Each row has `run_id` (stable hash of source, rule and first line), `source`, `start`, `end`, `rule` and `excerpt` (up to 300 characters, secrets redacted; pi sessions give only tool names and error text).
+
+## Labels file
+
+A person writes `traces/labels.jsonl` (gitignored), one row per reviewed run:
+
+```
+{"run_id": "ab12cd34ef56", "verdict": "fail", "failure_mode": "gatekeep-aborts-on-missing-ticket", "expected_outcome": "the run skips the missing ticket and continues"}
+```
+
+`verdict` is `fail` or `pass` (a success sample or a false flag). `failure_mode` is a short name, empty for `pass`. `expected_outcome` is the checkable result a model must produce on that case. The next ticket builds cases from these rows.
+
