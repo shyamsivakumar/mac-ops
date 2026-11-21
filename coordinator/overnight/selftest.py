@@ -4269,7 +4269,7 @@ def close_evidence():
 
 
 def provider_until():
-    """A provider block ends at its own time, and an unknown model is dropped."""
+    """A provider block ends by a successful probe, never by its time, and an unknown model is dropped."""
     import lane_driver as lane
     model_list = lane.model_list
     loader = importlib.machinery.SourceFileLoader("fixture_models", str(Path(model_list.__file__)))
@@ -4277,19 +4277,78 @@ def provider_until():
     real = importlib.util.module_from_spec(spec)
     loader.exec_module(real)
     key = model_list.identity(model_list.entries("review")[0]["selection"])
-    now = 1_000_000_000.0
 
     def blocked(name, entry):
         with tempfile.TemporaryDirectory() as scratch, \
              patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
              patch.object(model_list, "blocked_identities", real.blocked_identities):
             Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {name: entry}}))
-            return model_list.blocked_identities(now)
+            return model_list.blocked_identities()
 
-    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}), False)
+    exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}), True)
     exact(key in blocked(key, {"by": "provider_block", "until": "2001-09-10T00:00:00Z"}), True)
     exact(key in blocked(key, {"by": "manual"}), True)
     exact("gone:retired-model" in blocked("gone:retired-model", {"expires_at": 4102444800}), False)
+
+    coordq = load_coordq()
+
+    def probe(entry, launch, run=None, runs=1, hang=False):
+        calls = []
+        clock = [1000.0]
+        timeouts = []
+
+        def t3(tool, args, timeout=coordq.T3MCP_TIMEOUT):
+            calls.append((tool, args.get("action") or args.get("title")))
+            if hang and tool != "t3_thread_launch":
+                timeouts.append(timeout)
+                clock[0] += timeout
+                return 1, "t3 call timed out"
+            if tool == "t3_thread_launch":
+                return launch
+            if tool == "t3_thread_read":
+                return 0, json.dumps({"thread": {"status": run[0], "latestRunId": "r1"},
+                                      "recentRuns": [{"runId": "r1", "status": run[0]}],
+                                      "items": [{"type": "assistant_message", "text": run[1]}]})
+            return 0, "{}"
+
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
+             patch.object(model_list, "blocked_identities", real.blocked_identities), \
+             patch.object(model_list, "stale_blocks", real.stale_blocks), \
+             patch.object(model_list, "unblock", real.unblock), \
+             patch.object(model_list, "probe_started", real.probe_started), \
+             patch.object(coordq.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch.object(coordq.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(coordq, "t3_call", side_effect=t3):
+            Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {key: entry}}))
+            for _ in range(runs):
+                coordq.probe_one_block()
+            stored = model_list.read_blocked_file(str(Path(scratch, model_list.BLOCKED_FILE)))["blocked"]
+            probe.elapsed = clock[0] - 1000.0
+            probe.timeouts = timeouts
+            return [name for name, _ in calls], stored.get(key, {}).get("blocked_at"), [label for name, label in calls if name != "t3_thread_read"]
+
+    lapsed = {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}
+    started = (0, json.dumps({"thread": {"threadId": "probe-1"}}))
+    archived = ["t3_thread_launch", "t3_thread_read", "t3_thread_organize"]
+    names, at, labels = probe(lapsed, started, ("completed", "ok"))
+    exact((names, at, labels), (archived, None, [f"probe {key}", "archive"]))
+    names, at, _ = probe({"by": "manual"}, started, ("completed", "Ok."))
+    exact((names, at), ([], None))
+    names, at, _ = probe(lapsed, started, ("failed", "no credits remaining"))
+    exact((names, at > time.time() - 60), (archived, True))
+    names, at, _ = probe(lapsed, started, ("completed", "no"))
+    exact((names, at > time.time() - 60), (archived, True))
+    names, at, _ = probe(lapsed, started, ("running", ""))
+    exact((names.count("t3_thread_read"), names[-1], at > time.time() - 60), (17, "t3_thread_organize", True))
+    names, at, _ = probe(lapsed, started, hang=True)
+    exact((names[-1], probe.elapsed <= 90, max(probe.timeouts) <= 60, at > time.time() - 60), ("t3_thread_organize", True, True, True))
+    names, at, _ = probe(lapsed, (1, "launch refused"))
+    exact((names, at > time.time() - 60), (["t3_thread_launch"], True))
+    names, at, _ = probe(lapsed, (1, "launch refused"), runs=2)
+    exact(names, ["t3_thread_launch"])
+    fresh = time.time()
+    exact(probe({**lapsed, "blocked_at": fresh}, started, ("completed", "ok"))[:2], ([], fresh))
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here}
