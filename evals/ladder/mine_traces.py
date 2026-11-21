@@ -42,16 +42,21 @@ RULES = {
     ),
 }
 SECRET = re.compile(
-    r"([a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s/]+@|authorization:\s*\S+(\s+\S+)?|(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+|"
+    r"([a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s/]+@|authorization:\s*\S+(\s+\S+)?|(password|passwd|secret|token|api[_-]?key)[\"']?\s*[=:]\s*\S+|"
     r"\b(ghp|gho|ghs|github_pat|sk|xox[bp])[-_][A-Za-z0-9_-]{8,}|\bBearer\s+\S+)",
     re.I,
 )
-STAMP = re.compile(r"(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d(?::\d\d)?)(Z?)")
+STAMP = re.compile(r"(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d(?::\d\d)?)(?:\.\d+)?(Z?)")
 UTC = datetime.timezone.utc
 LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 LOOP_MIN = 3
 ERRORS_MIN = 5
 BURST_PER_MINUTE = 60
+SKIPPED = collections.Counter()
+
+
+def failure_category(body):
+    return next((rule for rule, rx in RULES.items() if rx.search(body)), "unclassified")
 
 
 def redact(text):
@@ -125,6 +130,9 @@ def merge(source, hits):
 
 
 def mine_text(path, since):
+    if not path.exists():
+        SKIPPED["missing text log"] += 1
+        return []
     if path.stat().st_mtime < since:
         return []
     hits, last_ts, seen_stamp, repeats, prev = [], None, False, 0, None
@@ -152,7 +160,11 @@ def mine_gh_usage(since):
         return []
     per_minute = collections.Counter()
     for line in GH_USAGE.read_text().splitlines():
-        ts = json.loads(line)["ts"]
+        try:
+            ts = json.loads(line)["ts"]
+        except (ValueError, KeyError, TypeError):
+            SKIPPED["bad gh-usage record"] += 1
+            continue
         if ts >= since:
             per_minute[int(ts // 60)] += 1
     hits = [
@@ -164,15 +176,18 @@ def mine_gh_usage(since):
 
 
 def mine_pi(path, since, max_seconds):
-    stamps, calls, errors, flags = [], [], [], []
+    stamps, calls, errors, flags, assistant_errors = [], [], [], [], []
     for line in path.read_text(errors="replace").splitlines():
-        rec = json.loads(line)
-        if isinstance(rec.get("timestamp"), str):
-            stamps.append(
-                datetime.datetime.fromisoformat(
-                    rec["timestamp"].replace("Z", "+00:00")
-                ).timestamp()
-            )
+        try:
+            rec = json.loads(line)
+            stamp = rec.get("timestamp")
+            if isinstance(stamp, str):
+                stamp = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError):
+            SKIPPED["bad pi record"] += 1
+            continue
+        if isinstance(stamp, float):
+            stamps.append(stamp)
         msg = rec.get("message") or {}
         if msg.get("role") == "assistant":
             calls += [
@@ -181,26 +196,25 @@ def mine_pi(path, since, max_seconds):
                 if c.get("type") == "toolCall"
             ]
             if msg.get("errorMessage"):
-                flags.append(
-                    ("tool_failure", f"assistant error: {msg['errorMessage']}")
-                )
+                category = failure_category(msg["errorMessage"])
+                flags.append(("tool_failure", f"assistant error: {category}"))
+                assistant_errors.append((category, f"assistant error: {category}"))
         if msg.get("role") == "toolResult" and msg.get("isError"):
             body = " ".join(
                 c.get("text", "") for c in msg["content"] if c.get("type") == "text"
             )
-            errors.append(f"{msg.get('toolName')} failed: {body}")
+            category = failure_category(body)
+            errors.append((category, f"{msg.get('toolName')} failed: {category}"))
     if not stamps or stamps[-1] < since:
         return None
     if len(errors) >= ERRORS_MIN:
-        flags.append(("tool_failure", f"{len(errors)} failed tool calls, first: {errors[0]}"))
+        flags.append(("tool_failure", f"{len(errors)} failed tool calls, first: {errors[0][1]}"))
     for i in range(len(calls) - LOOP_MIN + 1):
         if len(set(calls[i : i + LOOP_MIN])) == 1:
             flags.append(("loop", f"{calls[i][0]} called {LOOP_MIN}+ times in a row"))
             break
     for rule in ("rate_limit", "context_overflow", "retry"):
-        hit = next((e for _, e in flags if RULES[rule].search(e)), None) or next(
-            (e for e in errors if RULES[rule].search(e)), None
-        )
+        hit = next((e for c, e in assistant_errors + errors if c == rule), None)
         if hit:
             flags.append((rule, hit))
     if stamps[-1] - stamps[0] > max_seconds:
@@ -273,6 +287,8 @@ def main():
     for rule, n in sorted(collections.Counter(r["rule"] for r in rows).items()):
         print(f"{rule}: {n}")
     print(f"pi sessions without a flag: {len(clean)}")
+    for reason, n in sorted(SKIPPED.items()):
+        print(f"skipped {reason}: {n}")
     print(f"wrote {out}")
 
 
