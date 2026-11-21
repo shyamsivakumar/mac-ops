@@ -1,6 +1,7 @@
 """Per-host memory headroom tests cover the host floor and governor recovery."""
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -128,10 +129,12 @@ class HostHeadroomTests(unittest.TestCase):
         self.assertEqual(found.get("floor"), DEFAULT)
 
     def test_a_deeply_nested_file_keeps_the_default_floor(self):
-        nested = "[" * 2000 + "]" * 2000
+        depth = sys.getrecursionlimit() + 1000
+        nested = "[" * depth + "]" * depth
         self.assertLess(len(nested), 4096)
-        with self.assertRaises(RecursionError):
-            json.loads(nested)
+        if sys.version_info < (3, 12):
+            with self.assertRaises(RecursionError):
+                json.loads(nested)
         path = self.config(nested)
         self.assertEqual(self.floor_for(path, M1), DEFAULT)
 
