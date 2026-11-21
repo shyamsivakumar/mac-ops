@@ -62,7 +62,7 @@ def drift_alarm():
             report = {"checked": 0}
         if now - report["checked"] >= 600:
             result = subprocess.run(
-                [sys.executable, str(checkout / "install_coordinator.py"), "status"],
+                [sys.executable, str(checkout / "install_coordinator.py"), "status", "--no-smoke"],
                 cwd=checkout, capture_output=True, text=True, timeout=30,
             )
             status = json.loads(result.stdout)
