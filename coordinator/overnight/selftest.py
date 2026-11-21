@@ -4111,7 +4111,7 @@ def key_mint():
 
     def open_ticket(title, body=ready_body):
         args = SimpleNamespace(repo=repo, title=title, body=body, body_file=None,
-                               label="", require_key=False, dry_run=False)
+                               label="", require_key=False, dry_run=False, repo_dir=None)
         with contextlib.redirect_stdout(io.StringIO()) as output:
             ticket.cmd_open(args)
         return json.loads(output.getvalue())
