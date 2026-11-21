@@ -1,9 +1,11 @@
 import argparse
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.test_gatekeep_backstop_reviewer import load_coordq
@@ -354,3 +356,70 @@ class CapacityTests(unittest.TestCase):
         from pathlib import Path
         log = Path(self.tmp.name, "dispatch.log").read_text()
         self.assertIn("reservation #7 retained", log)
+
+
+class QueueCrashSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.q = load_coordq()
+        self.q.DIR = self.tmp.name
+        env = patch.dict(os.environ, {"COORD_JOURNAL_DIR": self.tmp.name + "/j"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.q.DECISIONS_PATH = self.tmp.name + "/decisions.json"
+        Path(self.q.DECISIONS_PATH).write_text(json.dumps({"items": []}))
+
+    def test_a_corrupt_queue_with_no_prev_stops_dispatch_and_returns_empty(self):
+        Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')
+        self.assertEqual(self.q.load(), {"next": 1, "items": []})
+        self.assertTrue(Path(self.tmp.name, "dispatch.stopped").exists())
+        journal = "".join(
+            p.read_text() for p in Path(self.tmp.name, "j").iterdir())
+        self.assertIn("queue.json invalid and no queue.json.prev", journal)
+
+    def test_a_fallback_raises_one_board_item_once(self):
+        Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')
+        Path(self.tmp.name, "queue.json.prev").write_text('{"next":5,"items":[]}')
+        self.q.load()
+        self.q.load()
+        board = json.loads(Path(self.q.DECISIONS_PATH).read_text())
+        items = [e for e in board["items"]
+                 if isinstance(e, dict) and e.get("id") == "factory-dispatch-stopped"]
+        self.assertEqual(len(items), 1)
+        self.assertIn("rm dispatch.stopped", items[0]["why"])
+
+    def test_a_truncated_queue_falls_back_and_stops_dispatch(self):
+        Path(self.tmp.name, "queue.json").write_text('{"next":1,"items":[')
+        Path(self.tmp.name, "queue.json.prev").write_text('{"next":5,"items":[]}')
+        self.assertEqual(self.q.load()["next"], 5)
+        self.assertTrue(Path(self.tmp.name, "dispatch.stopped").exists())
+
+    def test_dispatch_and_refill_refuse_while_stopped(self):
+        Path(self.tmp.name, "dispatch.stopped").write_text("")
+        with patch.object(self.q, "drain") as drain, patch.object(
+                self.q, "board_candidates") as candidates:
+            self.q.cmd_dispatch(argparse.Namespace(dry_run=False))
+            self.q.refill(argparse.Namespace(dry_run=False))
+        drain.assert_not_called()
+        candidates.assert_not_called()
+
+    def test_save_keeps_the_previous_queue(self):
+        self.q.save({"next": 1, "items": []})
+        self.q.save({"next": 2, "items": []})
+        prev = json.loads(Path(self.tmp.name, "queue.json.prev").read_text())
+        self.assertEqual(prev["next"], 1)
+
+    def test_first_dispatch_after_corruption_dispatches_nothing(self):
+        self.q.live = lambda: 0
+        self.q.cap = lambda: 6
+        Path(self.tmp.name, "queue.json").write_text('{"next":2,"items":[')
+        Path(self.tmp.name, "queue.json.prev").write_text(json.dumps({"next": 2, "items": [
+            {"id": 1, "tool": "t3_thread_send", "args": {"threadId": "1"},
+             "priority": 0, "title": "pending"}]}))
+        with patch.object(self.q, "call", return_value=(0, "{}")) as call, patch.object(
+                self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "flush_provider_blocks"), patch.object(self.q, "safe_refill"):
+            self.q.cmd_dispatch(argparse.Namespace(dry_run=False))
+        call.assert_not_called()
+        self.assertTrue(Path(self.tmp.name, "dispatch.stopped").exists())

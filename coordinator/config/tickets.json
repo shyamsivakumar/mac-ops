@@ -7,6 +7,8 @@
     "shyamsivakumar/mac-ops": {
       "key": "MO",
       "build": "here",
+      "proofOnOpen": true,
+      "checkout": "~/Code/mac-ops",
       "projectId": "mcp:a55b7217-1c6b-462c-806f-81c1b9604f33"
     },
     "shyamsivakumar/scrapers": {
@@ -85,5 +87,9 @@
     "Rollback",
     "Gate",
     "Finish"
-  ]
+  ],
+  "limits": {
+    "maxCodeFiles": 3,
+    "maxCodeLines": 150
+  }
 }

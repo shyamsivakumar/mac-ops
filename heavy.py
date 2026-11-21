@@ -37,7 +37,9 @@ HEADROOM_FRACTION = 0.15
 PAUSE_HEADROOM_FRACTION = 0.125
 SAMPLE_INTERVAL = 2.0
 SAMPLE_MAX_AGE = 4.5
+SAMPLE_MAX_AGE_LOADED = 15.0
 NATIVE_TIMEOUT = 2.5
+NATIVE_RETRY_TIMEOUT = 10.0
 MAX_WAIT_SECONDS = 45 * 60
 CRITICAL_LOAD_PER_CORE = 2.0
 PRESSURE_HOLD_SECONDS = 15.0
@@ -50,6 +52,7 @@ WARNING_FREE_PERCENT = 30.0
 MAX_SWAP_GROWTH_BYTES_PER_SECOND = 1024**2
 _SWAP_BASELINE = None
 _SWAP_SAMPLE_LOCK = threading.Lock()
+_LAST_GOOD_SAMPLE = None
 CRITICAL_PRESSURE_LEVEL = 4
 TERM_GRACE_SECONDS = 5.0
 MAX_RUNTIME_SECONDS = 45 * 60
@@ -74,6 +77,12 @@ QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 HEARTBEAT_TEMP_PATTERN = re.compile(r"\.heartbeat-[0-9a-f]{32}\.tmp")
 
 
+def sample_max_age(load_per_core: float) -> float:
+    if load_per_core > CRITICAL_LOAD_PER_CORE:
+        return SAMPLE_MAX_AGE_LOADED
+    return SAMPLE_MAX_AGE
+
+
 def monotonic_ns() -> int:
     """Return the monotonic clock reading in nanoseconds."""
     return time.clock_gettime_ns(time.CLOCK_MONOTONIC)
@@ -90,6 +99,10 @@ class HeavyError(Exception):
 
 class TelemetryError(HeavyError):
     """Raised when host telemetry is missing, stale, or invalid."""
+
+
+class StaleSampleError(TelemetryError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -121,6 +134,7 @@ class Sample:
     swap_growth_bytes_per_second: Optional[float] = None
     swapout_bytes_per_second: Optional[float] = None
     physical_cores: Optional[int] = None
+    degraded: bool = False
 
 
 def _finite_nonnegative(value: Any) -> bool:
@@ -198,23 +212,36 @@ def parse_cpu_busy(output: str) -> float:
 
 
 def _run_native(argv: Sequence[str], timeout: float = NATIVE_TIMEOUT) -> str:
-    try:
-        result = subprocess.run(
-            list(argv),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise TelemetryError("native telemetry command failed") from exc
+    for attempt_timeout in (timeout, NATIVE_RETRY_TIMEOUT):
+        try:
+            result = subprocess.run(
+                list(argv),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=attempt_timeout,
+                check=False,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            failure = exc
+        except OSError as exc:
+            raise TelemetryError("native telemetry command failed") from exc
+    else:
+        raise TelemetryError("native telemetry command failed") from failure
     if result.returncode != 0:
         raise TelemetryError("native telemetry command returned failure")
     return result.stdout
 
 
-def sample_host(
+def parse_sysctl_load(output: str, physical_cores: int) -> float:
+    match = re.search(r"\{\s*([0-9]+(?:\.[0-9]+)?)", output)
+    if not match:
+        raise TelemetryError("invalid load average")
+    return float(match.group(1)) / physical_cores
+
+
+def _sample_host_once(
     *,
     command_runner: Callable[[Sequence[str], float], str] = _run_native,
     clock: Callable[[], float] = monotonic,
@@ -239,14 +266,16 @@ def sample_host(
         }
         for key, future in futures.items():
             try:
-                outputs[key] = future.result(timeout=NATIVE_TIMEOUT + 0.5)
+                outputs[key] = future.result(
+                    timeout=NATIVE_TIMEOUT + NATIVE_RETRY_TIMEOUT + 0.5
+                )
             except Exception as exc:
                 for pending in futures.values():
                     pending.cancel()
                 raise TelemetryError("host telemetry sample was incomplete") from exc
     captured = clock()
-    if captured - started > 3.0:
-        raise TelemetryError("host telemetry sample was stale on arrival")
+    if captured - started > NATIVE_TIMEOUT + NATIVE_RETRY_TIMEOUT:
+        raise StaleSampleError("host telemetry sample was stale on arrival")
     try:
         pressure = parse_pressure_level(outputs["pressure"])
         physical = int(outputs["memory"].strip())
@@ -298,6 +327,42 @@ def sample_host(
         load_per_core=load_per_core,
         captured_monotonic=captured,
         physical_cores=cores,
+    )
+
+
+def sample_host(
+    *,
+    command_runner: Callable[[Sequence[str], float], str] = _run_native,
+    clock: Callable[[], float] = monotonic,
+) -> Sample:
+    global _LAST_GOOD_SAMPLE
+    for _ in range(2):
+        try:
+            sample = _sample_host_once(command_runner=command_runner, clock=clock)
+        except StaleSampleError:
+            continue
+        _LAST_GOOD_SAMPLE = sample
+        return sample
+    cached = _LAST_GOOD_SAMPLE
+    if cached is None or clock() - cached.captured_monotonic > SAMPLE_MAX_AGE_LOADED:
+        raise StaleSampleError("host telemetry sample was stale on arrival")
+    pressure = parse_pressure_level(
+        command_runner(
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            NATIVE_TIMEOUT,
+        )
+    )
+    load_per_core = parse_sysctl_load(
+        command_runner(["/usr/sbin/sysctl", "-n", "vm.loadavg"], NATIVE_TIMEOUT),
+        cached.physical_cores,
+    )
+    if clock() - cached.captured_monotonic > sample_max_age(load_per_core):
+        raise StaleSampleError("host telemetry sample was stale on arrival")
+    return replace(
+        cached,
+        pressure_level=pressure,
+        load_per_core=load_per_core,
+        degraded=True,
     )
 
 
@@ -457,7 +522,7 @@ def admission_block_reason(
     if not all(_finite_nonnegative(value) for value in values):
         return "invalid-telemetry"
     age = now - sample.captured_monotonic
-    if age < 0 or age > SAMPLE_MAX_AGE:
+    if age < 0 or age > sample_max_age(sample.load_per_core):
         return "stale-telemetry"
     if sample.pressure_level not in (
         NORMAL_PRESSURE_LEVEL,
@@ -2337,7 +2402,7 @@ def _sample_invalid_reason(sample: Sample, now: float) -> Optional[str]:
     if not all(_finite_nonnegative(value) for value in values):
         return "telemetry-missing"
     age = now - sample.captured_monotonic
-    if age < 0 or age > SAMPLE_MAX_AGE:
+    if age < 0 or age > sample_max_age(sample.load_per_core):
         return "telemetry-stale"
     if sample.pressure_level not in (
         NORMAL_PRESSURE_LEVEL,

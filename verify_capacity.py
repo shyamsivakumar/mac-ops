@@ -154,7 +154,7 @@ def explore_local_board(module, cfg):
     namespace["command"] = command
     namespace["_read_private_json"] = lambda *args, **kwargs: dict(state) if state else None
     namespace["atomic_json"] = lambda path, value: (state.clear(), state.update(value))
-    helper = SimpleNamespace(monotonic=lambda: now, admission_block_reason=heavy.admission_block_reason, critical_pressure=heavy.critical_pressure, _sample_invalid_reason=heavy._sample_invalid_reason, _finite_nonnegative=heavy._finite_nonnegative, SAMPLE_MAX_AGE=4.5, WARNING_CPU_PCT=heavy.WARNING_CPU_PCT, MAX_CPU_PCT=heavy.MAX_CPU_PCT)
+    helper = SimpleNamespace(monotonic=lambda: now, admission_block_reason=heavy.admission_block_reason, critical_pressure=heavy.critical_pressure, _sample_invalid_reason=heavy._sample_invalid_reason, _finite_nonnegative=heavy._finite_nonnegative, sample_max_age=heavy.sample_max_age, WARNING_CPU_PCT=heavy.WARNING_CPU_PCT, MAX_CPU_PCT=heavy.MAX_CPU_PCT)
     sample = heavy.Sample(pressure_level=1, cpu_busy_pct=20, memory_used_pct=30,
                           headroom_bytes=32*GIB, physical_bytes=48*GIB,
                           load_per_core=0.2, captured_monotonic=now, free_percent=66,
@@ -223,7 +223,7 @@ def explore_measured_board_veto(module, cfg):
         critical_pressure=lambda sample: False,
         _sample_invalid_reason=lambda sample, now: None,
         _finite_nonnegative=heavy._finite_nonnegative,
-        SAMPLE_MAX_AGE=4.5,
+        sample_max_age=heavy.sample_max_age,
         WARNING_CPU_PCT=heavy.WARNING_CPU_PCT,
         MAX_CPU_PCT=heavy.MAX_CPU_PCT,
     )
@@ -275,7 +275,7 @@ def explore_active_catchup(module, cfg):
         critical_pressure=lambda sample: False,
         _sample_invalid_reason=lambda sample, now: None,
         _finite_nonnegative=heavy._finite_nonnegative,
-        SAMPLE_MAX_AGE=4.5,
+        sample_max_age=heavy.sample_max_age,
         WARNING_CPU_PCT=heavy.WARNING_CPU_PCT,
         MAX_CPU_PCT=heavy.MAX_CPU_PCT,
     )
