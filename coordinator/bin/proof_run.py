@@ -3,15 +3,15 @@ import argparse, json, os, re, shutil, signal, subprocess, sys, tempfile
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TIMEOUT = 120
+PROOF_LINE = re.compile(r"^\s*(?:\d+\.\s*)?proof command:[ \t]*(.*)$", re.I | re.M)
 
 
 def parse_body(text):
     lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines)
-                  if line.strip().lower().startswith("proof command:")), None)
+    start = next((i for i, line in enumerate(lines) if PROOF_LINE.match(line)), None)
     if start is None:
         raise ValueError("the ticket body carries no proof command")
-    inline = lines[start].split(":", 1)[1].strip()
+    inline = PROOF_LINE.match(lines[start]).group(1).strip()
     if len(inline) > 1 and inline.startswith("`") and inline.endswith("`"):
         inline = inline.strip("`").strip()
     cmd_lines = [inline] if inline else []
@@ -20,21 +20,24 @@ def parse_body(text):
         i += 1
     while i < len(lines):
         line = lines[i]
-        if line.strip().startswith("```") or line.strip().lower().startswith("expected on"):
+        if line.strip().startswith("```") or line.strip().lower().startswith(("expected on", "expected red signature")):
             break
         cmd_lines.append(line)
         i += 1
     cmd = "\n".join(cmd_lines).strip()
     if not cmd:
         raise ValueError("the ticket body carries no proof command")
-    expected_main = expected_head = None
+    expected_main = expected_head = signature = None
     for line in lines[i:i + 6]:
         low = line.strip().lower()
-        if low.startswith("expected on main:"):
+        if low.startswith("expected red signature:"):
+            signature = line.split(":", 1)[1].strip() or None
+        elif low.startswith("expected on main:"):
             expected_main = line.split(":", 1)[1].strip()
         elif low.startswith("expected on the head:"):
             expected_head = line.split(":", 1)[1].strip()
-    return {"cmd": cmd, "expected_main": expected_main, "expected_head": expected_head}
+    return {"cmd": cmd, "expected_main": expected_main, "expected_head": expected_head,
+            "signature": signature}
 
 
 def _resolve(repo_dir, ref):
