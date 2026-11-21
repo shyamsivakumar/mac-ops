@@ -41,6 +41,7 @@ MAX_CODE_FILES = 3
 MAX_CODE_LINES = 150
 # The key and the title are joined the way a ticket reads: `MO-1017 · name`.
 KEY_SEPARATOR = " · "
+PARITY_TITLE = re.compile(r"^Parity P\d+[A-Za-z]*(\.\d+)?(?=\s|$)")
 # A page holds 100 issues. The cap keeps a broken page from looping forever.
 ISSUE_PAGE_SIZE = 100
 ISSUE_PAGES = 200
@@ -575,6 +576,10 @@ def run_proof_on_main(rcfg, body, repo_dir):
     raise Refuse(f"proof is unresolved on main (exit {result['exit']}, signature matched: {result['matched']}): {tail}")
 
 
+def parity_title_ok(title):
+    return not title.startswith("Parity ") or PARITY_TITLE.match(title) is not None
+
+
 def cmd_open(a):
     """Open a ticket. The key is minted here, so a ticket is born startable."""
     cfg = load_config()
@@ -588,6 +593,8 @@ def cmd_open(a):
     title = " ".join(a.title.split())
     if not title:
         die("refused: the title is empty", 2)
+    if not parity_title_ok(title):
+        die("refused: a Parity title must read `Parity P<digits><letters>[.<digits>] · <title>`, for example `Parity P23b.1 · name`", 2)
     body = a.body or ""
     if a.body_file:
         with open(a.body_file) as handle:
