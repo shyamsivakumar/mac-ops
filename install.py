@@ -265,7 +265,8 @@ def install(p, checkout, migrate=False, no_start=False, source_commit=None, host
         run(["/bin/launchctl", "enable", f"gui/{os.getuid()}/{LABELS[0]}"])
         run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", p["agents"] / (LABELS[0] + ".plist")])
     print("Installed heavy in " + str(p["bin"]))
-    print("Add ~/.local/bin to PATH. One controller adjusts heavy and board capacity; the second governor plist stays unloaded to prevent duplicates.")
+    if host_role == "full":
+        print("Add ~/.local/bin to PATH. One controller adjusts heavy and board capacity; the second governor plist stays unloaded to prevent duplicates.")
 
 
 def archive_legacy(p):
