@@ -2147,6 +2147,8 @@ def gatekeep_retarget():
             return Run(json.dumps([[comment]]))
         if endpoint == f"repos/{repo}/commits/{head}/statuses?per_page=100":
             return Run("[[]]")
+        if endpoint.endswith("/files?per_page=100"):
+            return Run("[[]]")
         raise AssertionError(f"unexpected read: {endpoint}")
 
     def gatekeep(scratch):
@@ -2253,6 +2255,8 @@ def gatekeep_round_cap():
             failed.stderr = "gh: Not Found (HTTP 404)"
             return failed
         if endpoint == f"repos/{repo}/commits/{'e' * 40}/statuses?per_page=100":
+            return Run("[[]]")
+        if endpoint.endswith("/files?per_page=100"):
             return Run("[[]]")
         raise AssertionError(f"unexpected read: {endpoint}")
 
@@ -2552,8 +2556,14 @@ def build_here():
                      patch.object(lane, "send", send):
                     exact(lane.act_on_pr(repo, 20, {}), f"#20: {repo} is built in the Herdr session, board card raised")
             exact(sent, [])
-            items = json.loads(decisions.read_text())["items"]
-            exact([item["id"] for item in items], [f"herdr-build-MO-20-{head[:8]}"])
+            card_id = "herdr-build-MO-20"
+            owner_board = Path(lane.alarms.board_for(decisions, card_id))
+            exact(bool(lane.alarms.OWNER_IDS.fullmatch(card_id)), True)
+            exact(owner_board, decisions.with_name("mac-ops-owner.json"))
+            exact(json.loads(decisions.read_text())["items"], [])
+            items = json.loads(owner_board.read_text())["items"]
+            exact([item["id"] for item in items], [card_id])
+            exact(head[:8] in items[0]["title"], True)
 
 
 def root_workspace():
@@ -4080,7 +4090,9 @@ def key_mint():
     from types import SimpleNamespace
     repo = "fixture/repo"
     config = {"repos": {repo: {"key": "MO"}},
-              "labels": {"stage": ["backlog"], "priority": [1], "type": ["standard"]}}
+              "labels": {"stage": ["backlog"], "priority": [1], "type": ["standard"]},
+              "template": ["Goal and why"]}
+    ready_body = "## Goal and why\n\nx\n\nProof command: x"
     listed = [{"number": 1, "title": "MO-1 · first"}]
     created = []
     failure = [None]
@@ -4097,8 +4109,8 @@ def key_mint():
             return json.dumps(listed)
         raise AssertionError(f"unexpected gh call: {args}")
 
-    def open_ticket(title):
-        args = SimpleNamespace(repo=repo, title=title, body="", body_file=None,
+    def open_ticket(title, body=ready_body):
+        args = SimpleNamespace(repo=repo, title=title, body=body, body_file=None,
                                label="", require_key=False, dry_run=False)
         with contextlib.redirect_stdout(io.StringIO()) as output:
             ticket.cmd_open(args)
@@ -4121,6 +4133,14 @@ def key_mint():
         exact([open_ticket(f"ticket {n}")["key"] for n in (1, 2, 3)],
               ["MO-2", "MO-3", "MO-4"])
         exact(created, ["MO-2 · ticket 1", "MO-3 · ticket 2", "MO-4 · ticket 3"])
+        for bad in ("", "## Goal and why\n\nx"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    open_ticket("no proof", bad)
+                except SystemExit as exit:
+                    exact(exit.code, 2)
+                else:
+                    raise AssertionError("a body without a proof line was opened")
         # The record sits beside the open lock, so the next open reads it.
         exact(json.loads((Path(directory) / record).read_text()),
               {"number": 4, "unconfirmed": [2, 3, 4], "pending": None})
