@@ -18,7 +18,6 @@ import glob
 import json
 import os
 import re
-import shutil
 import sys
 import time
 
@@ -49,24 +48,33 @@ _ATTEMPT = re.compile(r"^(?P<work>.+):a(?P<attempt>\d+)$")
 _WORK_REF = re.compile(_REPO)
 
 
+def _merge_file(src, dest):
+    with open(src) as fh:
+        lines = fh.readlines()
+    if os.path.exists(dest):
+        seen = set(lines)
+        with open(dest) as fh:
+            lines += [line for line in fh.readlines() if line not in seen]
+    tmp = dest + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.writelines(lines)
+    os.replace(tmp, dest)
+
+
 def _migrate_legacy(new, old):
     if not os.path.isdir(old):
         return
-    if glob.glob(os.path.join(new, "events-*.jsonl")):
+    marker = os.path.join(new, ".migrated")
+    if os.path.exists(marker):
         return
-    for path in glob.glob(os.path.join(old, "events-*.jsonl")):
-        os.makedirs(new, exist_ok=True)
-        name = os.path.basename(path)
-        dest = os.path.join(new, name)
-        if os.path.exists(dest):
-            continue
-        tmp = os.path.join(new, f"{name}.{os.getpid()}.tmp")
-        shutil.copy2(path, tmp)
-        try:
-            os.link(tmp, dest)
-        except FileExistsError:
-            pass
-        os.unlink(tmp)
+    os.makedirs(new, exist_ok=True)
+    with open(os.path.join(new, ".migrate.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.exists(marker):
+            return
+        for path in glob.glob(os.path.join(old, "events-*.jsonl")):
+            _merge_file(path, os.path.join(new, os.path.basename(path)))
+        open(marker, "w").close()
 
 
 def journal_dir():

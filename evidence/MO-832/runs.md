@@ -31,3 +31,13 @@ run 3 after removing events-backfill from new (new still has events: copies noth
 events-2026-11.jsonl old
 events-backfill.jsonl KEEP
 ```
+
+## Second-writer race: destination month file already exists with a new row (selftest `journal-migration`)
+Old folder has events-2026-11 (a, b) and events-backfill (z); new folder already has events-2026-11 (b, c) from a writer that got there first. Migration runs twice.
+```
+origin PR head 807b8fe9 journal.py:
+AssertionError: expected ['{"a":1}', '{"b":2}', '{"c":3}'], got ['{"b":2}', '{"c":3}']
+
+fix (flock on .migrate.lock, merge without duplicates, .migrated written last):
+journal-migration PASS
+```
