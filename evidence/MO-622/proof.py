@@ -1,4 +1,4 @@
-import dataclasses, json, os, stat, sys, tempfile, threading, time
+import dataclasses, json, os, sys, tempfile, threading, time
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).resolve().parents[2]))
