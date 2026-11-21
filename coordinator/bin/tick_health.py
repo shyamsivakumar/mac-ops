@@ -52,17 +52,30 @@ def job_exit_alarms(listing):
 def drift_alarm():
     receipt = Path.home() / ".local/state/mac-ops/coordinator-installation.json"
     marker = Path.home() / "Library/Logs/coordinator/install-drift.first-seen"
+    cache = marker.with_name("install-drift.status.json")
     try:
         checkout = Path(json.loads(receipt.read_text())["checkout"])
-        result = subprocess.run(
-            [sys.executable, str(checkout / "install_coordinator.py"), "status"],
-            cwd=checkout, capture_output=True, text=True, timeout=30,
-        )
-        report = json.loads(result.stdout)
+        now = time.time()
+        try:
+            report = json.loads(cache.read_text())
+        except (OSError, ValueError):
+            report = {"checked": 0}
+        if now - report["checked"] >= 600:
+            result = subprocess.run(
+                [sys.executable, str(checkout / "install_coordinator.py"), "status"],
+                cwd=checkout, capture_output=True, text=True, timeout=30,
+            )
+            status = json.loads(result.stdout)
+            report = {
+                "checked": now,
+                "in_sync": status["in_sync"],
+                "differs": status["differs"],
+            }
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(report))
         if report["in_sync"]:
             marker.unlink(missing_ok=True)
             return ""
-        now = time.time()
         if not marker.exists():
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(str(now))
@@ -80,8 +93,6 @@ def drift_alarm():
 
 
 def tick_alarm():
-    if os.environ.get("COORDINATOR_TEST_ISOLATION_DIR"):
-        return stale_log_alarm()
     listing = ""
     try:
         listing = subprocess.run(
