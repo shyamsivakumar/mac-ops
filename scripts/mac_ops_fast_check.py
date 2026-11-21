@@ -268,11 +268,9 @@ def check_isolation(run, isolation, env):
 
     The two suites are the ones that reached GitHub and the live skip log
     before the environment was set for them. Their own result is recorded
-    in the detail and does not decide this check: the check is about the
-    live files, and a suite that is already red on this machine is not a
-    finding about the isolation. What the run must do is discover the suite
-    and finish it, so a run that never got as far as the tests cannot pass
-    by leaving the live files alone.
+    in the detail, and a red suite fails this check and names the failing
+    tests. The run must also discover the suite and finish it, so a run that
+    never got as far as the tests cannot pass by leaving the live files alone.
 
     Each suite runs under `env`, which names a temp root and nothing else,
     so the entry point has to install the isolation itself. The check then
@@ -338,6 +336,12 @@ def check_isolation(run, isolation, env):
         raise AssertionError(
             f"the suite did not run: {found} tests, expected at least {MIN_TESTS} "
             f"(unittest exited {suite.returncode})")
+    if suite.returncode != 0:
+        failing = [line for line in (suite.stdout + suite.stderr).splitlines()
+                   if line.startswith(('FAIL:', 'ERROR:'))]
+        raise AssertionError(
+            f"the unittest suite is red (exited {suite.returncode}): "
+            f"{' | '.join(failing)}")
     if selftest.returncode != 0:
         raise AssertionError(
             f"the overnight selftest did not run: exited {selftest.returncode}")
