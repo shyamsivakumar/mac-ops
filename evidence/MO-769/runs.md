@@ -51,3 +51,42 @@ exit 0
 refused: a behavior ticket needs an `Expected red signature:` line under its proof command
 exit 2
 ```
+
+## After the coordinator review: per-repo proofOnOpen and checkout
+
+Fixture f is a numbered `1. Proof command:` line. The last case is an SRW-shaped open run from /tmp with the flag off. Temp COORDQ_DIR and COORD_JOURNAL_DIR stayed empty.
+```
+== a (mac-ops, flag on, --repo-dir)
+{"repo": "shyamsivakumar/mac-ops", "key": "MO-1190", "title": "MO-1190 \u00b7 zz", "labels": ["stage:hold", "priority:3", "type:standard"], "proof": "red", "dryRun": true}
+exit 0
+== b (mac-ops, flag on, --repo-dir)
+refused: proof passes on main: nothing to build
+exit 2
+== c (mac-ops, flag on, --repo-dir)
+refused: proof is unresolved on main (exit 1, signature matched: False): ## Proof run: red 51a34824ba32ed37b497d2fb4c5bc7d2d7227863
+
+```sh
+echo "some other error" >&2; exit 1
+```
+
+```
+some other error
+
+```
+
+{"state": "unresolved", "exit": 1, "matched": false, "ref": "51a34824ba32ed37b497d2fb4c5bc7d2d7227863"}
+
+exit 2
+== d (mac-ops, flag on, --repo-dir)
+{"repo": "shyamsivakumar/mac-ops", "key": "MO-1190", "title": "MO-1190 \u00b7 zz", "labels": ["stage:hold", "priority:3", "type:standard"], "proof": "prose", "dryRun": true}
+exit 0
+== e (mac-ops, flag on, --repo-dir)
+refused: a behavior ticket needs an `Expected red signature:` line under its proof command, a regex the proof's output must match on main, for example `Expected red signature: AttributeError: .*repo_dir`
+exit 2
+== f (mac-ops, flag on, --repo-dir)
+{"repo": "shyamsivakumar/mac-ops", "key": "MO-1190", "title": "MO-1190 \u00b7 zz", "labels": ["stage:hold", "priority:3", "type:standard"], "proof": "red", "dryRun": true}
+exit 0
+== SRW-shaped open from another cwd, flag off, Expected on main: style body
+{"repo": "shyamsivakumar/strategy-replay-workbench", "key": "SRW-1407", "title": "SRW-1407 \u00b7 zz", "labels": ["stage:hold", "priority:3", "type:standard"], "proof": "unchecked", "dryRun": true}
+exit 0
+```
