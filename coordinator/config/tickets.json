@@ -8,6 +8,7 @@
       "key": "MO",
       "build": "here",
       "proofOnOpen": true,
+      "proofRequired": true,
       "checkout": "~/Code/mac-ops",
       "projectId": "mcp:a55b7217-1c6b-462c-806f-81c1b9604f33"
     },
