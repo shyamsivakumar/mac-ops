@@ -2283,7 +2283,7 @@ def cmd_gatekeep(a):
             if key in attempted:
                 continue
             repo_name, pr_number = event["pr"].rsplit("#", 1)
-            settings = config["repos"].get(repo_name, {})
+            settings = config.get("repos", {}).get(repo_name, {})
             if settings.get("proofOnOpen") and event.get("issue"):
                 proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run)
                 if proof is None:
