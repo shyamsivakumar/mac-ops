@@ -39,6 +39,7 @@ SAMPLE_INTERVAL = 2.0
 SAMPLE_MAX_AGE = 4.5
 SAMPLE_MAX_AGE_LOADED = 15.0
 NATIVE_TIMEOUT = 2.5
+NATIVE_RETRY_TIMEOUT = 10.0
 MAX_WAIT_SECONDS = 45 * 60
 CRITICAL_LOAD_PER_CORE = 2.0
 PRESSURE_HOLD_SECONDS = 15.0
@@ -211,17 +212,23 @@ def parse_cpu_busy(output: str) -> float:
 
 
 def _run_native(argv: Sequence[str], timeout: float = NATIVE_TIMEOUT) -> str:
-    try:
-        result = subprocess.run(
-            list(argv),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise TelemetryError("native telemetry command failed") from exc
+    for attempt_timeout in (timeout, NATIVE_RETRY_TIMEOUT):
+        try:
+            result = subprocess.run(
+                list(argv),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=attempt_timeout,
+                check=False,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            failure = exc
+        except OSError as exc:
+            raise TelemetryError("native telemetry command failed") from exc
+    else:
+        raise TelemetryError("native telemetry command failed") from failure
     if result.returncode != 0:
         raise TelemetryError("native telemetry command returned failure")
     return result.stdout
@@ -259,13 +266,15 @@ def _sample_host_once(
         }
         for key, future in futures.items():
             try:
-                outputs[key] = future.result(timeout=NATIVE_TIMEOUT + 0.5)
+                outputs[key] = future.result(
+                    timeout=NATIVE_TIMEOUT + NATIVE_RETRY_TIMEOUT + 0.5
+                )
             except Exception as exc:
                 for pending in futures.values():
                     pending.cancel()
                 raise TelemetryError("host telemetry sample was incomplete") from exc
     captured = clock()
-    if captured - started > 3.0:
+    if captured - started > NATIVE_TIMEOUT + NATIVE_RETRY_TIMEOUT:
         raise StaleSampleError("host telemetry sample was stale on arrival")
     try:
         pressure = parse_pressure_level(outputs["pressure"])
