@@ -22,7 +22,7 @@ for pr in (1, 2):
     sh("git", "add", ".", cwd=work), sh("git", "commit", "-m", f"pr{pr}", cwd=work)
     heads[pr] = sh("git", "rev-parse", "HEAD", cwd=work)
     sh("git", "push", "origin", f"HEAD:refs/pull/{pr}/head", cwd=work)
-bodies = {1: "Proof command:\ntest -f README.md\n", 2: "Proof command:\ntest -f MISSING\n", 3: "Proof command:\ntest -f MISSING\n"}
+bodies = {1: "Proof command:\ntest -f README.md\n", 2: "Proof command:\ntest -f MISSING\n", 3: "Proof command:\ntest -f MISSING\n", 4: "Proof command:\nprose shape, not a command\n"}
 
 loader = importlib.machinery.SourceFileLoader("coordq", "coordinator/bin/coordq")
 q = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq", loader))
@@ -32,13 +32,15 @@ q.gh_gateway.remaining_or_none = lambda: None
 q.lane_ledger = lambda: {}
 model = {"instanceId": "i", "model": "m"}
 runs = []
+for opened in (1, 2):
+    q.journal.emit("ticket_opened", "ticket", repo="o/on", ticket=opened, proof="red")
 import proof_run
 real_run = proof_run.run
 proof_run.run = lambda *a, **k: (runs.append(a[2]), real_run(*a, **k))[1]
 
 
 def candidates(config, rounds=None):
-    for pr, repo in ((1, "o/on"), (2, "o/on"), (3, "o/off")):
+    for pr, repo in ((1, "o/on"), (2, "o/on"), (3, "o/off"), (4, "o/on")):
         h = heads.get(pr, "c" * 40)
         key = f"gate:{repo}#{pr}:{h}"
         yield {"kind": "candidate", "pr": f"{repo}#{pr}", "head": h, "key": key, "issue": pr,
@@ -59,4 +61,5 @@ print("card:", [i["id"] for i in json.load(open(root + "/mac-ops-owner.json"))["
 print("replay:", sorted(os.listdir(root + "/replay/MO-1")))
 print("proof_run rows:", [l.strip()[-90:] for f in os.listdir(root + "/journal")
                           for l in open(root + "/journal/" + f) if '"proof_run"' in l])
+print("legacy head 4 (no red opened row):", queue["proofHeads"]["gate:o/on#4:" + "c" * 40]["state"], "| proof runs", len(runs))
 print("proofHeads:", {k.split(":")[1]: v["state"] for k, v in queue["proofHeads"].items()})

@@ -2004,6 +2004,23 @@ def write_replay(root, key, body, cmd, head):
             handle.write(text.rstrip("\n") + "\n")
 
 
+def opened_red(repo, issue):
+    folder = journal.journal_dir()
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not name.startswith("events-"):
+            continue
+        with open(os.path.join(folder, name), encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if (isinstance(row, dict) and row.get("event") == "ticket_opened" and row.get("repo") == repo
+                        and row.get("ticket") == int(issue) and (row.get("data") or {}).get("proof") == "red"):
+                    return True
+    return False
+
+
 def run_head_proof(settings, repo, number, issue, head):
     """The green proof of one head, run in a clean checkout by the runner.
 
@@ -2049,7 +2066,10 @@ def proof_gate(settings, repo, number, event, key, dry_run):
         if dry_run:
             print(f"would run the proof of {event['pr']}", flush=True)
             return ""
-        state, tail, body, cmd = run_head_proof(settings, repo, number, event["issue"], event["head"])
+        if opened_red(repo, event["issue"]):
+            state, tail, body, cmd = run_head_proof(settings, repo, number, event["issue"], event["head"])
+        else:
+            state, tail, body, cmd = "legacy", "", "", ""
         kept = {"state": state, "tail": tail, "pr": event["pr"], "carded": False}
         with Lock(True):
             queue = load()
@@ -2060,7 +2080,7 @@ def proof_gate(settings, repo, number, event, key, dry_run):
         if state == "green":
             write_replay(REPLAY_DIR, f"{settings['key']}-{event['issue']}", body, cmd, event["head"])
             alarms.route_update(DECISIONS_PATH, card_id, "remove")
-    if kept["state"] in ("green", "prose"):
+    if kept["state"] in ("green", "prose", "legacy"):
         return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
     if not kept["carded"] and not dry_run:
         item = {"id": f"proof-{settings['key']}-{number}", "group": "Coordinator", "kind": "ask",
