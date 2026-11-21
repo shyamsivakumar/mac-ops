@@ -533,8 +533,18 @@ def with_open_lock(repo):
     return f
 
 
-def run_proof_on_main(body, repo_dir):
-    """red, or prose for a docs ticket; a proof that is not red on origin/main is refused."""
+SIGNATURE_HELP = ("a behavior ticket needs an `Expected red signature:` line under its proof command, "
+                  "a regex the proof's output must match on main, for example "
+                  "`Expected red signature: AttributeError: .*repo_dir`")
+
+
+def run_proof_on_main(rcfg, body, repo_dir):
+    """unchecked, prose or red; a proof that is not red on origin/main is refused."""
+    if not rcfg.get("proofOnOpen"):
+        return "unchecked"
+    repo_dir = repo_dir or (os.path.expanduser(rcfg["checkout"]) if rcfg.get("checkout") else None)
+    if repo_dir is None:
+        raise Refuse("proofOnOpen is set for this repo but it has no `checkout` path and no --repo-dir was given")
     try:
         spec = proof_run.parse_body(body)
     except ValueError as e:
@@ -542,7 +552,7 @@ def run_proof_on_main(body, repo_dir):
     if spec["cmd"].lower().startswith("none (prose)"):
         return "prose"
     if not spec["signature"]:
-        raise Refuse("a behavior ticket needs an `Expected red signature:` line under its proof command")
+        raise Refuse(SIGNATURE_HELP)
     try:
         re.compile(spec["signature"])
     except re.error as e:
@@ -591,7 +601,7 @@ def cmd_open(a):
     if unknown:
         die(f"refused: unknown labels: {', '.join(unknown)}", 2)
     try:
-        proof = run_proof_on_main(body, a.repo_dir or os.getcwd())
+        proof = run_proof_on_main(rcfg, body, a.repo_dir)
     except Refuse as e:
         die(f"refused: {e}", 2)
     try:
@@ -827,7 +837,7 @@ def check_body(cfg, body, labels):
         cap = cfg.get("limits", {}).get("maxCodeLines", MAX_CODE_LINES)
         if int(value.replace(",", "")) > cap and "type:large" not in labels:
             return f"Size names {value} code lines, the cap is {cap}"
-    proofs = re.findall(r"(?m)^\s*(?:\d+\.\s*)?Proof command:[ \t]*(.*)$", body)
+    proofs = proof_run.PROOF_LINE.findall(body)
     if not proofs:
         return ("a behavior ticket needs a `Proof command:` block "
                 "(docs and config tickets say `Proof command: none (prose)`)")
@@ -2184,7 +2194,7 @@ def main():
     s.add_argument("--label", default="", help="comma separated labels")
     s.add_argument("--require-key", action="store_true", help="refuse a title without a key instead of minting one")
     s.add_argument("--dry-run", action="store_true", help="print the title this would use and stop")
-    s.add_argument("--repo-dir", help="checkout that holds origin/main for the proof run (default: the current directory)")
+    s.add_argument("--repo-dir", help="checkout that holds origin/main for the proof run (overrides the repo checkout in tickets.json)")
     s.set_defaults(fn=cmd_open)
     s = sub.add_parser("list")
     s.add_argument("--json", action="store_true")

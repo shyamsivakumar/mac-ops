@@ -4092,7 +4092,7 @@ def key_mint():
     config = {"repos": {repo: {"key": "MO"}},
               "labels": {"stage": ["backlog"], "priority": [1], "type": ["standard"]},
               "template": ["Goal and why"]}
-    ready_body = "## Goal and why\n\nx\n\nProof command: none (prose)"
+    ready_body = "## Goal and why\n\nx\n\nProof command: x"
     listed = [{"number": 1, "title": "MO-1 · first"}]
     created = []
     failure = [None]
