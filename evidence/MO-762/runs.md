@@ -54,3 +54,44 @@ Output:
 fresh current 2 -> target 3 healthy_growth
 degraded current 2 -> target 2 degraded_telemetry
 ```
+
+## Degraded sample keeps its original age (gate fix)
+
+The degraded fallback no longer stamps the cached sample with the current clock. The frozen memory fields keep their real `captured_monotonic`, and the age is checked after both sysctl re-reads against the age limit for the new load. Fake clock; each sysctl call advances it by half the stated cost.
+
+```
+import sys, dataclasses
+sys.path.insert(0, ".")
+import heavy
+
+def run(cached_age, sysctl_cost):
+    t = [1000.0]
+    clock = lambda: t[0]
+    def runner(argv, timeout):
+        t[0] += sysctl_cost / 2
+        return "1\n" if "pressure" in argv[-1] else "{ 56.0 56.0 56.0 }\n"
+    heavy._sample_host_once = lambda **kw: (_ for _ in ()).throw(heavy.StaleSampleError("x"))
+    heavy._LAST_GOOD_SAMPLE = heavy.Sample(pressure_level=1, cpu_busy_pct=90.0, memory_used_pct=60.0, headroom_bytes=8*2**30, physical_bytes=36*2**30, load_per_core=2.9, captured_monotonic=t[0]-cached_age, free_percent=50.0, swap_growth_bytes_per_second=0.0, swapout_bytes_per_second=0.0, physical_cores=14)
+    try:
+        s = heavy.sample_host(command_runner=runner, clock=clock)
+    except heavy.StaleSampleError:
+        return "stale-telemetry (raised)"
+    return heavy.admission_block_reason(s, now=clock(), active_count=0, task_already_active=False, slot_limit=2) or "admitted"
+
+print("cached 14s old, sysctl 6s:", run(14, 6))
+print("cached 5s old, sysctl 2s:", run(5, 2))
+```
+
+Before (previous head 9dc05f79):
+
+```
+cached 14s old, sysctl 6s: admitted
+cached 5s old, sysctl 2s: admitted
+```
+
+After:
+
+```
+cached 14s old, sysctl 6s: stale-telemetry (raised)
+cached 5s old, sysctl 2s: admitted
+```
