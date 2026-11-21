@@ -1,0 +1,274 @@
+diff --git a/coordinator/bin/coordq b/coordinator/bin/coordq
+index b06c8277..bfcfc9cc 100755
+--- a/coordinator/bin/coordq
++++ b/coordinator/bin/coordq
+@@ -79,6 +79,17 @@ STUCK_FILE = "gatekeep-stuck.txt"
+ # A gate that dies without a verdict moves once to the next reviewer, and a
+ # head whose moved gate dies too is given up until its head changes.
+ GATE_RETRY_LIMIT = 1
++# The failed gate reviews one pull request gets before it goes to Shyam.
++# The lane owns this rule (lane_driver.GATE_ROUND_CAP) and counts the rounds
++# in its ledger; gatekeep reads that same ledger, so a pull request at the cap
++# is not gated again. The number is repeated here because the lane driver is
++# not on gatekeep's path in the installed layout.
++GATE_ROUND_CAP = 3
++# The lane's ledger, where the failed gate reviews of a pull request are
++# counted. The path comes from the environment, so a test reads a scratch
++# ledger and never the live one.
++LANE_LEDGER = os.environ.get(
++    "COORDQ_LANE_LEDGER", os.path.expanduser("~/Code/coordinator/loop/lanes-ledger.json"))
+ # The board action keys. A board action for one head is one send, so the
+ # key of that action belongs to one queue item. The map holds the key of
+ # every action the queue has taken, with the item that took it and what
+@@ -1648,6 +1659,42 @@ def gate_proof(settings, repo, issue, head):
+     return state, text, path
+ 
+ 
++def lane_ledger():
++    """The lane's ledger, or {} when it cannot be read.
++
++    The ledger is the lane's own record of the failed gate reviews of a
++    pull request. A ledger that cannot be read is no reason to stop the
++    gate: the pull request is gated as before, and the lane still holds
++    the round cap on its own side.
++    """
++    try:
++        with open(LANE_LEDGER) as handle:
++            ledger = json.load(handle)
++    except (OSError, ValueError):
++        return {}
++    return ledger if isinstance(ledger, dict) else {}
++
++
++def gate_rounds_used(repo, number, ledger):
++    """True when the lane's ledger says a pull request used its rounds.
++
++    The count is the lane's: the failed reviews it recorded for the pull
++    request, and the fix rounds it already sent, whichever is larger. A
++    pull request at or over the cap is re-cut into smaller pull requests
++    or taken over by Shyam, so gatekeep queues no gate for it.
++    """
++    state = ledger.get(f"rounds:{repo}#{number}")
++    if not isinstance(state, dict):
++        state = {}
++    try:
++        count = int(state.get("count", 0))
++    except (TypeError, ValueError):
++        count = 0
++    prefix = f"fix:{repo}#{number}:"
++    count = max(count, sum(1 for key in ledger if key.startswith(prefix)))
++    return count >= GATE_ROUND_CAP
++
++
+ def gate_candidates(config):
+     """The gate candidates and the skips of one gatekeep run.
+ 
+@@ -1661,6 +1708,7 @@ def gate_candidates(config):
+     login = login_run.stdout.strip()
+     receipts = load_receipts()
+     queue = load()
++    rounds = lane_ledger()
+     skipped = set()
+     noted = set()
+     for repo, settings in config["repos"].items():
+@@ -1668,6 +1716,15 @@ def gate_candidates(config):
+             if pr["draft"]:
+                 continue
+             head, number = pr["head"]["sha"], pr["number"]
++            # The lane's round count is read before anything else, so a
++            # pull request that used its reviews is skipped instead of
++            # gated again on every new head (SRW#1338 was gated ten times).
++            if gate_rounds_used(repo, number, rounds):
++                print(f"skip {repo}#{number}: at the gate round cap, no gate queued",
++                      file=sys.stderr)
++                yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
++                       "reason": "at the gate round cap"}
++                continue
+             gated_key = f"gate:{repo}#{number}:{head}"
+             if gated_key in queue.get("gatedHeads", {}) and gate_thread_to_judge(queue, gated_key, receipts) is None:
+                 continue
+diff --git a/coordinator/overnight/lane_driver.py b/coordinator/overnight/lane_driver.py
+index e0904d6b..f39267da 100644
+--- a/coordinator/overnight/lane_driver.py
++++ b/coordinator/overnight/lane_driver.py
+@@ -730,19 +730,40 @@ def gate_round_item(repo, number, head):
+     }
+ 
+ 
++def card_on_board(alarm_id):
++    """True when the decisions item is on the board it belongs to.
++
++    The item id is fixed per pull request, so the board is the only place
++    that says whether the card is still there. A board that cannot be read
++    reads as no card, so a missing card is raised again instead of being
++    trusted to a ledger key.
++    """
++    _, board = alarms.read_board(alarms.board_for(DECISIONS_PATH, alarm_id))
++    return any(isinstance(entry, dict) and entry.get("id") == alarm_id
++               for entry in (board or {"items": []})["items"])
++
++
+ def gate_round_decision(repo, number, head, ledger):
+     """Raise the one decisions item for a pull request that used its rounds.
+ 
+     The board holds one item per pull request: the item has a fixed id,
+     so a later pass over the same pull request finds it already raised
+-    instead of raising a second one.
++    instead of raising a second one. The ledger key alone is not proof
++    that the card is there: a card that was withdrawn or never written is
++    raised again, so the ledger and the board cannot disagree.
+     """
+     lkey = f"rounds-decision:{repo}#{number}"
+-    if lkey in ledger:
+-        if not DRY:
+-            alarms.migrate_stale(DECISIONS_PATH, gate_round_item(repo, number, "")["id"])
+-        return f"#{number}: no fix round, the decisions item is on the board"
+     item = gate_round_item(repo, number, head)
++    if lkey in ledger:
++        if DRY:
++            return f"DRY #{number}: no fix round, the decisions item is on the board"
++        if alarms.migrate_stale(DECISIONS_PATH, item["id"]) != "wrote":
++            return f"#{number}: the decisions item could not be published"
++        if card_on_board(item["id"]):
++            return f"#{number}: no fix round, the decisions item is on the board"
++        if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
++            return f"#{number}: the decisions item could not be published"
++        return f"#{number}: no fix round, the decisions item was raised again"
+     if DRY:
+         return f"DRY #{number}: no fix round, one decisions item"
+     if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+diff --git a/coordinator/overnight/selftest.py b/coordinator/overnight/selftest.py
+index 0f165cc6..49130112 100644
+--- a/coordinator/overnight/selftest.py
++++ b/coordinator/overnight/selftest.py
+@@ -2033,6 +2033,19 @@ def gate_round_cap():
+             at_cap(number, report)
+             exact(round_item(number), True)
+         exact(merged, [(30, heads[2])])
++        # A ledger key with no card on the board is not proof the card is
++        # there: the item is raised again, and the ledger key stays. A
++        # second pass finds the card and raises no second one.
++        missing = {f"rounds:{repo}#24": {"count": 3, "head": heads[2]},
++                   f"rounds-decision:{repo}#24": "lane-gate-rounds-shyamsivakumar-mac-ops-24"}
++        result = act(24, heads[3], missing, verdict=("absent", None, ""))
++        exact(result, "#24: no fix round, the decisions item was raised again")
++        exact(round_item(24), True)
++        exact(f"rounds-decision:{repo}#24" in missing, True)
++        result = act(24, heads[3], missing, verdict=("absent", None, ""))
++        exact(result, "#24: no fix round, the decisions item is on the board")
++        exact(sum(1 for item in json.loads(board.read_text())["items"]
++                  if item["id"] == "lane-gate-rounds-shyamsivakumar-mac-ops-24"), 1)
+         # (d) round 1 FAIL with the none line is a normal fix round.
+         sent.clear()
+         with patch.object(lane, "merge_on_reviewed_base", merge):
+@@ -2052,6 +2065,79 @@ def gate_round_cap():
+         two_rounds = {f"fix:{repo}#36:{heads[0]}": "sent", f"fix:{repo}#36:{heads[1]}": "sent"}
+         exact(lane.OPEN_FINDINGS_NONE in brief_for(two_rounds), True)
+         exact(lane.OPEN_FINDINGS_NONE in brief_for({}), False)
++    gatekeep_round_cap()
++
++
++def gatekeep_round_cap():
++    """Gatekeep queues no gate for a pull request at the lane's round cap.
++
++    The lane counts the failed gate reviews of a pull request in its
++    ledger. Gatekeep reads that same count, so a pull request that used
++    its rounds is skipped instead of gated again: SRW#1338 was gated ten
++    times because every new head looked like a fresh candidate.
++    """
++    coordq = load_coordq()
++    repo = "shyamsivakumar/strategy-replay-workbench"
++    head = "3b7671c1" + "0" * 32
++    pr = {"draft": False, "number": 1338, "head": {"sha": head},
++          "body": f"Refs #1338\nBuilder check: PASS {head}\n",
++          "changed_files": 1, "base": {"ref": "main"}}
++    config = {"repos": {repo: {"key": "SRW", "projectId": "fixture"}}}
++
++    class Run:
++        def __init__(self, stdout=""):
++            self.stdout = stdout
++            self.stderr = ""
++            self.returncode = 0
++
++    def run(argv, **kwargs):
++        if argv[:3] == ["gh", "api", "user"]:
++            return Run("me\n")
++        endpoint = argv[-1]
++        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
++            return Run(json.dumps([[pr]]))
++        # A pull request at the cap is skipped before any other read, so
++        # no other endpoint is asked for.
++        raise AssertionError(f"unexpected read for a capped pull request: {endpoint}")
++
++    def events(ledger):
++        with tempfile.TemporaryDirectory() as scratch, \
++             patch.object(coordq, "DIR", scratch), \
++             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
++             patch.object(coordq.gh_gateway, "run", run), \
++             contextlib.redirect_stderr(io.StringIO()) as errors:
++            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
++            found = list(coordq.gate_candidates(config))
++        return found, errors.getvalue()
++
++    # The SRW#1338 shape: ten failed rounds, a new head, no gate queued.
++    found, errors = events({f"rounds:{repo}#1338": {"count": 10, "head": "a" * 40}})
++    exact([event["kind"] for event in found], ["skip"])
++    exact(found[0]["reason"], "at the gate round cap")
++    exact(f"skip {repo}#1338: at the gate round cap, no gate queued" in errors, True)
++    # Three failed rounds is the cap itself, and three fix rounds count the
++    # same way the lane counts them.
++    for ledger in ({f"rounds:{repo}#1338": {"count": 3}},
++                   {f"fix:{repo}#1338:{head}": "sent",
++                    f"fix:{repo}#1338:{'b' * 40}": "sent",
++                    f"fix:{repo}#1338:{'c' * 40}": "sent"}):
++        found, _ = events(ledger)
++        exact([event["kind"] for event in found], ["skip"])
++    # Under the cap the pull request is still gated, and a ledger that
++    # cannot be read is no reason to stop the gate.
++    for ledger in ({f"rounds:{repo}#1338": {"count": 2}}, {},
++                   {"rounds:other/repo#1": {"count": 9}}):
++        with tempfile.TemporaryDirectory() as scratch, \
++             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")):
++            Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
++            exact(coordq.gate_rounds_used(repo, 1338, coordq.lane_ledger()), False)
++    with tempfile.TemporaryDirectory() as scratch, \
++         patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "missing.json")):
++        exact(coordq.lane_ledger(), {})
++        exact(coordq.gate_rounds_used(repo, 1338, coordq.lane_ledger()), False)
++        Path(scratch, "corrupt.json").write_text("{not json")
++        with patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "corrupt.json")):
++            exact(coordq.lane_ledger(), {})
+ 
+ 
+ def decisions_board_guard():
+diff --git a/evidence/MO-676/check-proof.md b/evidence/MO-676/check-proof.md
+new file mode 100644
+index 00000000..e058ee59
+--- /dev/null
++++ b/evidence/MO-676/check-proof.md
+@@ -0,0 +1,25 @@
++# Check proof
++
++Command: `python3 scripts/mac_ops_fast_check.py`
++Checked commit: `6a4df28e2fcc184b3f8095ec23b653218e2c8faf`
++Working tree clean when the checks ran: yes
++Run result: passed
++
++| Check | Command | Result | Detail |
++| --- | --- | --- | --- |
++| lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
++| overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
++| python syntax: coordinator/overnight/lane_driver.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/lane_driver.py` | passed |  |
++| python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
++| python syntax: tests/test_prompt_paths.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_prompt_paths.py` | passed |  |
++| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
++| mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
++| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-fpz4oug6 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-fpz4oug6/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
++| heavy help | `python3 heavy.py --help` | passed |  |
++| tests: tests.test_lane_decisions_board | `python3 -m unittest tests.test_lane_decisions_board` | passed |  |
++| tests: tests.test_prompt_paths | `python3 -m unittest tests.test_prompt_paths` | passed |  |
++
++A result is `passed`, `failed` or `not run`. A failed check stopped the run,
++so every check after it is `not run`. A tool that is not on this machine
++is recorded as `not run` too, and leaves the run incomplete: the run is
++then not a pass.

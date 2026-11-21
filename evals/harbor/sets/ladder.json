@@ -86,7 +86,7 @@
         "tests/test_gate_reviewer_quota.py"
       ],
       "heldout": false,
-      "group": "mac-ops-340"
+      "group": "test_ticket_text_blockers"
     },
     {
       "id": "mac-ops-315",
@@ -116,7 +116,7 @@
         "tests/test_gatekeep_retry_limit.py"
       ],
       "heldout": false,
-      "group": "mac-ops-312"
+      "group": "test_ticket_text_blockers"
     },
     {
       "id": "mac-ops-273",
@@ -162,6 +162,55 @@
       ],
       "heldout": false,
       "group": "srw-1324"
+    },
+    {
+      "id": "mac-ops-716",
+      "repo": "mac-ops",
+      "pr": 716,
+      "ticket": 709,
+      "merge": "2798db775e7fe1930fbc39cb9a41619e6b289a5b",
+      "parent": "9ee32cecc0bfc2ea581b4031614ced9856e60bfe",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_models_block_provider.py",
+      "test_files": [
+        "tests/test_models_block_provider.py"
+      ],
+      "heldout": false,
+      "group": "mac-ops-716"
+    },
+    {
+      "id": "mac-ops-704",
+      "repo": "mac-ops",
+      "pr": 704,
+      "ticket": 701,
+      "merge": "190a87dff62f66ed803a2b493fedff3b04f9fea0",
+      "parent": "911711e812dceb7afbabf557e631ea3a82e9261f",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_gate_reviewer_quota.py tests/test_gatekeep_backstop_reviewer.py tests/test_gatekeep_retry_limit.py tests/test_reviewer_vendor_split.py tests/test_ticket_text_blockers.py",
+      "test_files": [
+        "tests/test_gate_reviewer_quota.py",
+        "tests/test_gatekeep_backstop_reviewer.py",
+        "tests/test_gatekeep_retry_limit.py",
+        "tests/test_reviewer_vendor_split.py",
+        "tests/test_ticket_text_blockers.py"
+      ],
+      "heldout": false,
+      "group": "test_ticket_text_blockers"
+    },
+    {
+      "id": "mac-ops-694",
+      "repo": "mac-ops",
+      "pr": 694,
+      "ticket": 676,
+      "merge": "9fb487b13ae63da1f8cf3034e4c15e2b982d6877",
+      "parent": "ba20cc20f4c1aa7c6af7a89b83d9addd1a5a1d39",
+      "type": "bugfix",
+      "test_command": "python3 -m pytest -q -x tests/test_prompt_paths.py",
+      "test_files": [
+        "tests/test_prompt_paths.py"
+      ],
+      "heldout": false,
+      "group": "test_prompt_paths"
     }
   ]
 }
