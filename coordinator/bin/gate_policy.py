@@ -35,12 +35,9 @@ PROMPT_NO_MERGE = (
 
 
 def verdict(report):
-    found = None
-    for line in report.splitlines():
-        match = re.match(r"VERDICT:\s*(PASS|FAIL)\b", re.sub(r"[*`_]", "", line))
-        if match:
-            found = match.group(1)
-    return found
+    lines = [line for line in report.splitlines() if line.strip()]
+    match = lines and re.match(r"VERDICT:\s*(PASS|FAIL)\b", re.sub(r"[*`_]", "", lines[-1]))
+    return match.group(1) if match else None
 
 
 def complete_pass(reply, head, provides=True):
