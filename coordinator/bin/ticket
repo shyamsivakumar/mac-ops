@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
+import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, tempfile, time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -9,6 +9,7 @@ from gate_bar import GATE_BAR
 from gate_policy import complete_pass
 import gh_gateway
 import journal
+import proof_run
 import prompt_paths
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
@@ -532,6 +533,48 @@ def with_open_lock(repo):
     return f
 
 
+SIGNATURE_HELP = ("a behavior ticket needs an `Expected red signature:` line under its proof command, "
+                  "a regex the proof's output must match on main, for example "
+                  "`Expected red signature: AttributeError: .*repo_dir`")
+
+
+def run_proof_on_main(rcfg, body, repo_dir):
+    """unchecked, prose or red; a proof that is not red on origin/main is refused."""
+    if not rcfg.get("proofOnOpen"):
+        return "unchecked"
+    repo_dir = repo_dir or (os.path.expanduser(rcfg["checkout"]) if rcfg.get("checkout") else None)
+    if repo_dir is None:
+        raise Refuse("proofOnOpen is set for this repo but it has no `checkout` path and no --repo-dir was given")
+    try:
+        spec = proof_run.parse_body(body)
+    except ValueError as e:
+        raise Refuse(str(e))
+    if spec["cmd"].lower().startswith("none (prose)"):
+        return "prose"
+    if not spec["signature"]:
+        raise Refuse(SIGNATURE_HELP)
+    try:
+        re.compile(spec["signature"])
+    except re.error as e:
+        raise Refuse(f"the expected red signature is not a valid regex: {e}")
+    fetch = subprocess.run(["git", "-C", repo_dir, "fetch", "origin", "main"], capture_output=True, text=True)
+    if fetch.returncode:
+        raise Refuse(f"cannot fetch origin/main in {repo_dir}: {fetch.stderr.strip()[-200:]}")
+    fd, record = tempfile.mkstemp(prefix="proof-record-")
+    os.close(fd)
+    try:
+        result = proof_run.run("red", repo_dir, "origin/main", spec["cmd"], spec["signature"], record)
+        with open(record, encoding="utf-8") as handle:
+            tail = handle.read()[-600:]
+    finally:
+        os.unlink(record)
+    if result["state"] == "red":
+        return "red"
+    if result["exit"] == 0:
+        raise Refuse("proof passes on main: nothing to build")
+    raise Refuse(f"proof is unresolved on main (exit {result['exit']}, signature matched: {result['matched']}): {tail}")
+
+
 def cmd_open(a):
     """Open a ticket. The key is minted here, so a ticket is born startable."""
     cfg = load_config()
@@ -557,6 +600,10 @@ def cmd_open(a):
     unknown = [name for name in labels if name not in allowed]
     if unknown:
         die(f"refused: unknown labels: {', '.join(unknown)}", 2)
+    try:
+        proof = run_proof_on_main(rcfg, body, a.repo_dir)
+    except Refuse as e:
+        die(f"refused: {e}", 2)
     try:
         lock = with_open_lock(repo)
         state = read_last_key(repo, rcfg["key"])
@@ -590,7 +637,7 @@ def cmd_open(a):
         if duplicate is not None:
             die(f"refused: issue #{duplicate['number']} already has this title", 2)
         if a.dry_run:
-            print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "dryRun": True}))
+            print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "proof": proof, "dryRun": True}))
             return
         # The key is recorded before the create, so a create that lands and
         # then loses its answer is never handed out again: the record stays
@@ -618,8 +665,8 @@ def cmd_open(a):
         die(f"gh failed ({e.kind}): {e}")
     number = url.rsplit("/", 1)[-1]
     journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(number) if number.isdigit() else None,
-                 key=key, labels=labels)
-    print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "url": url}))
+                 key=key, labels=labels, proof=proof)
+    print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "proof": proof, "url": url}))
 
 
 def cmd_list(a):
@@ -790,7 +837,7 @@ def check_body(cfg, body, labels):
         cap = cfg.get("limits", {}).get("maxCodeLines", MAX_CODE_LINES)
         if int(value.replace(",", "")) > cap and "type:large" not in labels:
             return f"Size names {value} code lines, the cap is {cap}"
-    proofs = re.findall(r"(?m)^\s*(?:\d+\.\s*)?Proof command:[ \t]*(.*)$", body)
+    proofs = proof_run.PROOF_LINE.findall(body)
     if not proofs:
         return ("a behavior ticket needs a `Proof command:` block "
                 "(docs and config tickets say `Proof command: none (prose)`)")
@@ -2147,6 +2194,7 @@ def main():
     s.add_argument("--label", default="", help="comma separated labels")
     s.add_argument("--require-key", action="store_true", help="refuse a title without a key instead of minting one")
     s.add_argument("--dry-run", action="store_true", help="print the title this would use and stop")
+    s.add_argument("--repo-dir", help="checkout that holds origin/main for the proof run (overrides the repo checkout in tickets.json)")
     s.set_defaults(fn=cmd_open)
     s = sub.add_parser("list")
     s.add_argument("--json", action="store_true")
