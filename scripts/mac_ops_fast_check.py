@@ -301,10 +301,11 @@ def check_isolation(run, isolation, env):
         child_env = {**env, isolation.ROOT_VAR: str(root)}
         results[name] = run(command, timeout=timeout, check=False, capture=True,
                             child_env=child_env)
-        if not (root / "bin" / "gh").is_file():
-            raise AssertionError(
-                f"the {name} entry point did not install the isolation: no fake "
-                f"`gh` in {root}, so the run reached the real one")
+        for fake in ("gh", "t3mcp"):
+            if not (root / "bin" / fake).is_file():
+                raise AssertionError(
+                    f"the {name} entry point did not install the isolation: no fake "
+                    f"`{fake}` in {root}, so the run reached the real one")
         refusals = root / "refusals.log"
         if refusals.is_file():
             refused.extend(refusals.read_text().splitlines())
@@ -350,7 +351,7 @@ def check_isolation(run, isolation, env):
     return (f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
             f"{before[1]}, unchanged after the run; gh-usage lines in total "
             f"{before[2]} -> {after[2]}; both entry points installed the fake "
-            f"`gh` themselves; no call the fake `gh` refused; the isolation "
+            f"`gh` and `t3mcp` themselves; no call the fake `gh` refused; the isolation "
             f"tests passed; {ran.group(1)} tests ran (unittest exited "
             f"{suite.returncode}, selftest exited {selftest.returncode})")
 
