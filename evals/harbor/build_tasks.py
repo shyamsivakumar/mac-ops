@@ -422,7 +422,7 @@ def add_task(selection, repo, pr):
     command = (
         f"python3 -m pytest -q -x {' '.join(files)}"
         if profile["profile"] == "python"
-        else f"node {' '.join(files)}"
+        else " && ".join(f"node {path}" for path in files)
     )
     selection["tasks"].append(
         {
