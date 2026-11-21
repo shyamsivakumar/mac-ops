@@ -37,7 +37,7 @@ PROMPT_NO_MERGE = (
 def verdict(report):
     found = None
     for line in report.splitlines():
-        match = re.match(r"VERDICT:\s*(PASS|FAIL)\b", re.sub(r"[*`_]", "", line.strip()))
+        match = re.match(r"VERDICT:\s*(PASS|FAIL)\b", re.sub(r"[*`_]", "", line))
         if match:
             found = match.group(1)
     return found
