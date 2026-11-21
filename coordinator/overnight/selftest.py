@@ -4265,27 +4265,51 @@ def provider_until():
 
     coordq = load_coordq()
 
-    def probe(entry, outcome, runs=1):
+    def probe(entry, launch, run=None, runs=1):
+        calls = []
+
+        def t3(tool, args):
+            calls.append((tool, args.get("action") or args.get("title")))
+            if tool == "t3_thread_launch":
+                return launch
+            if tool == "t3_thread_read":
+                return 0, json.dumps({"thread": {"status": run[0], "latestRunId": "r1"},
+                                      "recentRuns": [{"runId": "r1", "status": run[0]}],
+                                      "items": [{"type": "assistant_message", "text": run[1]}]})
+            return 0, "{}"
+
         with tempfile.TemporaryDirectory() as scratch, \
              patch.dict(os.environ, {"COORDQ_DIR": scratch}), \
              patch.object(model_list, "blocked_identities", real.blocked_identities), \
              patch.object(model_list, "stale_blocks", real.stale_blocks), \
              patch.object(model_list, "unblock", real.unblock), \
-             patch.object(model_list, "probe_failed", real.probe_failed), \
-             patch.object(coordq, "t3_call", return_value=outcome) as called:
+             patch.object(model_list, "probe_started", real.probe_started), \
+             patch.object(coordq.time, "sleep"), \
+             patch.object(coordq, "t3_call", side_effect=t3):
             Path(scratch, model_list.BLOCKED_FILE).write_text(json.dumps({"blocked": {key: entry}}))
             for _ in range(runs):
                 coordq.probe_one_block()
             stored = model_list.read_blocked_file(str(Path(scratch, model_list.BLOCKED_FILE)))["blocked"]
-            return called.call_count, stored.get(key, {}).get("blocked_at")
+            return [name for name, _ in calls], stored.get(key, {}).get("blocked_at"), [label for name, label in calls if name != "t3_thread_read"]
 
     lapsed = {"by": "provider_block", "until": "2001-09-08T00:00:00Z"}
-    exact(probe(lapsed, (0, "{}")), (1, None))
-    exact(probe({"by": "manual"}, (0, "{}")), (1, None))
-    calls, checked = probe(lapsed, (1, "no credits remaining"), runs=2)
-    exact((calls, checked > time.time() - 60), (1, True))
+    started = (0, json.dumps({"thread": {"threadId": "probe-1"}}))
+    archived = ["t3_thread_launch", "t3_thread_read", "t3_thread_organize"]
+    names, at, labels = probe(lapsed, started, ("completed", "ok"))
+    exact((names, at, labels), (archived, None, [f"probe {key}", "archive"]))
+    exact(probe({"by": "manual"}, started, ("completed", "Ok."))[:2], (archived, None))
+    names, at, _ = probe(lapsed, started, ("failed", "no credits remaining"))
+    exact((names, at > time.time() - 60), (archived, True))
+    names, at, _ = probe(lapsed, started, ("completed", "no"))
+    exact((names, at > time.time() - 60), (archived, True))
+    names, at, _ = probe(lapsed, started, ("running", ""))
+    exact((names.count("t3_thread_read"), names[-1], at > time.time() - 60), (18, "t3_thread_organize", True))
+    names, at, _ = probe(lapsed, (1, "launch refused"))
+    exact((names, at > time.time() - 60), (["t3_thread_launch"], True))
+    names, at, _ = probe(lapsed, (1, "launch refused"), runs=2)
+    exact(names, ["t3_thread_launch"])
     fresh = time.time()
-    exact(probe({**lapsed, "blocked_at": fresh}, (0, "{}")), (0, fresh))
+    exact(probe({**lapsed, "blocked_at": fresh}, started, ("completed", "ok"))[:2], ([], fresh))
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "close-evidence": close_evidence, "build-here": build_here}
