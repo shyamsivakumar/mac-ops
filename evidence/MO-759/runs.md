@@ -35,3 +35,13 @@ No line for the exit 0 and exit 78 jobs.
 
     run 1 (cache empty, real installer status): 1.174s
     run 2 (cache hit): 0.175s
+
+## Nested smoke checks found by the full unittest run
+
+`install_coordinator.py status` runs `coordq status` as a smoke check, and `coordq status` now runs the drift check, so the installer's own smoke check ran the installer's status inside it. `python3 -m unittest` on the branch took 443.9s with 13 errors in `tests.test_install_coordinator` (smoke `coordq status` timed out at 30s); origin/main ran 686 tests in 55.3s, OK.
+
+Fix: the drift check runs `install_coordinator.py status --no-smoke` (new flag, status only, skips the smoke checks; `in_sync` and `differs` do not depend on them). After it:
+
+    python3 -m unittest tests.test_install_coordinator tests.test_coordq_capacity: 80 tests in 12.9s, OK
+    tests.test_coordq_capacity alone: 20 tests in 0.24s to 0.29s (cache hit)
+    coordq status twice (temp HOME with receipt): 0.758s then 0.198s

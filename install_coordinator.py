@@ -1054,14 +1054,14 @@ def install(
         print(note)
 
 
-def status(checkout: Path, coordinator: Path | None = None) -> None:
+def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) -> None:
     home = Path.home()
     coordinator = coordinator or coordinator_dir(home)
     pending = changes(checkout, home, coordinator)
     _, kept = split_local_mods(pending, home, recorded_mod_hashes(home))
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
     retired = [str(path) for path in retired_plists(home)]
-    checks = smoke_checks(home)
+    checks = smoke_checks(home) if smoke else []
     print(
         json.dumps(
             {
@@ -1091,6 +1091,7 @@ def main() -> None:
         "action", choices=("install", "status"), nargs="?", default="install"
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-smoke", action="store_true", help="status only: skip the smoke checks")
     parser.add_argument(
         "--overwrite-local-mods",
         action="store_true",
@@ -1104,7 +1105,7 @@ def main() -> None:
     checkout = Path(__file__).resolve().parent
     coordinator = coordinator_dir(Path.home(), args.coordinator_dir)
     if args.action == "status":
-        status(checkout, coordinator)
+        status(checkout, coordinator, not args.no_smoke)
         return
     if not args.dry_run and sys.platform != "darwin":
         raise RuntimeError("Coordinator install requires macOS")
