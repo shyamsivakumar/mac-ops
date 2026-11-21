@@ -39,3 +39,22 @@ c valid block | read_verdict: ('FAIL', [{'id': 'F1', 'severity': 'major', 'bar_c
    report_for_builder: ok
 ```
 gate_verdict in lane_driver.py maps a CONFLICT from any reviewer to SPLIT.
+
+## Round 3 fixtures (gate finding: a finding without `line` raised KeyError in classify_failure)
+Script: two reports through parse_verdict, read_verdict and classify_failure (a: JSON block whose finding omits `line`, plus a prose `[major] b.py:7` line; b: JSON block with `"line": null`).
+
+Before (current head 3a9bccf0):
+```
+line omitted | parse_verdict: True | read_verdict: [{'id': 'F1', 'severity': 'major', 'path': 'a.py', 'text': 'bug'}]
+   classify_failure raises: KeyError 'line'
+line null | parse_verdict: True | read_verdict: [{'id': 'F1', 'severity': 'major', 'path': 'a.py', 'line': None, 'text': 'bug'}]
+   classify_failure: logic
+```
+
+After (valid_finding requires the `line` key; classify_failure reads f.get("line")):
+```
+line omitted | parse_verdict: False | read_verdict: [{'severity': 'major', 'path': 'b.py', 'line': 7, 'text': 'off by one'}]
+   classify_failure: logic
+line null | parse_verdict: True | read_verdict: [{'id': 'F1', 'severity': 'major', 'path': 'a.py', 'line': None, 'text': 'bug'}]
+   classify_failure: logic
+```

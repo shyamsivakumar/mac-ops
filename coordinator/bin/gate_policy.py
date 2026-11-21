@@ -59,7 +59,8 @@ JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
 
 def valid_finding(entry):
     return (isinstance(entry, dict) and all(isinstance(entry.get(k), str) for k in ("severity", "path", "text"))
-            and (entry.get("line") is None or (isinstance(entry["line"], int) and not isinstance(entry["line"], bool))))
+            and "line" in entry
+            and (entry["line"] is None or (isinstance(entry["line"], int) and not isinstance(entry["line"], bool))))
 
 
 def parse_verdict(report):

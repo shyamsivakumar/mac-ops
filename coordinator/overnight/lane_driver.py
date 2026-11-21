@@ -480,7 +480,7 @@ def classify_failure(report, size, prev_lines):
     findings = read_verdict(report)[1]
     if not findings:
         return "logic"
-    blocking = [(f["path"], f["line"]) for f in findings if f["severity"] in ("critical", "major")]
+    blocking = [(f["path"], f.get("line")) for f in findings if f["severity"] in ("critical", "major")]
     if not blocking:
         return "minor_only"
     if all(line in prev_lines.get(path, ()) for path, line in blocking):
