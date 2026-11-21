@@ -51,3 +51,18 @@ Ran 16 tests in 0.030s
 
 OK
 ```
+
+## Gate fixes (round 2)
+
+1. A manual block is never probed. `stale_blocks` lists only entries whose `expiry` is finite (a provider block with `expires_at`, or an old one with `until`); an entry with neither is manual and stays until an operator removes it. Selftest `provider_until`: a `{"by": "manual"}` entry with a stubbed completed "Ok." reply makes no t3 call and keeps its block. Unit test `test_stale_blocks_lists_entries_not_set_or_probed_recently` now holds a manual entry that is not listed.
+2. One monotonic deadline for the whole probe. `probe_one_block` sets `deadline = monotonic() + PROBE_WAIT - PROBE_ARCHIVE_WAIT` (85s); the launch and every read get `min(60, time left)` as their subprocess timeout, the poll sleep is capped at the time left, and the archive call gets 5s, so the probe ends inside 90s. Selftest hang case with a fake clock (read stub advances the clock by the timeout it was given and fails):
+```
+probe elapsed (fake) <= 90: True, longest read timeout <= 60: True, thread archived: True
+```
+A running-forever reply now takes 17 reads (was 18).
+
+The new selftest ran against the previous code first and failed:
+```
+AssertionError: expected ([], None), got (['t3_thread_launch', 't3_thread_read', 't3_thread_organize'], None)
+```
+and passes on the branch (`provider_until: PASS`). The first fast check here on 0ff78882 failed two existing unit tests (stale list with a manual entry; `t3_call` default timeout bound at definition so `T3MCP_TIMEOUT` patching stopped working). Both are fixed in 7c0496b5, and the fast check passed on the M1 (this Mac had 3 waiting).
