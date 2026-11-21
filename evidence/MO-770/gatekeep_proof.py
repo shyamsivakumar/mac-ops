@@ -16,7 +16,7 @@ for k, v in (("user.email", "a@b"), ("user.name", "t")):
 open(work + "/README.md", "w").write("x\n")
 sh("git", "add", ".", cwd=work), sh("git", "commit", "-m", "base", cwd=work), sh("git", "push", "origin", "HEAD:main", cwd=work)
 heads = {}
-for pr, proof in ((1, "test -f README.md"), (2, "test -f MISSING")):
+for pr in (1, 2):
     sh("git", "checkout", "-q", "-b", f"b{pr}", "main", cwd=work)
     open(work + f"/f{pr}", "w").write("y\n")
     sh("git", "add", ".", cwd=work), sh("git", "commit", "-m", f"pr{pr}", cwd=work)
