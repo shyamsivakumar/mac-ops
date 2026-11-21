@@ -22,3 +22,7 @@ The case checks that a thread found by title is written once as
 `ticket:<repo>#1580:a1`, that a ticket with a receipt (a2) is returned without a
 lookup, that a second call does no second lookup, and that an unknown builder
 writes nothing.
+
+The first remote fast check failed only on `watchdog`, which compares EVALS to
+`EXPECTED` in coordinator/bin/hourly_selftest.py; `builder-receipt` was added there
+and the check rerun.
