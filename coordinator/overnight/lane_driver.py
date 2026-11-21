@@ -53,8 +53,7 @@ QUEUE = os.path.join(QUEUE_DIR, "queue.json")
 # The decisions board the lane raises one item on. The path comes from the
 # environment, so a test or a dry run writes its item to a scratch file
 # and never to the board Shyam reads.
-DECISIONS_PATH = os.environ.get(
-    "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
+DECISIONS_PATH = alarms.DECISIONS_PATH
 # The failed gate reviews one pull request gets before it goes to Shyam.
 # The convergence rule (Shyam, 2026-11-18): after 3 review rounds without
 # PASS the pull request is re-cut into smaller pull requests or brought to
@@ -478,13 +477,13 @@ def classify_failure(report, size, prev_lines):
         return "size"
     if "fails the same on origin/main" in report.lower():
         return "environment"
-    findings = re.findall(r"\[(critical|major|minor)\]\s+(\S+?):(\d+)", report)
+    findings = read_verdict(report)[1]
     if not findings:
         return "logic"
-    blocking = [(path, line) for severity, path, line in findings if severity in ("critical", "major")]
+    blocking = [(f["path"], f["line"]) for f in findings if f["severity"] in ("critical", "major")]
     if not blocking:
         return "minor_only"
-    if all(int(line) in prev_lines.get(path, ()) for path, line in blocking):
+    if all(line in prev_lines.get(path, ()) for path, line in blocking):
         return "moved_bar"
     return "logic"
 
