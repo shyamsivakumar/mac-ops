@@ -99,6 +99,34 @@ def _fake_gh(directory):
     return path
 
 
+FAKE_T3MCP = '''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+tool = sys.argv[2] if len(sys.argv) > 2 else ""
+sys.stdin.read()
+if tool in ("t3_thread_launch", "t3_thread_send"):
+    path = os.environ.get("COORDINATOR_GH_REFUSALS")
+    if path:
+        try:
+            with open(path, "a") as stream:
+                stream.write("t3mcp " + tool + "\\n")
+        except OSError:
+            pass
+    sys.stderr.write("fake t3mcp: no answer for " + tool + "\\n")
+    raise SystemExit(1)
+print(json.dumps({"total": 0, "threads": []} if tool == "t3_thread_list" else {}))
+'''
+
+
+def _fake_t3mcp(directory):
+    path = Path(directory) / "t3mcp"
+    path.write_text(FAKE_T3MCP)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
 # The run's temp root. A launcher that names one owns it, and every entry
 # point that installs the isolation again reuses it, so the fake `gh`, the
 # logs and the refusal file are one set for the whole run. Without it each
@@ -134,6 +162,7 @@ def environment(base=None):
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)
     _fake_gh(bin_dir)
+    env["COORDQ_T3MCP"] = str(_fake_t3mcp(bin_dir))
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     # The overnight runner takes an absolute path from this variable, which
     # would bypass PATH and reach the real `gh`. It is redirected only when

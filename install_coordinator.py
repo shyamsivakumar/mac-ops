@@ -27,7 +27,7 @@ import models
 
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
-CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
+CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "factory.json")
 # The board config belongs to the machine. The policy the coordinator runs
 # with is decided on the Mac, so the installed copy is the live file and the
 # repository copy is only the seed for a machine that has none. A local
@@ -953,6 +953,15 @@ def require_main_source(checkout: Path) -> str:
     return head
 
 
+def manifest_hashes(checkout: Path) -> dict[str, str]:
+    root = checkout / "coordinator"
+    arms = json.loads((root / "config" / "factory.json").read_text())["arms"]
+    return {
+        arm: hashlib.sha256(b"".join((root / name).read_bytes() for name in names)).hexdigest()
+        for arm, names in arms.items()
+    }
+
+
 def install(
     checkout: Path,
     dry_run: bool,
@@ -1042,6 +1051,7 @@ def install(
             "installed_at": time.time(),
             "written": [str(t) for t, _, _ in pending],
             "mod_hashes": mod_hashes,
+            "manifest": manifest_hashes(checkout),
             "backups": str(backups),
         }
         write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
