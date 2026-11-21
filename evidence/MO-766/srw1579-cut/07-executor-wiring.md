@@ -32,7 +32,7 @@ Provides: the pieces named above, taken from #1579 head `cd544b89` without chang
 1. `heavy scripts/check.sh` passes on the final head.
 2. Proof command: grep -c reserveSellSend thala_v2_executor.js
 Expected red signature: ^0$
-Green on the PR head: a count of 1 or more (a structural check; the behavior proof is in the last ticket)
+Green with its blockers merged: a count of 1 or more (a structural check; the behavior proof is in the last ticket)
 3. `Builder check: PASS <full sha>` on its own line in the PR body.
 
 ## CI

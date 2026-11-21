@@ -35,7 +35,7 @@ Provides: the pieces named above, taken from #1579 head `cd544b89` without chang
 1. `heavy scripts/check.sh` passes on the final head.
 2. Proof command: node scripts/srw1458_sell_reservation_proof.cjs
 Expected red signature: Cannot find module
-Green on the PR head: PASS: 7 cases
+Green with its blockers merged: PASS: 7 cases
 3. `Builder check: PASS <full sha>` on its own line in the PR body.
 
 ## CI

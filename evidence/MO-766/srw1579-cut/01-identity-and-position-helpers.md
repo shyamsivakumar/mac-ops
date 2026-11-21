@@ -1,6 +1,6 @@
 ## Goal and why
 
-The cumulative sell reservation owner for SRW #1458 starts with its pure helpers: identity keys and the position shape. Nothing calls them yet.
+The cumulative sell reservation owner for SRW #1458 starts with its pure helpers: identity keys and the position shape. Nothing calls them yet, and the helpers it leaves unexported stay private until a later ticket needs them.
 
 This is ticket 1 of 8 cutting SRW #1579, which counts 798 code lines in 4 code files, over the cap of 150 lines and 3 files.
 
@@ -12,9 +12,9 @@ This is ticket 1 of 8 cutting SRW #1579, which counts 798 code lines in 4 code f
 ## Scope and non-goals
 
 In:
-- `thala_executor/order_identity.cjs`: the RESERVATION_* constants, `TERMINAL_ORDER_STATUSES`, `canonicalIdentity`, `reservationKey`, `sellReservationIdentity`, `executionDedupKey`, `emptyPosition`, `clonePosition`, `outstandingOf`, `soldOf`, `reservedOf`, `rowSoldOf`, `rowReservedOf` (no export yet)
+- `thala_executor/order_identity.cjs`: the RESERVATION_* constants, `TERMINAL_ORDER_STATUSES`, `canonicalIdentity`, `reservationKey`, `sellReservationIdentity`, `executionDedupKey`, `emptyPosition`, `clonePosition`, `outstandingOf`, `soldOf`, `reservedOf`, `rowSoldOf`, `rowReservedOf`, and the `module.exports` entries for the RESERVATION_* constants, `TERMINAL_ORDER_STATUSES`, `canonicalIdentity`, `reservationKey`, `sellReservationIdentity`, `executionDedupKey`
 
-Size: about 101 code lines, 1 code file.
+Size: about 110 code lines, 1 code file.
 
 Out: every other file of #1579. Activation of the reservation book (P54, #1464).
 
@@ -32,7 +32,7 @@ Nothing.
 1. `heavy scripts/check.sh` passes on the final head.
 2. Proof command: node -e "const m=require('./thala_executor/order_identity.cjs');console.log(['canonicalIdentity','reservationKey','sellReservationIdentity','executionDedupKey'].map(k=>typeof m[k]).join())"
 Expected red signature: undefined
-Green on the PR head: function,function,function,function
+Green with its blockers merged: function,function,function,function
 3. `Builder check: PASS <full sha>` on its own line in the PR body.
 
 ## CI

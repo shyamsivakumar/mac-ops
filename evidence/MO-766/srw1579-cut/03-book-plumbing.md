@@ -12,9 +12,9 @@ This is ticket 3 of 8 cutting SRW #1579, which counts 798 code lines in 4 code f
 ## Scope and non-goals
 
 In:
-- `thala_executor/order_identity.cjs`: `createSellReservationBook` argument checks, `readBook`, `acquireEpoch`, `fencedState`, `commit`, `positionFor`, `requireContract`
+- `thala_executor/order_identity.cjs`: `createSellReservationBook` argument checks, `readBook`, `acquireEpoch`, `fencedState`, `commit`, `positionFor`, `requireContract`, the returned handle fields, and the `createSellReservationBook` entry in `module.exports`
 
-Size: about 125 code lines, 1 code file.
+Size: about 126 code lines, 1 code file.
 
 Out: every other file of #1579. Activation of the reservation book (P54, #1464).
 
@@ -32,7 +32,7 @@ Provides: the pieces named above, taken from #1579 head `cd544b89` without chang
 1. `heavy scripts/check.sh` passes on the final head.
 2. Proof command: node -e "const s={d:'{}',load(){return JSON.parse(this.d)},save(v){this.d=JSON.stringify(v)},compareAndSwap(e,n){if(JSON.stringify(e)!==this.d)return false;this.d=JSON.stringify(n);return true}};const m=require('./thala_executor/order_identity.cjs');const b=m.createSellReservationBook({store:s,environment:'paper',accountId:'a'});console.log(['environment', 'accountId', 'botId', 'writerId', 'epoch'].map(k=>typeof b[k]).join())"
 Expected red signature: undefined|is not a function
-Green on the PR head: string,string,string,string,number
+Green with its blockers merged: string,string,string,string,number
 3. `Builder check: PASS <full sha>` on its own line in the PR body.
 
 ## CI
