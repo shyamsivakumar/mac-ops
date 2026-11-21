@@ -25,7 +25,7 @@ FileNotFoundError: [Errno 2] No such file or directory: '/var/folders/d3/kwh8z2b
 
 After: head 1 (green) gated with the record, head 2 (red) no gate and one card, run 2 makes no new proof run, flag-off repo (#3) queued unchanged:
 ```
-queued gate:o/on#1:faa4099c48f6366a659a89639e69b650f6eaf9c2 reviewer i m
+queued gate:o/on#1:8bcf0a962163660e8a2d6efd598159e0b3c179d4 reviewer i m
 queued gate:o/off#3:cccccccccccccccccccccccccccccccccccccccc reviewer i m
 --- run 1: proof runs so far 2
 --- run 2: proof runs so far 2
