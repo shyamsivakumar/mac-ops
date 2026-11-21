@@ -44,3 +44,20 @@ The flagged file is `evals/ladder/traces/flagged-2026-11-20.jsonl` (gitignored, 
 
 Input: `git clone https://user:hunter2@github.com/x/y.git`, `Authorization: Bearer abc123`, `password=foo`
 Excerpt: `git clone [redacted]github.com/x/y.git`, `[redacted]`, `[redacted]`
+
+## Gate fix (secrets in excerpts, bad records, fractional UTC)
+
+Proof script: a pi session with 5 failed tool calls echoing `{"password": "hunter2"}`, one truncated JSONL line, and a `.123Z` stamp. Before = head 08cbf734 code, after = 7cc38185.
+
+    BEFORE (no truncated line):
+    rows: ['5 failed tool calls, first: bash failed: request failed: {"password": "hunter2"}']
+    hunter2 leaked: True
+    skipped: n/a
+    ts: False
+    BEFORE (truncated line):
+    json.decoder.JSONDecodeError: Unterminated string starting at: line 1 column 15 (char 14)
+    AFTER (truncated line):
+    rows: ['5 failed tool calls, first: bash failed: tool_failure']
+    hunter2 leaked: False
+    skipped: {'bad pi record': 1}
+    ts: True
