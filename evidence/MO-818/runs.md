@@ -51,3 +51,14 @@ The cause is UNCERTAIN. The fast check on this head is the one run that shows wh
 - /Users/shyamsivakumar/mac-ops-test-bcur8952
 - /Users/shyamsivakumar/mac-ops-test-muke92_z
 - /Users/shyamsivakumar/mac-ops-test-yn7xrvf5
+
+## Expiry cannot escape the isolation base (gate fix)
+
+Run in a temp sandbox on the fixed code (`python3 -I proof.py`):
+
+```
+1 symlink base: target kept = True | root under real tmp = True
+2 child symlink skipped, outside kept = True
+3 old no owner.pid kept = True
+4 old dead pid removed = True
+```
