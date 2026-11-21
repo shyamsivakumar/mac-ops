@@ -1064,6 +1064,31 @@ def install(
         print(note)
 
 
+def flatten_keys(node: dict, prefix: str = "") -> dict:
+    flat = {}
+    for key, value in node.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            flat.update(flatten_keys(value, f"{path}."))
+        else:
+            flat[path] = value
+    return flat
+
+
+def config_key_drift(checkout: Path, home: Path) -> list[str]:
+    live_file = home / ".coordinator" / "tickets.json"
+    if not live_file.exists():
+        return []
+    repo = flatten_keys(json.loads((checkout / "coordinator/config/tickets.json").read_text()))
+    live = flatten_keys(json.loads(live_file.read_text()))
+    return [
+        path
+        for path, value in repo.items()
+        if path not in live
+        or (path.startswith("repos.") and not path.endswith(".projectId") and live[path] != value)
+    ]
+
+
 def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) -> None:
     home = Path.home()
     coordinator = coordinator or coordinator_dir(home)
@@ -1079,6 +1104,7 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
                 "healthy": all(check["healthy"] for check in checks),
                 "smoke_checks": checks,
                 "differs": [str(t) for t, _, _ in pending],
+                "config_key_drift": config_key_drift(checkout, home),
                 "kept_local": [str(t) for t in kept],
                 "locally_owned": [
                     str(home / ".coordinator" / name)
