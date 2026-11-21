@@ -3,15 +3,15 @@ import argparse, json, os, re, shutil, signal, subprocess, sys, tempfile
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TIMEOUT = 120
+PROOF_LINE = re.compile(r"^\s*(?:\d+\.\s*)?proof command:[ \t]*(.*)$", re.I | re.M)
 
 
 def parse_body(text):
     lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines)
-                  if line.strip().lower().startswith("proof command:")), None)
+    start = next((i for i, line in enumerate(lines) if PROOF_LINE.match(line)), None)
     if start is None:
         raise ValueError("the ticket body carries no proof command")
-    inline = lines[start].split(":", 1)[1].strip()
+    inline = PROOF_LINE.match(lines[start]).group(1).strip()
     if len(inline) > 1 and inline.startswith("`") and inline.endswith("`"):
         inline = inline.strip("`").strip()
     cmd_lines = [inline] if inline else []
