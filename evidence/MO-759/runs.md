@@ -21,12 +21,17 @@ No line for the exit 0 and exit 78 jobs.
 
 `tick_alarm()` returns text. Its three callers (`coordq status`, `overnight` report, `coord-tick`) print it. It does not call `alarms.py`, so these alarms reach no board file; they appear in the tick log, `coordq status` and the morning report.
 
-## Suite timing, `python3 -m unittest tests.test_coordq_capacity` (the module that reaches `tick_alarm` via `coordq status`; not under heavy)
+## Suite timing, `python3 -m unittest tests.test_coordq_capacity` (reaches `tick_alarm` through `coordq status`; run directly, not under heavy)
 
 | Tree | Result |
 | --- | --- |
-| origin/main | 20 tests in 0.464s, 0.55s wall |
-| branch before the fix | 20 tests in 2.958s, 3.04s wall (about 6x slower) |
-| branch with the isolation skip | 20 tests in 0.456s, 0.52s wall |
+| origin/main | 20 tests in 0.482s, 0.483s, 0.435s |
+| branch, no cache (first version) | 20 tests in 2.958s |
+| branch, drift status cached 10 minutes, no test-isolation branch | 20 tests in 0.514s, 0.509s, 0.529s (the first run after the cache was empty took 1.258s) |
 
-The two external calls cost about 2.5s per `coordq status` run. Under `COORDINATOR_TEST_ISOLATION_DIR` (gh_isolation.ROOT_VAR) `tick_alarm()` now returns only the stale-log alarm and skips `launchctl list` and the installer status.
+`launchctl list` costs 0.04s, so it is not cached. `install_coordinator.py status` is cached for 10 minutes in `install-drift.status.json` next to `install-drift.first-seen`.
+
+## Two back-to-back `coordq status` calls (temp HOME with a receipt, temp COORDQ_DIR and COORD_JOURNAL_DIR)
+
+    run 1 (cache empty, real installer status): 1.174s
+    run 2 (cache hit): 0.175s
