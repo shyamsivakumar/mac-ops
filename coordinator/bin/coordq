@@ -1657,6 +1657,33 @@ def builder_thread_for_issue(repo, issue):
     return builder_thread_for_key(key)
 
 
+def recorded_builder(receipts, repo, issue):
+    prefix = f"ticket:{repo}#{issue}:a"
+    attempts = {int(k[len(prefix):]): v for k, v in receipts.items()
+                if k.startswith(prefix) and k[len(prefix):].isdigit()}
+    return attempts[max(attempts)] if attempts else None
+
+
+def record_builder(repo, issue):
+    found = recorded_builder(load_receipts(), repo, issue)
+    if found:
+        return found
+    thread = builder_thread_for_issue(repo, issue)
+    if not thread:
+        return None
+    with Lock(True):
+        receipts = load_receipts()
+        found = recorded_builder(receipts, repo, issue)
+        if found:
+            return found
+        receipts[f"ticket:{repo}#{issue}:a1"] = thread
+        receipts_path = path("dispatch-receipts.json")
+        with open(receipts_path + ".tmp", "w") as f:
+            json.dump(receipts, f)
+        os.replace(receipts_path + ".tmp", receipts_path)
+    return thread
+
+
 def router_chain(route):
     """The fallback chain of a pi task route, in the order the router tries it."""
     try:
@@ -2584,17 +2611,7 @@ def cmd_fix(a):
             break
     if not issue:
         die(f"refused: {repo}#{number} names no ticket, so it has no builder")
-    prefix = f"ticket:{repo}#{issue}:a"
-    builder, attempt = "", 0
-    for receipt_key, value in receipts.items():
-        if not receipt_key.startswith(prefix):
-            continue
-        try:
-            number_of_attempt = int(receipt_key[len(prefix):])
-        except ValueError:
-            continue
-        if number_of_attempt > attempt:
-            builder, attempt = value, number_of_attempt
+    builder = record_builder(repo, issue)
     if not builder:
         die(f"refused: no builder thread is known for {repo}#{issue}")
     message = (
