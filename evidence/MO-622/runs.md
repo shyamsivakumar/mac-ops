@@ -1,35 +1,35 @@
 # MO-622 proof runs
 
-## Before (origin/main heavy.py)
-```
-[job boots NEW, OLD booted before] still booted: ['OLD', 'NEW']  simctl shutdown calls: []
-  events: []
-[job boots NEW while another heavy job runs] still booted: ['OLD', 'NEW']  simctl shutdown calls: []
-  events: []
-[job boots nothing] still booted: ['OLD']  simctl shutdown calls: []
-  events: []
-Traceback (most recent call last):
-  File "/Users/shyamsivakumar/Code/mac-ops-worktrees/mo622/evidence/MO-622/proof.py", line 93, in <module>
-    second_job_after_first_shutdown()
-  File "/Users/shyamsivakumar/Code/mac-ops-worktrees/mo622/evidence/MO-622/proof.py", line 76, in second_job_after_first_shutdown
-    chained = dataclasses.replace(deps, shutdown_simulator=shutdown_then_register)
-  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/dataclasses.py", line 1284, in replace
-    return obj.__class__(**changes)
-TypeError: __init__() got an unexpected keyword argument 'shutdown_simulator'
-```
+Fix round for PR 839: heavy shuts down only a simulator whose udid appears in the job's own command. A device that merely booted during the job is left alone.
 
-(The last scenario cannot run on origin/main: it has no shutdown hook, so the script stops with the TypeError above. No simulator is shut down there in any scenario.)
-
-## After (branch)
+## Before (PR head 0311a810 heavy.py)
 ```
 [job boots NEW, OLD booted before] still booted: ['OLD']  simctl shutdown calls: ['shutdown NEW']
   events: [('simulator-shutdown', 'NEW')]
 [job boots NEW while another heavy job runs] still booted: ['OLD', 'NEW']  simctl shutdown calls: []
   events: [('simulator-cleanup-skipped', 'NEW')]
+[job boots NEW, a device not in its command boots too] still booted: ['OLD']  simctl shutdown calls: ['shutdown NEW', 'shutdown OTHER']
+  events: [('simulator-shutdown', 'NEW'), ('simulator-shutdown', 'OTHER')]
 [job boots nothing] still booted: ['OLD']  simctl shutdown calls: []
   events: []
 [job boots A and B, a second job registers after A is shut down] still booted: ['OLD', 'B']  simctl shutdown calls: ['shutdown A']
   events: [('simulator-shutdown', 'A'), ('simulator-cleanup-skipped', 'B')]
 ```
+The new case ("a device not in its command boots too") shuts down OTHER, a device the job never named.
 
-Stubbed xcrun on PATH (fake simctl list/boot/shutdown, erase/delete log FORBIDDEN); real run_supervisor and Registry in a temp dir. No real simulator was booted. The last scenario registers a second job between the shutdown of A and B: B is skipped and stays booted, so the overlap window is one device shutdown.
+## After (this fix)
+```
+[job boots NEW, OLD booted before] still booted: ['OLD']  simctl shutdown calls: ['shutdown NEW']
+  events: [('simulator-shutdown', 'NEW')]
+[job boots NEW while another heavy job runs] still booted: ['OLD', 'NEW']  simctl shutdown calls: []
+  events: [('simulator-cleanup-skipped', 'NEW')]
+[job boots NEW, a device not in its command boots too] still booted: ['OLD', 'OTHER']  simctl shutdown calls: ['shutdown NEW']
+  events: [('simulator-shutdown', 'NEW')]
+[job boots nothing] still booted: ['OLD']  simctl shutdown calls: []
+  events: []
+[job boots A and B, a second job registers after A is shut down] still booted: ['OLD', 'B']  simctl shutdown calls: ['shutdown A']
+  events: [('simulator-shutdown', 'A'), ('simulator-cleanup-skipped', 'B')]
+```
+OTHER stays booted; NEW, named in the command, is shut down. The other scenarios are unchanged.
+
+Stubbed xcrun on PATH (fake simctl list/boot/shutdown, erase/delete log FORBIDDEN); real run_supervisor and Registry in a temp dir. No real simulator was booted. Run: `python3 evidence/MO-622/proof.py [heavy dir]`.

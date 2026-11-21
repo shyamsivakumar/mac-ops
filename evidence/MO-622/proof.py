@@ -18,7 +18,7 @@ stub.write_text(f"""#!/bin/bash
 S={state}; L={log}; touch $S
 case "$2" in
   list) python3 -c "import json;print(json.dumps({{'devices':{{'iOS 18':[{{'udid':u.strip(),'state':'Booted'}} for u in open('$S') if u.strip()]}}}}))" ;;
-  boot) for u in "${{@:3}}"; do echo $u >> $S; done ;;
+  boot) for u in "${{@:3}}"; do echo $u >> $S; done; [ -f {work}/foreign ] && cat {work}/foreign >> $S ;;
   shutdown) grep -vx "$3" $S > $S.n; mv $S.n $S; echo "shutdown $3" >> $L ;;
   erase|delete) echo "FORBIDDEN $2" >> $L ;;
 esac
@@ -37,8 +37,9 @@ deps = heavy.SupervisorDeps(
     legacy_slots=lambda table: 0)
 
 
-def scenario(name, jobs, deps=deps):
+def scenario(name, jobs, deps=deps, foreign=""):
     state.write_text("OLD\n")
+    (work / "foreign").write_text(foreign)
     log.write_text("")
     reg = heavy.Registry(Path(tempfile.mkdtemp(dir=work)))
     reg.directory.chmod(0o700)
@@ -55,6 +56,7 @@ def scenario(name, jobs, deps=deps):
 
 scenario("job boots NEW, OLD booted before", [["xcrun", "simctl", "boot", "NEW"]])
 scenario("job boots NEW while another heavy job runs", [["sleep", "4"], ["xcrun", "simctl", "boot", "NEW"]])
+scenario("job boots NEW, a device not in its command boots too", [["xcrun", "simctl", "boot", "NEW"]], foreign="OTHER\n")
 scenario("job boots nothing", [["xcrun", "simctl", "list", "devices"]])
 
 

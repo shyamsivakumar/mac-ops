@@ -1693,6 +1693,7 @@ def _shutdown_job_simulators(
     registry: Registry,
     record: Dict[str, Any],
     before: Optional[set],
+    argv: Sequence[str],
     deps: SupervisorDeps,
 ) -> None:
     if before is None:
@@ -1700,7 +1701,8 @@ def _shutdown_job_simulators(
     after = deps.booted_simulators()
     if after is None:
         return
-    leftovers = sorted(after - before)
+    command = " ".join(argv).lower()
+    leftovers = sorted(udid for udid in after - before if udid.lower() in command)
     if not leftovers:
         return
     for udid in leftovers:
@@ -3403,7 +3405,7 @@ def _launch_job(
                     pass
                 try:
                     _shutdown_job_simulators(
-                        registry, record, simulators_before, deps
+                        registry, record, simulators_before, argv, deps
                     )
                 except Exception:
                     pass
