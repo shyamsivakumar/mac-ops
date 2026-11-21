@@ -40,6 +40,8 @@ SAMPLE_MAX_AGE = 4.5
 SAMPLE_MAX_AGE_LOADED = 15.0
 NATIVE_TIMEOUT = 2.5
 NATIVE_RETRY_TIMEOUT = 10.0
+SIMULATOR_COMMANDS = frozenset({"xcodebuild", "xcrun", "xctest"})
+SIMULATOR_TIMEOUT = 10.0
 MAX_WAIT_SECONDS = 45 * 60
 CRITICAL_LOAD_PER_CORE = 2.0
 PRESSURE_HOLD_SECONDS = 15.0
@@ -1687,6 +1689,40 @@ def _mark_complete(
         return registry.update(job_id, change)
 
 
+def _shutdown_job_simulators(
+    registry: Registry,
+    record: Dict[str, Any],
+    before: Optional[set],
+    deps: SupervisorDeps,
+) -> None:
+    if before is None:
+        return
+    after = deps.booted_simulators()
+    if after is None:
+        return
+    leftovers = sorted(after - before)
+    if not leftovers:
+        return
+    with registry.lock():
+        others = registry.records()
+    if others:
+        _log_event(
+            registry.directory,
+            "simulator-cleanup-skipped",
+            record,
+            detail=",".join(leftovers),
+        )
+        return
+    for udid in leftovers:
+        ok = deps.shutdown_simulator(udid)
+        _log_event(
+            registry.directory,
+            "simulator-shutdown" if ok else "simulator-shutdown-failed",
+            record,
+            detail=udid,
+        )
+
+
 def _safe_group_members(
     identity: Dict[str, Any],
     *,
@@ -1926,6 +1962,36 @@ def reap_dead_jobs(registry: Optional[Registry] = None) -> int:
         )
 
 
+def booted_simulators() -> Optional[set]:
+    try:
+        output = _run_native(
+            ["xcrun", "simctl", "list", "devices", "booted", "-j"], SIMULATOR_TIMEOUT
+        )
+        data = json.loads(output)
+    except (TelemetryError, ValueError):
+        return None
+    booted = set()
+    for devices in data.get("devices", {}).values():
+        for device in devices:
+            if device.get("state") == "Booted" and "udid" in device:
+                booted.add(device["udid"])
+    return booted
+
+
+def shutdown_simulator(udid: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "shutdown", udid],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=SIMULATOR_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 @dataclass
 class SupervisorDeps:
     """Injectable collaborators for the supervisor, defaulting to live system calls."""
@@ -1946,6 +2012,8 @@ class SupervisorDeps:
     getpgid: Callable[[int], int] = os.getpgid
     getsid: Callable[[int], int] = os.getsid
     wall_clock: Callable[[], float] = time.time
+    booted_simulators: Callable[[], Optional[set]] = lambda: booted_simulators()
+    shutdown_simulator: Callable[[str], bool] = lambda udid: shutdown_simulator(udid)
 
 
 def _queue_sort_key(record: Dict[str, Any], now_ns: Optional[int] = None) -> Tuple[int, int, str]:
@@ -3232,6 +3300,7 @@ def _launch_job(
     gate_opened = False
     cleanup_record = False
     project_fd = None
+    simulators_before = None
     try:
         record = _record(registry, job_id)
         project_fd = _acquire_project_lock(
@@ -3241,6 +3310,9 @@ def _launch_job(
             sleep=deps.sleep,
             stop_event=stop_event,
             heartbeat=lambda: registry.write_heartbeat(job_id, deps.monotonic_ns()),
+        )
+        simulators_before = (
+            deps.booted_simulators() if command_basename in SIMULATOR_COMMANDS else None
         )
         launch = deps.launch_gated_workload or _default_launch_gated_workload
         workload_process, open_gate, close_gate = launch(argv)
@@ -3330,6 +3402,12 @@ def _launch_job(
                 try:
                     with registry.lock():
                         registry.remove(job_id)
+                except Exception:
+                    pass
+                try:
+                    _shutdown_job_simulators(
+                        registry, record, simulators_before, deps
+                    )
                 except Exception:
                     pass
             elif record.get("workload") and (
