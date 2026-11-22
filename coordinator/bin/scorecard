@@ -285,7 +285,64 @@ def percentile(sorted_values, fraction):
     return sorted_values[max(0, math.ceil(fraction * len(sorted_values)) - 1)]
 
 
-def ticket_costs(accepted, receipts, journal_rows, db_path):
+def pi_rates(agent_dir):
+    rates = {}
+    for name, models_of in (("models-store.json", lambda doc: doc.items()),
+                            ("models.json", lambda doc: doc.get("providers", {}).items())):
+        try:
+            with open(os.path.join(agent_dir, name)) as handle:
+                doc = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        for provider, body in models_of(doc):
+            for model in body.get("models", []) if isinstance(body, dict) else []:
+                if isinstance(model.get("cost"), dict):
+                    rates[(provider, model.get("id"))] = model["cost"]
+    return rates
+
+
+TOKEN_KINDS = ("input", "output", "cacheRead", "cacheWrite")
+
+
+def thread_usage(path, rates):
+    tokens, billed, listed, priced = 0, 0.0, 0.0, True
+    try:
+        with open(path) as handle:
+            for line in handle:
+                try:
+                    message = json.loads(line).get("message")
+                except (ValueError, AttributeError):
+                    continue
+                usage = message.get("usage") if isinstance(message, dict) and message.get("role") == "assistant" else None
+                if not isinstance(usage, dict):
+                    continue
+                counts = {kind: usage[kind] for kind in TOKEN_KINDS if isinstance(usage.get(kind), (int, float))}
+                tokens += sum(counts.values())
+                cost = usage.get("cost")
+                paid = cost.get("total") if isinstance(cost, dict) else None
+                if isinstance(paid, (int, float)) and paid > 0:
+                    billed += paid
+                    listed += paid
+                    continue
+                rate = rates.get((message.get("provider"), message.get("model")))
+                if rate is None:
+                    priced = counts == {}
+                else:
+                    listed += sum(counts[kind] * rate.get(kind, 0) for kind in counts) / 1e6
+    except OSError:
+        return None
+    return {"tokens": tokens, "billed": billed, "list": listed if tokens and priced else 0.0}
+
+
+def spread(values, digits):
+    ordered = sorted(values)
+    if not ordered:
+        return {"total": None, "median": None, "p90": None}
+    return {"total": round(sum(ordered), digits), "median": round(statistics.median(ordered), digits),
+            "p90": round(percentile(ordered, 0.9), digits)}
+
+
+def ticket_costs(accepted, receipts, journal_rows, db_path, rates=None):
     prs = collections.defaultdict(set)
     for row in journal_rows:
         if row.get("ticket") is not None and row.get("pr") is not None:
@@ -302,48 +359,29 @@ def ticket_costs(accepted, receipts, journal_rows, db_path):
             for ticket in wanted:
                 if ticket[0] == repo and pr in prs.get(ticket, ()):
                     threads[ticket].add(thread)
-    files = {}
     connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
+    usage = {}
     for thread in {thread for found in threads.values() for thread in found}:
         row = connection.execute(
             "select json_extract(payload_json,'$.nativeThreadRef.nativeId') "
             "from orchestration_v2_projection_provider_threads where thread_id=? and driver='pi'",
             (thread,)).fetchone()
-        if row and row[0]:
-            files[thread] = row[0]
+        found = thread_usage(row[0], rates or {}) if row and row[0] else None
+        if found and found["tokens"]:
+            usage[thread] = found
     connection.close()
-    costs = {}
-    for thread, path in files.items():
-        total = 0.0
-        try:
-            with open(path) as handle:
-                for line in handle:
-                    try:
-                        row = json.loads(line)
-                    except ValueError:
-                        continue
-                    message = row.get("message") if isinstance(row, dict) else None
-                    if not isinstance(message, dict) or message.get("role") != "assistant":
-                        continue
-                    usage = message.get("usage")
-                    cost = usage.get("cost") if isinstance(usage, dict) else None
-                    if isinstance(cost, dict) and isinstance(cost.get("total"), (int, float)):
-                        total += cost["total"]
-        except OSError:
-            continue
-        if total:
-            costs[thread] = total
-    per_ticket, unpriced = [], 0
+    per_ticket = {"tokens": [], "billed": [], "list": []}
+    unpriced = 0
     for found in threads.values():
-        priced = [costs[thread] for thread in found if thread in costs]
-        unpriced += len(found) - len(priced)
-        if priced:
-            per_ticket.append(sum(priced))
-    ordered = sorted(per_ticket)
-    if not ordered:
-        return {"total": None, "median": None, "p90": None, "tickets": 0, "unpriced_threads": unpriced}
-    return {"total": round(sum(ordered), 2), "median": round(statistics.median(ordered), 2),
-            "p90": round(percentile(ordered, 0.9), 2), "tickets": len(ordered),
+        have = [usage[thread] for thread in found if thread in usage]
+        unpriced += sum(1 for thread in found if thread not in usage or not usage[thread]["list"])
+        for name in per_ticket:
+            total = sum(item[name] for item in have)
+            if total:
+                per_ticket[name].append(total)
+    return {"dollars": {**spread(per_ticket["billed"], 2), "tickets": len(per_ticket["billed"])},
+            "list_dollars": {**spread(per_ticket["list"], 2), "tickets": len(per_ticket["list"])},
+            "tokens": {**spread(per_ticket["tokens"], 0), "tickets": len(per_ticket["tokens"])},
             "unpriced_threads": unpriced}
 
 
@@ -550,8 +588,8 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos, cost_sou
     if cost_sources is None:
         ticket_dollars = unknown("receipts file or T3 database unreadable")
     else:
-        ticket_dollars = metric(ticket_costs(accepted, cost_sources[0], live, cost_sources[1]),
-                                "dollars from pi session usage; zero or missing cost is unpriced, not free")
+        ticket_dollars = metric(ticket_costs(accepted, cost_sources[0], live, cost_sources[1], cost_sources[2]),
+                                "dollars is billed cost from pi usage (0 on flat plans); list_dollars prices usage at pi model rates and is not a bill; tokens are input+output+cache; unpriced_threads have no usage or no model rates")
 
     report = {
         "date": str(day), "timezone": "America/Los_Angeles", "repos": len(repos),
@@ -667,7 +705,7 @@ def cmd_report(args):
         connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
         connection.execute("select thread_id from orchestration_v2_projection_provider_threads limit 1").fetchall()
         connection.close()
-        cost_sources = (receipts, db_path)
+        cost_sources = (receipts, db_path, pi_rates(os.environ.get("PI_AGENT_DIR", os.path.expanduser("~/.pi/agent"))))
     except (OSError, ValueError, sqlite3.Error):
         cost_sources = None
     report = build(day, live, backfill, bad, github, window_closed, repos, cost_sources)
