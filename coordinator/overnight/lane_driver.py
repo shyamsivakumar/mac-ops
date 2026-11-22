@@ -114,6 +114,8 @@ def read_json(cmd, fresh=False):
     return json.loads(result.stdout)
 
 
+LOOP_RELEASE_LABEL = "merge:human-ok"
+LOOP_REPO = "shyamsivakumar/mac-ops"
 PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles,labels"
 PASS_PRS = {}
 PASS_WORKTREES = set()
@@ -1043,13 +1045,15 @@ def publish_decision(item):
     return alarms.route_update(DECISIONS_PATH, item["id"], "raise", item)
 
 
-def prompt_merge_item(repo, number, head):
-    """The one item Shyam answers to merge a prompt pull request that passed."""
+def prompt_merge_item(repo, number, head, loop=False):
+    """The one item Shyam answers to merge a prompt or loop-code pull request that passed."""
     key = CFG[repo]["key"]
+    what = ("changes the loop's own code, so it waits for the `merge:human-ok` label or your merge"
+            if loop else "changes prompt, skill or playbook text, so it waits for you")
+    rule = "Loop code never auto-merges without the label" if loop else "Prompt text never auto-merges (your rule)"
     return {"id": f"prompt-merge-{key}-{number}", "group": "Coordinator", "kind": "action",
-            "title": (f"{key}-{number} passed its gate in {repo}. It changes prompt, skill or playbook "
-                      f"text, so it waits for you: merge it or close it."),
-            "why": (f"Prompt text never auto-merges (your rule), so the lane stopped at the verdict on "
+            "title": f"{key}-{number} passed its gate in {repo}. It {what}: merge it or close it.",
+            "why": (f"{rule}, so the lane stopped at the verdict on "
                     f"head {head[:8]} and merged nothing. Merge with "
                     f"`gh pr merge {number} -R {repo} --squash --match-head-commit {head}`.")}
 
@@ -1200,7 +1204,7 @@ def reconcile_prompt_items(snapshot):
     return removed
 
 
-def prompt_pass(repo, number, head, prompt):
+def prompt_pass(repo, number, head, prompt, labels=()):
     """What the lane does with a passing pull request's path state.
 
     A prompt, skill or playbook change never auto-merges (Shyam): the lane
@@ -1211,13 +1215,17 @@ def prompt_pass(repo, number, head, prompt):
     if prompt == prompt_paths.UNKNOWN:
         return (f"skip #{number}: gate PASS, the changed-file list could not be read on "
                 f"head {head[:8]}, next run retries")
-    if prompt != prompt_paths.HOLD:
+    loop = prompt == prompt_paths.LOOP_HOLD and repo == LOOP_REPO
+    if prompt != prompt_paths.HOLD and not loop:
         return None
+    if loop and any(label.get("name") == LOOP_RELEASE_LABEL for label in labels):
+        return None
+    what = "loop code change" if loop else "prompt change"
     if DRY:
         return f"DRY hold #{number} {head}"
-    if publish_decision(prompt_merge_item(repo, number, head)) != "wrote":
-        return f"skip #{number}: prompt change, the decisions item could not be written"
-    return f"skip #{number}: gate PASS, prompt change, Shyam merges"
+    if publish_decision(prompt_merge_item(repo, number, head, loop)) != "wrote":
+        return f"skip #{number}: {what}, the decisions item could not be written"
+    return f"skip #{number}: gate PASS, {what}, Shyam merges"
 
 
 def base_moved_item(repo, number, head, landed, base):
@@ -1334,11 +1342,12 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     # the hold comes first, so a prompt PR is written to the board before
     # anything else looks at the merge.
     prompt = prompt_pull(repo, number, pr.get("changedFiles"), pr.get("baseRefName") or "main", head)
-    held = prompt_pass(repo, number, head, prompt)
+    held = prompt_pass(repo, number, head, prompt, pr.get("labels") or [])
     if held:
-        if prompt == prompt_paths.HOLD:
+        if prompt in (prompt_paths.HOLD, prompt_paths.LOOP_HOLD):
+            reason = "prompt hold" if prompt == prompt_paths.HOLD else "loop code hold"
             journal_once("merge_held", repo, number, head, ledger,
-                         f"journal-held:{repo}#{number}:{head}:prompt hold", reason="prompt hold")
+                         f"journal-held:{repo}#{number}:{head}:{reason}", reason=reason)
         return held
     # Main's gate-round bookkeeping: the round's decisions item must leave
     # the board before the merge, or the merge waits.

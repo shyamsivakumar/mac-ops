@@ -423,10 +423,10 @@ def gate_pipeline():
     full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
     cases = [
         ("checked-head", repo, "absent", "", {}, [], None),
-        ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
+        ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "src/ticket"),
         ("prompt-pass", repo, "PASS", f"CHECK: PASS {head}\nVERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
-        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "src/ticket"),
         ("no-verdict", repo, "none", "interrupted", {}, [], None),
         ("second-no-verdict", repo, "none", "interrupted", {}, [], None),
         ("pass-then-no-verdict-attempt", repo, "none", "interrupted", {}, ["merge", "provides", "ff"], None),
@@ -3249,7 +3249,8 @@ def stall():
     # path, so a change to it is held even though lane_driver.py is code.
     # Replay of #626: its brief change now lands in lane_briefs.py.
     exact(lane.prompt_paths.prompt_scan(["coordinator/bin/lane_briefs.py"]), lane.prompt_paths.HOLD)
-    exact(lane.prompt_paths.prompt_scan(["coordinator/overnight/lane_driver.py"]), lane.prompt_paths.CLEAR)
+    exact(lane.prompt_paths.prompt_scan(["coordinator/overnight/lane_driver.py"]), lane.prompt_paths.LOOP_HOLD)
+    exact(lane.prompt_paths.prompt_scan(["README.md"]), lane.prompt_paths.CLEAR)
     exact("re-read its open pull requests" in Path(lane.__file__).read_text(), False)
     exact("last review round" in Path(lane.__file__).read_text(), False)
     exact("skipped: matching PR #<n>" in brief, True)
