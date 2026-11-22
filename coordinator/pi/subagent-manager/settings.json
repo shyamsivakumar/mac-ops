@@ -1,4 +1,5 @@
 {
   "modelSelection": "pick-first-scoped",
-  "toolFiltering": "allowed"
+  "toolFiltering": "allowed",
+  "costValue": "total"
 }
