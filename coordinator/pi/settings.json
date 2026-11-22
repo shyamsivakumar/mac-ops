@@ -10,7 +10,8 @@
     "claude-team/claude-sonnet-5-5",
     "claude-team/claude-haiku-5-5",
     "claude-team/claude-fable-5-2",
-    "deepseek/deepseek-flash"
+    "deepseek/deepseek-flash",
+    "morph/morph-kimik31"
   ],
   "skills": [],
   "quietStartup": true,
