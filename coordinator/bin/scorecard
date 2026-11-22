@@ -285,27 +285,11 @@ def percentile(sorted_values, fraction):
     return sorted_values[max(0, math.ceil(fraction * len(sorted_values)) - 1)]
 
 
-def pi_rates(agent_dir):
-    rates = {}
-    for name, models_of in (("models-store.json", lambda doc: doc.items()),
-                            ("models.json", lambda doc: doc.get("providers", {}).items())):
-        try:
-            with open(os.path.join(agent_dir, name)) as handle:
-                doc = json.load(handle)
-        except (OSError, ValueError):
-            continue
-        for provider, body in models_of(doc):
-            for model in body.get("models", []) if isinstance(body, dict) else []:
-                if isinstance(model.get("cost"), dict):
-                    rates[(provider, model.get("id"))] = model["cost"]
-    return rates
-
-
 TOKEN_KINDS = ("input", "output", "cacheRead", "cacheWrite")
 
 
-def thread_usage(path, rates):
-    tokens, billed, listed, priced, charged = 0, 0.0, 0.0, True, False
+def thread_usage(path):
+    tokens, billed = 0, 0.0
     try:
         with open(path) as handle:
             for line in handle:
@@ -316,25 +300,14 @@ def thread_usage(path, rates):
                 usage = message.get("usage") if isinstance(message, dict) and message.get("role") == "assistant" else None
                 if not isinstance(usage, dict):
                     continue
-                counts = {kind: usage[kind] for kind in TOKEN_KINDS if isinstance(usage.get(kind), (int, float))}
-                tokens += sum(counts.values())
+                tokens += sum(usage[kind] for kind in TOKEN_KINDS if isinstance(usage.get(kind), (int, float)))
                 cost = usage.get("cost")
                 paid = cost.get("total") if isinstance(cost, dict) else None
-                if isinstance(paid, (int, float)):
-                    charged = True
                 if isinstance(paid, (int, float)) and paid > 0:
                     billed += paid
-                    listed += paid
-                    continue
-                rate = rates.get((message.get("provider"), message.get("model")))
-                if rate is None:
-                    priced = counts == {}
-                else:
-                    listed += sum(counts[kind] * rate.get(kind, 0) for kind in counts) / 1e6
     except OSError:
         return None
-    return {"tokens": tokens, "billed": billed, "list": listed if tokens and priced else 0.0,
-            "charged": charged}
+    return {"tokens": tokens, "billed": billed}
 
 
 def spread(values, digits):
@@ -345,7 +318,7 @@ def spread(values, digits):
             "p90": round(percentile(ordered, 0.9), digits)}
 
 
-def ticket_costs(accepted, receipts, journal_rows, db_path, rates=None):
+def ticket_costs(accepted, receipts, journal_rows, db_path):
     prs = collections.defaultdict(set)
     for row in journal_rows:
         if row.get("ticket") is not None and row.get("pr") is not None:
@@ -364,33 +337,33 @@ def ticket_costs(accepted, receipts, journal_rows, db_path, rates=None):
                     threads[ticket].add(thread)
     connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
     usage = {}
-    billed_known = {}
     for thread in {thread for found in threads.values() for thread in found}:
         row = connection.execute(
             "select json_extract(payload_json,'$.nativeThreadRef.nativeId') "
             "from orchestration_v2_projection_provider_threads where thread_id=? and driver='pi'",
             (thread,)).fetchone()
-        found = thread_usage(row[0], rates or {}) if row and row[0] else None
-        if found and found["tokens"]:
+        found = thread_usage(row[0]) if row and row[0] else None
+        if found is not None:
             usage[thread] = found
-        if found and (found["charged"] or found["tokens"]):
-            billed_known[thread] = found["billed"]
     connection.close()
-    per_ticket = {"tokens": [], "billed": [], "list": []}
+    per_ticket = {"tokens": [], "billed": []}
     unpriced = 0
-    for found in threads.values():
+    no_usage = 0
+    for ticket in accepted:
+        found = threads.get(ticket, ())
         have = [usage[thread] for thread in found if thread in usage]
-        unpriced += sum(1 for thread in found if thread not in usage or not usage[thread]["list"])
-        known = [billed_known[thread] for thread in found if thread in billed_known]
-        if known:
-            per_ticket["billed"].append(sum(known))
-        for name in ("tokens", "list"):
-            total = sum(item[name] for item in have)
-            if total:
-                per_ticket[name].append(total)
-    return {"dollars": {**spread(per_ticket["billed"], 2), "tickets": len(per_ticket["billed"])},
-            "list_dollars": {**spread(per_ticket["list"], 2), "tickets": len(per_ticket["list"])},
-            "tokens": {**spread(per_ticket["tokens"], 0), "tickets": len(per_ticket["tokens"])},
+        unpriced += sum(1 for thread in found if thread not in usage or usage[thread]["billed"] <= 0)
+        tokens = sum(item["tokens"] for item in have)
+        if tokens > 0:
+            per_ticket["tokens"].append(tokens)
+        else:
+            no_usage += 1
+        billed = sum(item["billed"] for item in have)
+        if billed > 0:
+            per_ticket["billed"].append(billed)
+    return {"tickets": len(accepted), "no_usage_tickets": no_usage,
+            "tokens": spread(per_ticket["tokens"], 0),
+            "dollars": {**spread(per_ticket["billed"], 2), "tickets": len(per_ticket["billed"])},
             "unpriced_threads": unpriced}
 
 
@@ -595,17 +568,17 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos, cost_sou
                            "every PR merged that day on GitHub across the configured repos, by repo and number")
 
     if cost_sources is None:
-        ticket_dollars = unknown("receipts file or T3 database unreadable")
+        per_ticket = unknown("receipts file or T3 database unreadable")
     else:
-        ticket_dollars = metric(ticket_costs(accepted, cost_sources[0], live, cost_sources[1], cost_sources[2]),
-                                "dollars is billed cost from pi usage (0 on flat plans); list_dollars prices usage at pi model rates and is not a bill; tokens are input+output+cache; unpriced_threads have no usage or no model rates")
+        per_ticket = metric(ticket_costs(accepted, cost_sources[0], live, cost_sources[1]),
+                            "tokens are input+output+cache; dollars are recorded cost, 0 on flat plans; unpriced_threads have zero or absent recorded cost or no pi session")
 
     report = {
         "date": str(day), "timezone": "America/Los_Angeles", "repos": len(repos),
         "headline": {"accepted_tickets": headline},
         "guardrails": {"change_failure": change_failure, "lead_time": lead_metric,
                        "audit_disagreement": unknown("no audit yet")},
-        "cost": {"human_touches": touches, "ticket_dollars": ticket_dollars},
+        "cost": {"human_touches": touches, "per_ticket": per_ticket},
         "flow": {"merges_github": metric(len(merged_refs), "PRs merged that day on GitHub") if gh_ok else unknown(gh_why),
                  "merges_journal": counted("merged"),
                  "launches": with_backfill("launched"),
@@ -711,10 +684,12 @@ def cmd_report(args):
     try:
         with open(os.path.join(queue, "dispatch-receipts.json")) as handle:
             receipts = json.load(handle)
+        if not isinstance(receipts, dict):
+            raise ValueError("dispatch receipts is not a JSON object")
         connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
         connection.execute("select thread_id from orchestration_v2_projection_provider_threads limit 1").fetchall()
         connection.close()
-        cost_sources = (receipts, db_path, pi_rates(os.environ.get("PI_AGENT_DIR", os.path.expanduser("~/.pi/agent"))))
+        cost_sources = (receipts, db_path)
     except (OSError, ValueError, sqlite3.Error):
         cost_sources = None
     report = build(day, live, backfill, bad, github, window_closed, repos, cost_sources)
