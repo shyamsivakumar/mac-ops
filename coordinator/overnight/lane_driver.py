@@ -770,7 +770,7 @@ def park(repo, number, issue, head, reply, ledger):
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Open every new ticket with `ticket open --repo {repo} --title \"<title>\" --body-file <file> --label stage:todo,type:<type>,priority:<n>`; the tool mints the key, so never type the key yourself and never use `gh issue create`. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "taskType": "design", "modelSelection": recutter["selection"],
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "900"]).splitlines()[-1]
     ledger[lkey] = out
     return f"#{number}: parked, re-cut {out}"
@@ -1789,7 +1789,7 @@ def unstick(repo, ledger, excl=frozenset()):
         return "unstick waits, every builder is blocked"
     msg = UNSTICK_BRIEF.replace("{repo}", repo).replace("{list}", lst)
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]
     stamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
     for n in batch:

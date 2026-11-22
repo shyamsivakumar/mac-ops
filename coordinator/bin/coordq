@@ -1964,7 +1964,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
                                prompt=prompt)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
-            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"},
             "clientRequestId": key, "message": message}
 
 
@@ -2428,7 +2428,7 @@ def cmd_gatekeep(a):
                     cap_lines=OVER_CAP_LINES, cap_files=OVER_CAP_FILES)
                 launch = {"projectId": settings["projectId"], "title": title, "taskType": "design",
                           "modelSelection": model_list.selection_for(entry, "design"),
-                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": brief}
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"}, "message": brief}
                 cmd_start(argparse.Namespace(args=json.dumps(launch), title=title, priority=900,
                                              tool="t3_thread_launch", action_key=f"recut:{key}"))
                 print(f"recut #{pr_number}", flush=True)
