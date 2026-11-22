@@ -3,7 +3,7 @@ from unittest.mock import patch
 sys.path[:0] = ["coordinator/bin", "coordinator/overnight"]
 tmp = tempfile.mkdtemp()
 os.environ["COORDQ_DIR"] = tmp + "/q"; os.environ["COORD_JOURNAL_DIR"] = tmp + "/j"; os.environ["HOME"] = tmp
-import lane_driver as L, alarms
+import lane_driver as L
 board = tmp + "/decisions.json"
 L.DECISIONS_PATH = board
 L.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
