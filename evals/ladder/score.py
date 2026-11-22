@@ -2,8 +2,15 @@
 """Score a ladder run directory into reports/<run-id>.json and .md."""
 
 import argparse
+import hashlib
+import inspect
 import json
+import random
+import shlex
+import statistics
+import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -127,7 +134,180 @@ def render_markdown(report):
     return "\n".join(lines) + "\n"
 
 
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def norm(s):
+    return " ".join(str(s).split()).casefold()
+
+
+def read_cases(labels_dir, split_key):
+    labels_dir = Path(labels_dir)
+    wanted = set(json.loads((labels_dir / "split.json").read_text())[split_key])
+    cases, unscored = [], 0
+    for line in (labels_dir / "labels.jsonl").read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            label = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if label.get("id") not in wanted:
+            continue
+        options = label.get("options") or []
+        if options and norm(label.get("answer")) in {norm(o) for o in options}:
+            cases.append(label)
+        else:
+            unscored += 1
+    return cases, unscored
+
+
+def pick(arm_name, arm_cmd, case, repeat):
+    shuffled = list(case["options"])
+    random.Random(f"{case['id']}:{repeat}").shuffle(shuffled)
+    if arm_name == "random":
+        return random.Random(f"pick:{case['id']}:{repeat}").choice(shuffled)
+    if arm_name == "first-option":
+        return shuffled[0]
+    if arm_name == "recorded":
+        return case["recommended_option"]
+    payload = {"id": case["id"], "kind": case["kind"], "item_text": case["item_text"], "options": shuffled}
+    done = subprocess.run(shlex.split(arm_cmd), input=json.dumps(payload), capture_output=True, text=True, check=True)
+    return done.stdout.strip()
+
+
+def locked_score(labels_dir, split_key, arm, arm_cmd, baseline, baseline_cmd, repeats):
+    cases, unscored = read_cases(labels_dir, split_key)
+    per_case, detail = [], []
+    for case in cases:
+        answer = norm(case["answer"])
+        hits = []
+        for repeat in range(repeats):
+            a = norm(pick(arm, arm_cmd, case, repeat)) == answer
+            b = norm(pick(baseline, baseline_cmd, case, repeat)) == answer
+            hits.append((a, b))
+            detail.append({"id": case["id"], "repeat": repeat, "arm": a, "baseline": b})
+        per_case.append(sum(a - b for a, b in hits) / repeats)
+    n = len(per_case)
+    lift = statistics.mean(per_case) * 100 if n else 0.0
+    paired_se = statistics.stdev(per_case) / n ** 0.5 * 100 if n > 1 else 0.0
+    repeat_scores = []
+    for repeat in range(repeats if n else 0):
+        rows = [d for d in detail if d["repeat"] == repeat]
+        a = 100 * sum(d["arm"] for d in rows) / n
+        b = 100 * sum(d["baseline"] for d in rows) / n
+        repeat_scores.append({"arm": a, "baseline": b, "lift": a - b})
+    return {
+        "repeat_scores": repeat_scores,
+        "lift": lift,
+        "paired_se": paired_se,
+        "beats_noise": lift > 2 * paired_se,
+        "min_detectable_lift": 2 * paired_se,
+        "unscored": unscored,
+        "baseline": baseline,
+        "arm": arm,
+        "n": n,
+        "per_case": detail,
+    }
+
+
+def lock_hashes(labels_dir):
+    labels_dir = Path(labels_dir)
+    source = "\n".join(inspect.getsource(f) for f in (locked_score, pick, read_cases))
+    return {
+        "labels": sha(labels_dir / "labels.jsonl"),
+        "split": sha(labels_dir / "split.json"),
+        "scorer": hashlib.sha256(source.encode()).hexdigest(),
+    }
+
+
+def recent_final(path):
+    if not path.exists():
+        return None
+    now = datetime.now(timezone.utc)
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = datetime.fromisoformat(row["ts"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if now - ts < timedelta(days=7):
+            return row["ts"]
+    return None
+
+
+def append_final(path, result):
+    row = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "arm": result["arm"],
+        "baseline": result["baseline"],
+        "lift": result["lift"],
+    }
+    with path.open("a") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def run_locked(args, split_key):
+    if not args.lock.exists():
+        print(f"score: no lock at {args.lock}; run `score.py lock --labels {args.labels}`", file=sys.stderr)
+        return 3
+    if json.loads(args.lock.read_text()) != lock_hashes(args.labels):
+        print(f"score: lock at {args.lock} does not match the labels, split or scorer", file=sys.stderr)
+        return 3
+    if args.command == "final":
+        seen = recent_final(args.final_log)
+        if seen:
+            print(f"score: the final split was checked at {seen}; wait 7 days", file=sys.stderr)
+            return 5
+    runs = [
+        locked_score(args.labels, split_key, args.arm, args.arm_cmd, args.baseline, args.baseline_cmd, args.repeats)
+        for _ in range(2)
+    ]
+    if runs[0] != runs[1]:
+        print("score: two runs of the same scorer disagree; the arm is not deterministic", file=sys.stderr)
+        return 4
+    result = runs[0]
+    if args.json:
+        args.json.write_text(json.dumps(result, indent=2) + "\n")
+    if args.command == "final":
+        append_final(args.final_log, result)
+    print(f"{result['lift']:.2f}")
+    return 0
+
+
+def cli(argv):
+    parser = argparse.ArgumentParser(prog="score.py")
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("locked", "final"):
+        p = sub.add_parser(name)
+        p.add_argument("--labels", type=Path, required=True)
+        p.add_argument("--arm", required=True)
+        p.add_argument("--arm-cmd")
+        p.add_argument("--baseline", required=True)
+        p.add_argument("--baseline-cmd")
+        p.add_argument("--repeats", type=int, default=5)
+        p.add_argument("--json", type=Path)
+        p.add_argument("--lock", type=Path, default=HERE / "score.lock")
+        p.add_argument("--final-log", type=Path, default=HERE / "final_checks.jsonl")
+    lock = sub.add_parser("lock")
+    lock.add_argument("--labels", type=Path, required=True)
+    lock.add_argument("--lock", type=Path, default=HERE / "score.lock")
+    args = parser.parse_args(argv)
+    if args.command == "lock":
+        args.lock.write_text(json.dumps(lock_hashes(args.labels), indent=2) + "\n")
+        return 0
+    return run_locked(args, "heldout" if args.command == "locked" else "final")
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] in ("locked", "final", "lock"):
+        return cli(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--out-dir", type=Path, default=HERE / "reports")
