@@ -423,10 +423,10 @@ def gate_pipeline():
     full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
     cases = [
         ("checked-head", repo, "absent", "", {}, [], None),
-        ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
+        ("pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], "src/ticket"),
         ("prompt-pass", repo, "PASS", f"CHECK: PASS {head}\nVERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
-        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "src/ticket"),
         ("no-verdict", repo, "none", "interrupted", {}, [], None),
         ("second-no-verdict", repo, "none", "interrupted", {}, [], None),
         ("pass-then-no-verdict-attempt", repo, "none", "interrupted", {}, ["merge", "provides", "ff"], None),
