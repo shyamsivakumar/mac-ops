@@ -16,6 +16,11 @@ After (branch): `True`
 
 The scorecard counts 49 accepted tickets for 2026-11-21. Tokens are present for 47 of them (about 1.04 billion tokens, cache reads dominate). Billed dollars and list dollars are both null: the builder threads ran on morph-dsv41flash (and morph-dsv41flash-1017 in 5 cases), which report cost 0 and have no cost block in ~/.pi/agent/models.json or models-store.json, so list pricing has no rates to use. 152 threads are unpriced (no usage or no model rates). My earlier count of 63 came from my own query that counted closes on both 2026-11-21 and 2026-11-22 (49 + 14); the scorecard counts one day.
 
+That billed-dollars line was the gate finding on this head: a ticket with an
+observed zero charge was dropped from the distribution. After the fix the same
+run reports `"dollars":{"total":0.0,"median":0.0,"p90":0.0,"tickets":47}`.
+See `check-proof.md` for the before and after lines.
+
 ## ticket_costs on real priced tickets (strategy-replay-workbench builder receipts, journal rows empty)
 
 ```
