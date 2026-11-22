@@ -15,6 +15,7 @@ if _OVERNIGHT_DIR not in sys.path:
 from gate_bar import GATE_BAR
 from gate_policy import parse_verdict, verdict
 import lane_briefs
+from pr_refs import pr_ticket_refs
 import prompt_paths
 from tick_health import tick_alarm
 import alarms
@@ -2261,7 +2262,7 @@ def gate_candidates(config, rounds=None):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
                     continue
             body = pr.get("body") or ""
-            refs = re.findall(r"\bRefs #(\d+)\b", body)
+            refs = pr_ticket_refs(pr.get("title") or "", body, repo)
             for issue in dict.fromkeys(refs):
                 ledger = []
                 try:
