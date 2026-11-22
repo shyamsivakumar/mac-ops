@@ -131,7 +131,7 @@ class GatekeepBackstopTest(GatekeepBase):
 
     def test_the_backstop_line_is_logged_once(self):
         self.candidates()
-        lines = [line for line in self.errors.splitlines() if line.startswith("backstop ")]
+        lines = [line for line in self.errors.splitlines() if "backstop " in line]
         self.assertEqual(len(lines), 1)
         self.assertIn(f"backstop {REPO}#7: executed model unavailable", lines[0])
         self.assertIn("reviewer openai-api openai/gpt-6.2-astra", lines[0])
@@ -139,7 +139,7 @@ class GatekeepBackstopTest(GatekeepBase):
     def test_the_backstop_line_is_logged_once_for_two_issues(self):
         self.pr["body"] = "Refs #9\nRefs #10\n"
         self.candidates()
-        lines = [line for line in self.errors.splitlines() if line.startswith("backstop ")]
+        lines = [line for line in self.errors.splitlines() if "backstop " in line]
         self.assertEqual(len(lines), 1)
 
     def test_a_pull_request_without_a_passing_check_is_not_gated(self):

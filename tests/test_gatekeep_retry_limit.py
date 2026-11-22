@@ -356,7 +356,7 @@ class GiveUpTest(RetryLimitBase):
         before = self.read_queue()
         out, _ = self.run_gatekeep(dry_run=True)
         self.assertNotIn("would queue gate:", out)
-        lines = [line for line in out.splitlines() if line.startswith("gave up ")]
+        lines = [line for line in out.splitlines() if "gave up " in line]
         self.assertEqual(len(lines), 1)
         self.assertIn(self.key, lines[0])
         self.assertIn(f"after {coordq.GATE_RETRY_LIMIT} retries without a verdict", lines[0])
@@ -370,7 +370,7 @@ class GiveUpTest(RetryLimitBase):
 
     def test_the_give_up_is_written_and_announced_once(self):
         out, _ = self.run_gatekeep()
-        self.assertEqual(len([line for line in out.splitlines() if line.startswith("gave up ")]), 1)
+        self.assertEqual(len([line for line in out.splitlines() if "gave up " in line]), 1)
         self.assertEqual(self.gate_items(), [])
         self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
         again, _ = self.run_gatekeep()
@@ -441,7 +441,7 @@ class ExplicitGateTest(RetryLimitBase):
         self.gate_once()
         out, _ = self.run_gatekeep()
         self.assertEqual(len([line for line in out.splitlines()
-                              if line.startswith("gave up ")]), 1)
+                              if "gave up " in line]), 1)
         self.assertEqual(len(self.gate_items()), 1)
         self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
 
