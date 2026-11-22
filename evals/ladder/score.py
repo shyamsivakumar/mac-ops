@@ -3,7 +3,6 @@
 
 import argparse
 import hashlib
-import inspect
 import json
 import random
 import shlex
@@ -134,6 +133,9 @@ def render_markdown(report):
     return "\n".join(lines) + "\n"
 
 
+BUILTIN_ARMS = ("random", "first-option", "recorded")
+
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -173,7 +175,7 @@ def pick(arm_name, arm_cmd, case, repeat):
     if arm_name == "recorded":
         return case["recommended_option"]
     payload = {"id": case["id"], "kind": case["kind"], "item_text": case["item_text"], "options": shuffled}
-    done = subprocess.run(shlex.split(arm_cmd), input=json.dumps(payload), capture_output=True, text=True, check=True)
+    done = subprocess.run(shlex.split(arm_cmd), input=json.dumps(payload), capture_output=True, text=True, check=True, timeout=300)
     return done.stdout.strip()
 
 
@@ -214,11 +216,10 @@ def locked_score(labels_dir, split_key, arm, arm_cmd, baseline, baseline_cmd, re
 
 def lock_hashes(labels_dir):
     labels_dir = Path(labels_dir)
-    source = "\n".join(inspect.getsource(f) for f in (locked_score, pick, read_cases))
     return {
         "labels": sha(labels_dir / "labels.jsonl"),
         "split": sha(labels_dir / "split.json"),
-        "scorer": hashlib.sha256(source.encode()).hexdigest(),
+        "scorer": sha(__file__),
     }
 
 
@@ -264,14 +265,7 @@ def run_locked(args, split_key):
         if seen:
             print(f"score: the final split was checked at {seen}; wait 7 days", file=sys.stderr)
             return 5
-    runs = [
-        locked_score(args.labels, split_key, args.arm, args.arm_cmd, args.baseline, args.baseline_cmd, args.repeats)
-        for _ in range(2)
-    ]
-    if runs[0] != runs[1]:
-        print("score: two runs of the same scorer disagree; the arm is not deterministic", file=sys.stderr)
-        return 4
-    result = runs[0]
+    result = locked_score(args.labels, split_key, args.arm, args.arm_cmd, args.baseline, args.baseline_cmd, args.repeats)
     if args.json:
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     if args.command == "final":
@@ -298,6 +292,10 @@ def cli(argv):
     lock.add_argument("--labels", type=Path, required=True)
     lock.add_argument("--lock", type=Path, default=HERE / "score.lock")
     args = parser.parse_args(argv)
+    if args.command != "lock":
+        for role in ("arm", "baseline"):
+            if getattr(args, role) not in BUILTIN_ARMS and not getattr(args, f"{role}_cmd"):
+                parser.error(f"--{role} {getattr(args, role)} is not built in; pass --{role}-cmd")
     if args.command == "lock":
         args.lock.write_text(json.dumps(lock_hashes(args.labels), indent=2) + "\n")
         return 0

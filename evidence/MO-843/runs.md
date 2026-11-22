@@ -1,6 +1,6 @@
 # MO-843 runs
 
-Fixture: evidence/MO-843/fixture (60 labels, 20 held-out, 2 unscored). Temp lock and final log; no live data.
+Fixture: evidence/MO-843/fixture (60 labels, 20 held-out, 2 unscored). Temp lock and final log; no live data. The scorer runs once per call (no determinism re-run, no exit 4); repeats measure noise.
 
 ## Proof command
 
@@ -28,18 +28,19 @@ exit=2
 lift -6.666666666666667 se 4.85071250072666 beats_noise False
 == --arm-cmd (picks last shuffled option)
 0.00
-== nondeterministic arm
-score: two runs of the same scorer disagree; the arm is not deterministic
-exit=4
+== arm not built in, no --arm-cmd
+score.py: error: --arm mymodel is not built in; pass --arm-cmd
+== baseline not built in, no --baseline-cmd
+score.py: error: --baseline old is not built in; pass --baseline-cmd
 == edited lock input
 score: lock at TMP/lock does not match the labels, split or scorer
 exit=3
 == final twice
 40.00
 exit=0
-score: the final split was checked at 2026-11-22T12:33:35.777629+00:00; wait 7 days
+score: the final split was checked at 2026-11-22T12:36:23.308409+00:00; wait 7 days
 exit=5
-{"ts": "2026-11-22T12:33:35.777629+00:00", "arm": "recorded", "baseline": "random", "lift": 40.0}
+{"ts": "2026-11-22T12:36:23.308409+00:00", "arm": "recorded", "baseline": "random", "lift": 40.0}
 ```
 
-First-option scores 33 to 50% per repeat under the shuffle (chance is about 33% with 2 to 4 options), not the 70%+ it would score unshuffled.
+First-option scores 33 to 50% per repeat under the shuffle (chance is about 33% with 2 to 4 options).
