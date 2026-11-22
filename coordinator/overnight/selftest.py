@@ -3249,7 +3249,8 @@ def stall():
     # path, so a change to it is held even though lane_driver.py is code.
     # Replay of #626: its brief change now lands in lane_briefs.py.
     exact(lane.prompt_paths.prompt_scan(["coordinator/bin/lane_briefs.py"]), lane.prompt_paths.HOLD)
-    exact(lane.prompt_paths.prompt_scan(["coordinator/overnight/lane_driver.py"]), lane.prompt_paths.CLEAR)
+    exact(lane.prompt_paths.prompt_scan(["coordinator/overnight/lane_driver.py"]), lane.prompt_paths.LOOP_HOLD)
+    exact(lane.prompt_paths.prompt_scan(["README.md"]), lane.prompt_paths.CLEAR)
     exact("re-read its open pull requests" in Path(lane.__file__).read_text(), False)
     exact("last review round" in Path(lane.__file__).read_text(), False)
     exact("skipped: matching PR #<n>" in brief, True)
