@@ -134,6 +134,11 @@ def render_markdown(report):
 
 
 BUILTIN_ARMS = ("random", "first-option", "recorded")
+OUTCOME_CHECKS = ("reverted", "main_broke", "rollback_or_incident", "recut")
+STANCE = {
+    **dict.fromkeys(("yes", "yes, merge", "approve", "approve all", "merge", "release", "ship", "promote now", "gate it whole", "keep", "keep it as one pr"), "approve"),
+    **dict.fromkeys(("no", "hold", "hold until the freeze lifts", "revert", "wait"), "reject"),
+}
 
 
 def sha(path):
@@ -165,6 +170,32 @@ def read_cases(labels_dir, split_key):
     return cases, unscored
 
 
+def read_outcomes(labels_dir):
+    path = Path(labels_dir) / "outcomes.jsonl"
+    rows = {}
+    for line in path.read_text().splitlines() if path.exists() else []:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rows[row["id"]] = row
+    return rows
+
+
+def outcome_correct(chosen, row):
+    stance = STANCE.get(norm(chosen))
+    checks = [row.get(k) for k in OUTCOME_CHECKS] if row else []
+    if stance is None or all(c is None for c in checks):
+        return None
+    went_wrong = any(c is True for c in checks)
+    return went_wrong if stance == "reject" else not went_wrong
+
+
+def outcome_summary(detail, key):
+    values = [d[key] for d in detail if d[key] is not None]
+    return {"scored": len(values), "correct": sum(values), "rate": sum(values) / len(values) if values else None}
+
+
 def pick(arm_name, arm_cmd, case, repeat):
     shuffled = list(case["options"])
     random.Random(f"{case['id']}:{repeat}").shuffle(shuffled)
@@ -181,15 +212,21 @@ def pick(arm_name, arm_cmd, case, repeat):
 
 def locked_score(labels_dir, split_key, arm, arm_cmd, baseline, baseline_cmd, repeats):
     cases, unscored = read_cases(labels_dir, split_key)
+    outcomes = read_outcomes(labels_dir)
     per_case, detail = [], []
     for case in cases:
         answer = norm(case["answer"])
         hits = []
         for repeat in range(repeats):
-            a = norm(pick(arm, arm_cmd, case, repeat)) == answer
-            b = norm(pick(baseline, baseline_cmd, case, repeat)) == answer
+            arm_pick = pick(arm, arm_cmd, case, repeat)
+            baseline_pick = pick(baseline, baseline_cmd, case, repeat)
+            a, b = norm(arm_pick) == answer, norm(baseline_pick) == answer
             hits.append((a, b))
-            detail.append({"id": case["id"], "repeat": repeat, "arm": a, "baseline": b})
+            row = outcomes.get(case["id"])
+            detail.append({
+                "id": case["id"], "repeat": repeat, "arm": a, "baseline": b,
+                "arm_outcome": outcome_correct(arm_pick, row), "baseline_outcome": outcome_correct(baseline_pick, row),
+            })
         per_case.append(sum(a - b for a, b in hits) / repeats)
     n = len(per_case)
     lift = statistics.mean(per_case) * 100 if n else 0.0
@@ -210,17 +247,25 @@ def locked_score(labels_dir, split_key, arm, arm_cmd, baseline, baseline_cmd, re
         "baseline": baseline,
         "arm": arm,
         "n": n,
+        "outcome_correct": {
+            "arm": outcome_summary(detail, "arm_outcome"),
+            "baseline": outcome_summary(detail, "baseline_outcome"),
+            "cases_with_outcome": sum(1 for c in cases if any((outcomes.get(c["id"]) or {}).get(k) is not None for k in OUTCOME_CHECKS)),
+        },
         "per_case": detail,
     }
 
 
 def lock_hashes(labels_dir):
     labels_dir = Path(labels_dir)
-    return {
+    hashes = {
         "labels": sha(labels_dir / "labels.jsonl"),
         "split": sha(labels_dir / "split.json"),
         "scorer": sha(__file__),
     }
+    if (labels_dir / "outcomes.jsonl").exists():
+        hashes["outcomes"] = sha(labels_dir / "outcomes.jsonl")
+    return hashes
 
 
 def recent_final(path):
@@ -271,6 +316,9 @@ def run_locked(args, split_key):
     if args.command == "final":
         append_final(args.final_log, result)
     print(f"{result['lift']:.2f}")
+    oc = result["outcome_correct"]
+    fmt = lambda s: "n/a" if s["rate"] is None else f"{s['rate']:.1%} ({s['correct']}/{s['scored']})"
+    print(f"outcome_correct arm {fmt(oc['arm'])} baseline {fmt(oc['baseline'])} coverage {oc['cases_with_outcome']}/{result['n']} cases", file=sys.stderr)
     return 0
 
 
