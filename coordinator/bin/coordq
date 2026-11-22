@@ -161,9 +161,13 @@ def note_slots(queue, live_count):
                  over_cap=triple[0] + triple[1] > triple[2])
 
 
+def stamped(text):
+    return f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}"
+
+
 def log(message):
     with open(path("dispatch.log"), "a") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+        f.write(stamped(message) + "\n")
 
 
 def cap():
@@ -2170,7 +2174,7 @@ def proof_gate(settings, repo, number, event, key, dry_run):
     kept = load().get("proofHeads", {}).get(key)
     if kept is None:
         if dry_run:
-            print(f"would run the proof of {event['pr']}", flush=True)
+            print(stamped(f"would run the proof of {event['pr']}"), flush=True)
             return ""
         if opened_red(repo, event["issue"]):
             state, tail, body, cmd = run_head_proof(settings, repo, number, event["issue"], event["head"])
@@ -2198,7 +2202,7 @@ def proof_gate(settings, repo, number, event, key, dry_run):
             alarms.route_update(DECISIONS_PATH, card_id, "remove")
     if gate_allowed(kept["state"], proof_required(settings)):
         return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
-    print(f"no proof record for {event['pr']}", flush=True)
+    print(stamped(f"no proof record for {event['pr']}"), flush=True)
     if not kept["carded"] and not dry_run:
         item = {"id": f"proof-{settings['key']}-{number}", "group": "Coordinator", "kind": "ask",
                 "title": f"{repo}#{number} head {event['head'][:8]}: the proof does not pass",
@@ -2212,7 +2216,7 @@ def proof_gate(settings, repo, number, event, key, dry_run):
                 save(queue)
             journal.emit("gate_skipped", "gatekeep", reason="no_proof", **journal.parse_request_id(key))
         else:
-            print(f"proof {event['pr']}: the card could not be published", flush=True)
+            print(stamped(f"proof {event['pr']}: the card could not be published"), flush=True)
     return None
 
 
@@ -2248,7 +2252,7 @@ def gate_candidates(config, rounds=None):
             # pull request that used its reviews is skipped instead of
             # gated again on every new head (SRW#1338 was gated ten times).
             if gate_rounds_used(repo, number, rounds):
-                print(f"skip {repo}#{number}: at the gate round cap, no gate queued",
+                print(stamped(f"skip {repo}#{number}: at the gate round cap, no gate queued"),
                       file=sys.stderr)
                 yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
                        "reason": "at the gate round cap"}
@@ -2268,7 +2272,7 @@ def gate_candidates(config, rounds=None):
                     comments = gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100")
                 except GhReadError as e:
                     reason = unreadable_ticket_reason(e, issue, body, pr.get("title") or "")
-                    print(f"skip {repo}#{number}: Refs #{issue} cannot be read ({reason})",
+                    print(stamped(f"skip {repo}#{number}: Refs #{issue} cannot be read ({reason})"),
                           file=sys.stderr)
                     yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
                            "reason": f"Refs #{issue} cannot be read ({reason})"}
@@ -2290,7 +2294,7 @@ def gate_candidates(config, rounds=None):
                 thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
                 if not thread_id:
                     if (repo, number) not in skipped:
-                        print(f"skip {repo}#{number}: builder run not found", file=sys.stderr)
+                        print(stamped(f"skip {repo}#{number}: builder run not found"), file=sys.stderr)
                         skipped.add((repo, number))
                         yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
                                "reason": "builder run not found"}
@@ -2313,8 +2317,8 @@ def gate_candidates(config, rounds=None):
                                "reason": "every gate reviewer is blocked"}
                         continue
                     if (repo, number) not in noted:
-                        print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
-                              f"{model['instanceId']} {model['model']}", file=sys.stderr)
+                        print(stamped(f"backstop {repo}#{number}: executed model unavailable, reviewer "
+                                      f"{model['instanceId']} {model['model']}"), file=sys.stderr)
                         noted.add((repo, number))
                 # The gatekeep scan is optional polling: the floor applies.
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
@@ -2331,7 +2335,7 @@ def gate_candidates(config, rounds=None):
                 prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
                                            (pr.get("base") or {}).get("ref"), head)
                 if prompt == prompt_paths.UNKNOWN:
-                    print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
+                    print(stamped(f"skip {repo}#{number}: changed files unreadable, gate deferred"),
                           file=sys.stderr)
                     yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
                            "reason": "changed-file list unreadable, gate deferred"}
@@ -2347,7 +2351,7 @@ def gate_candidates(config, rounds=None):
             else:
                 found = gate_request(repo, pr, settings, config, receipts, login)
                 if found is DEFER:
-                    print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
+                    print(stamped(f"skip {repo}#{number}: changed files unreadable, gate deferred"),
                           file=sys.stderr)
                     yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
                            "reason": "changed-file list unreadable, gate deferred"}
@@ -2377,7 +2381,7 @@ def cmd_gatekeep(a):
     # quota instead of spending the last calls and stalling every caller.
     remaining = gh_gateway.remaining_or_none()
     if remaining and min(remaining.values()) < FLOOR:
-        print(f"gatekeep skipped: below the API floor {FLOOR} {remaining}", flush=True)
+        print(stamped(f"gatekeep skipped: below the API floor {FLOOR} {remaining}"), flush=True)
         return
     try:
         counts = load_counts()
@@ -2403,17 +2407,17 @@ def cmd_gatekeep(a):
             if size == "recut":
                 repo_name, pr_number = event["pr"].rsplit("#", 1)
                 if a.dry_run:
-                    print(f"would recut #{pr_number}", flush=True)
+                    print(stamped(f"would recut #{pr_number}"), flush=True)
                     continue
                 entry = model_list.first_available("build", preferred="sol", task_type="design")
                 if entry is None:
-                    print(f"recut #{pr_number}: waits, every builder is blocked", flush=True)
+                    print(stamped(f"recut #{pr_number}: waits, every builder is blocked"), flush=True)
                     continue
                 settings = config["repos"][repo_name]
                 item = recut_item(settings["key"], repo_name, pr_number, event["head"],
                                   event["lines"], event["files"])
                 if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
-                    print(f"recut #{pr_number}: the card could not be published", flush=True)
+                    print(stamped(f"recut #{pr_number}: the card could not be published"), flush=True)
                     continue
                 with Lock(True):
                     queue = load()
@@ -2431,7 +2435,7 @@ def cmd_gatekeep(a):
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"}, "message": brief}
                 cmd_start(argparse.Namespace(args=json.dumps(launch), title=title, priority=900,
                                              tool="t3_thread_launch", action_key=f"recut:{key}"))
-                print(f"recut #{pr_number}", flush=True)
+                print(stamped(f"recut #{pr_number}"), flush=True)
                 continue
             if key in attempted:
                 continue
@@ -2474,7 +2478,7 @@ def cmd_gatekeep(a):
                         continue
                     retries = state["retries"] + 1
                     if retries > GATE_RETRY_LIMIT:
-                        print(f"gave up {key} after {state['retries']} retries without a verdict",
+                        print(stamped(f"gave up {key} after {state['retries']} retries without a verdict"),
                               flush=True)
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
@@ -2489,16 +2493,16 @@ def cmd_gatekeep(a):
                     args["modelSelection"] = model
                     args["clientRequestId"] = key + ":" + model["model"] + ":retry"
                     retry_of = thread_id
-                    print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
+                    print(stamped(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)"), flush=True)
                 if model_list.is_blocked(args["modelSelection"]):
                     chosen = reviewer_model(event.get("builderModels", []))
                     if chosen is None:
-                        print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
+                        print(stamped(f"defer {event['pr']}: every gate reviewer is blocked"), flush=True)
                         continue
                     args["modelSelection"] = chosen
                 attempted.add(key)
-                print(("would queue " if a.dry_run else "queued ") + key
-                      + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
+                print(stamped(("would queue " if a.dry_run else "queued ") + key
+                              + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"]),
                       flush=True)
                 if a.dry_run:
                     continue
@@ -2519,9 +2523,9 @@ def cmd_gatekeep(a):
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
         # this run stops where it is instead of spending the last calls.
-        print(f"gatekeep skipped: {e}", flush=True)
+        print(stamped(f"gatekeep skipped: {e}"), flush=True)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
-        die(f"gatekeep stopped: {e}")
+        die(stamped(f"gatekeep stopped: {e}"))
 
 
 def load_counts():
@@ -2536,7 +2540,7 @@ def write_counts(counts, seen, stuck, dry_run):
     gated or gone leaves it.
     """
     for pr, head, reason in stuck:
-        print(f"stuck {pr} {head} {reason}", file=sys.stderr)
+        print(stamped(f"stuck {pr} {head} {reason}"), file=sys.stderr)
     if dry_run:
         return
     kept = {pr: value for pr, value in counts.items() if pr in seen}
