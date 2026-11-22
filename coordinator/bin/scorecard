@@ -305,7 +305,7 @@ TOKEN_KINDS = ("input", "output", "cacheRead", "cacheWrite")
 
 
 def thread_usage(path, rates):
-    tokens, billed, listed, priced = 0, 0.0, 0.0, True
+    tokens, billed, listed, priced, charged = 0, 0.0, 0.0, True, False
     try:
         with open(path) as handle:
             for line in handle:
@@ -320,6 +320,8 @@ def thread_usage(path, rates):
                 tokens += sum(counts.values())
                 cost = usage.get("cost")
                 paid = cost.get("total") if isinstance(cost, dict) else None
+                if isinstance(paid, (int, float)):
+                    charged = True
                 if isinstance(paid, (int, float)) and paid > 0:
                     billed += paid
                     listed += paid
@@ -331,7 +333,8 @@ def thread_usage(path, rates):
                     listed += sum(counts[kind] * rate.get(kind, 0) for kind in counts) / 1e6
     except OSError:
         return None
-    return {"tokens": tokens, "billed": billed, "list": listed if tokens and priced else 0.0}
+    return {"tokens": tokens, "billed": billed, "list": listed if tokens and priced else 0.0,
+            "charged": charged}
 
 
 def spread(values, digits):
@@ -361,6 +364,7 @@ def ticket_costs(accepted, receipts, journal_rows, db_path, rates=None):
                     threads[ticket].add(thread)
     connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
     usage = {}
+    billed_known = {}
     for thread in {thread for found in threads.values() for thread in found}:
         row = connection.execute(
             "select json_extract(payload_json,'$.nativeThreadRef.nativeId') "
@@ -369,14 +373,17 @@ def ticket_costs(accepted, receipts, journal_rows, db_path, rates=None):
         found = thread_usage(row[0], rates or {}) if row and row[0] else None
         if found and found["tokens"]:
             usage[thread] = found
+        if found and (found["charged"] or found["tokens"]):
+            billed_known[thread] = found["billed"]
     connection.close()
     per_ticket = {"tokens": [], "billed": [], "list": []}
     unpriced = 0
     for found in threads.values():
         have = [usage[thread] for thread in found if thread in usage]
         unpriced += sum(1 for thread in found if thread not in usage or not usage[thread]["list"])
-        if have:
-            per_ticket["billed"].append(sum(item["billed"] for item in have))
+        known = [billed_known[thread] for thread in found if thread in billed_known]
+        if known:
+            per_ticket["billed"].append(sum(known))
         for name in ("tokens", "list"):
             total = sum(item[name] for item in have)
             if total:
