@@ -44,7 +44,7 @@ class PromptPathTest(unittest.TestCase):
                 self.assertTrue(prompt_paths.is_prompt_path(path))
 
     def test_runtime_code_is_not_a_prompt_path(self):
-        for path in ("coordinator/bin/ticket",
+        for path in ("tools/ticket",
                      "coordinator/overnight/lane_driver.py",
                      "coordinator/bin/gate_reviewers.py",
                      "scripts/mac_ops_fast_check.py",
@@ -58,8 +58,8 @@ class PromptPathTest(unittest.TestCase):
 
     def test_one_prompt_path_is_enough(self):
         self.assertTrue(prompt_paths.prompt_change(
-            ["coordinator/bin/ticket", "coordinator/config/AGENT-RULES.md"]))
-        self.assertFalse(prompt_paths.prompt_change(["coordinator/bin/ticket"]))
+            ["tools/ticket", "coordinator/config/AGENT-RULES.md"]))
+        self.assertFalse(prompt_paths.prompt_change(["tools/ticket"]))
 
     def test_an_unreadable_list_is_unknown_never_clear(self):
         """An unknown list must not read as clear: clear authorizes a merge."""
@@ -82,7 +82,7 @@ class PromptPathTest(unittest.TestCase):
 
     def test_a_short_list_is_not_complete(self):
         """GitHub stops the files endpoint at 3,000, so a short list hides files."""
-        entries = [{"filename": "coordinator/bin/ticket"}]
+        entries = [{"filename": "tools/ticket"}]
         self.assertFalse(prompt_paths.list_is_complete(entries, 3001))
         self.assertTrue(prompt_paths.list_is_complete(entries, 1))
         self.assertFalse(prompt_paths.list_is_complete(entries, None))
@@ -109,14 +109,14 @@ class PromptPathTest(unittest.TestCase):
             if "/compare/" in endpoint:
                 return {"merge_base_commit": {"sha": "base"}}
             if endpoint.endswith("/git/trees/base?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "coordinator/bin/ticket", "sha": "1"}]}
+                return {"tree": [{"type": "blob", "path": "bin/ticket", "sha": "1"}]}
             if endpoint.endswith("/git/trees/head?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "coordinator/bin/ticket", "sha": "2"},
+                return {"tree": [{"type": "blob", "path": "bin/ticket", "sha": "2"},
                                  {"type": "blob", "path": "prompts/reviewer.md", "sha": "3"}]}
             raise AssertionError(endpoint)
 
         self.assertEqual(prompt_paths.tree_diff(fetch, "o/r", "main", "head"),
-                         ["coordinator/bin/ticket", "prompts/reviewer.md"])
+                         ["bin/ticket", "prompts/reviewer.md"])
         self.assertEqual(prompt_paths.prompt_scan(
             prompt_paths.tree_diff(fetch, "o/r", "main", "head")), prompt_paths.HOLD)
 
@@ -285,7 +285,7 @@ class TicketGateTest(unittest.TestCase):
                          prompt_paths.HOLD)
 
     def test_a_code_pull_request_is_not_held(self):
-        self.assertEqual(self.prompt_pull(["coordinator/bin/ticket", "docs/ticket-gate.md"]),
+        self.assertEqual(self.prompt_pull(["tools/ticket", "docs/ticket-gate.md"]),
                          prompt_paths.CLEAR)
 
     def test_an_unreadable_list_is_unknown_and_holds_the_merge(self):
@@ -303,11 +303,11 @@ class TicketGateTest(unittest.TestCase):
 
     def test_the_read_flattens_pages(self):
         """The files read is slurped, so 101 files arrive as two pages."""
-        pages = [[{"filename": "coordinator/bin/ticket"}],
+        pages = [[{"filename": "tools/ticket"}],
                  [{"filename": "prompts/reviewer.md"}]]
         with patch.object(self.ticket, "gh_json", return_value=pages):
             self.assertEqual(self.ticket.pull_files("shyamsivakumar/mac-ops", 544, 2),
-                             ["coordinator/bin/ticket", "prompts/reviewer.md"])
+                             ["tools/ticket", "prompts/reviewer.md"])
             self.assertIsNone(self.ticket.pull_files("shyamsivakumar/mac-ops", 544, 3))
 
     def test_a_huge_prompt_pull_request_holds_through_the_trees(self):
@@ -316,7 +316,7 @@ class TicketGateTest(unittest.TestCase):
         def gh(args):
             endpoint = args[-1]
             if endpoint.endswith("/files?per_page=100"):
-                return [{"filename": "coordinator/bin/ticket"}]
+                return [{"filename": "tools/ticket"}]
             if "/compare/" in endpoint:
                 return {"merge_base_commit": {"sha": "base"}}
             if endpoint.endswith("/git/trees/base?recursive=1"):
@@ -332,7 +332,7 @@ class TicketGateTest(unittest.TestCase):
                                                     base="main", head="head"))
 
     def test_the_brief_does_not_hold_code(self):
-        with patch.object(self.ticket, "pull_files", return_value=["coordinator/bin/ticket"]):
+        with patch.object(self.ticket, "pull_files", return_value=["tools/ticket"]):
             self.assertFalse(self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544))
 
 
@@ -356,7 +356,7 @@ class CoordqGateTest(unittest.TestCase):
             self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
         with patch.object(self.coordq, "gh_json",
-                          return_value=[{"filename": "coordinator/bin/ticket"}]):
+                          return_value=[{"filename": "tools/ticket"}]):
             self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.CLEAR)
 
@@ -369,7 +369,7 @@ class CoordqGateTest(unittest.TestCase):
 
     def test_a_missing_changed_count_is_read_from_the_pull_request(self):
         """The list entry's count is not trusted by presence alone."""
-        files = [{"filename": "coordinator/bin/ticket"}]
+        files = [{"filename": "tools/ticket"}]
 
         def gh(endpoint):
             if endpoint.endswith("/files?per_page=100"):
@@ -452,7 +452,7 @@ class CoordqGateTest(unittest.TestCase):
 
     def test_a_code_pull_request_without_a_list_count_is_clear(self):
         """The count read is a one-row list, and its count is used."""
-        files = [{"filename": "coordinator/bin/ticket"},
+        files = [{"filename": "tools/ticket"},
                  {"filename": "docs/ticket-gate.md"}]
 
         def gh(endpoint):
@@ -468,7 +468,7 @@ class CoordqGateTest(unittest.TestCase):
         """No count means no completeness, and no completeness means no merge."""
         def gh(endpoint):
             if endpoint.endswith("/files?per_page=100"):
-                return [{"filename": "coordinator/bin/ticket"}]
+                return [{"filename": "tools/ticket"}]
             raise RuntimeError("count read failed")
 
         with patch.object(self.coordq, "gh_json", gh):
@@ -498,7 +498,7 @@ class CoordqGateTest(unittest.TestCase):
 
     def test_a_truncated_list_is_unknown_never_clear(self):
         """A 3,001-file PR may have dropped its one prompt file from the list."""
-        files = [{"filename": "coordinator/bin/ticket"}]
+        files = [{"filename": "tools/ticket"}]
         with patch.object(self.coordq, "gh_json", return_value=files):
             self.assertEqual(
                 self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 3001),
@@ -600,7 +600,7 @@ class CoordqGateTest(unittest.TestCase):
         self.assertNotIn("gh pr merge", message)
 
     def test_the_gatekeep_queues_a_mergeable_gate_for_code(self):
-        message = self.gatekeep(["coordinator/bin/ticket"])
+        message = self.gatekeep(["tools/ticket"])
         self.assertIn("gh pr merge 7 -R shyamsivakumar/fixture --squash", message)
         self.assertNotIn("never auto-merges", message)
 
@@ -672,7 +672,7 @@ class LanePassTest(unittest.TestCase):
         with patch.object(self.lane, "run", return_value='[[{"filename": "skills/x/SKILL.md"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
-        with patch.object(self.lane, "run", return_value='[[{"filename": "coordinator/bin/ticket"}]]'):
+        with patch.object(self.lane, "run", return_value='[[{"filename": "tools/ticket"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.CLEAR)
 
@@ -690,7 +690,7 @@ class LanePassTest(unittest.TestCase):
             if cmd[:2] == ["gh", "api"] and cmd[2] != "--paginate":
                 self.assertEqual(cmd[2], "repos/shyamsivakumar/mac-ops/pulls/544")
                 return '{"changed_files": 3001}'
-            return '[{"filename": "coordinator/bin/ticket"}]'
+            return '[{"filename": "tools/ticket"}]'
 
         with patch.object(self.lane, "run", command), \
                 patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
@@ -716,7 +716,7 @@ class LanePassTest(unittest.TestCase):
         """A short list may have hidden the prompt file, so it is no list."""
         written = []
         with patch.object(self.lane, "run",
-                          return_value='[[{"filename": "coordinator/bin/ticket"}]]'), \
+                          return_value='[[{"filename": "tools/ticket"}]]'), \
                 patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
             state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 3001)
             held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
@@ -726,19 +726,19 @@ class LanePassTest(unittest.TestCase):
 
     def test_a_complete_list_of_code_is_clear(self):
         with patch.object(self.lane, "run",
-                          return_value='[[{"filename": "coordinator/bin/ticket"}]]'):
+                          return_value='[[{"filename": "tools/ticket"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.CLEAR)
 
     def test_a_multi_page_list_holds_its_prompt_file(self):
         """A 101-file PR arrives as two pages, and page 2 still counts."""
-        pages = ('[[{"filename": "coordinator/bin/ticket"}],'
+        pages = ('[[{"filename": "tools/ticket"}],'
                  ' [{"filename": "prompts/reviewer.md"}]]')
         with patch.object(self.lane, "run", return_value=pages):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 2),
                              prompt_paths.HOLD)
         with patch.object(self.lane, "run",
-                          return_value='[[{"filename": "coordinator/bin/ticket"}],'
+                          return_value='[[{"filename": "tools/ticket"}],'
                                        ' [{"filename": "docs/ticket-gate.md"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 2),
                              prompt_paths.CLEAR)
@@ -749,7 +749,7 @@ class LanePassTest(unittest.TestCase):
         def command(cmd, timeout=150):
             endpoint = cmd[-1]
             if "/files?per_page=100" in endpoint:
-                return '[[{"filename": "coordinator/bin/ticket"}]]'
+                return '[[{"filename": "tools/ticket"}]]'
             if "/compare/" in endpoint:
                 return '{"merge_base_commit": {"sha": "base"}}'
             if endpoint.endswith("/git/trees/base?recursive=1"):

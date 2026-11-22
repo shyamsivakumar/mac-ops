@@ -40,10 +40,20 @@ def is_prompt_path(path):
     return any(part in PROMPT_DIRS for part in parts[:-1])
 
 
+def is_loop_path(path):
+    parts = [part.lower() for part in str(path or "").split("/") if part]
+    if not parts:
+        return False
+    if parts[0] == "coordinator":
+        return True
+    return parts[-1].startswith("heavy") or parts[-1] == "install_coordinator.py"
+
+
 # The three answers a changed-path read gives. UNKNOWN is a list GitHub could
 # not give, and it never reads as CLEAR: a clear answer authorizes the merge
 # the gate brief orders for an ordinary pull request.
 HOLD, CLEAR, UNKNOWN = "hold", "clear", "unknown"
+LOOP_HOLD = "loop_hold"
 
 # The branch a merge lands on when nothing retargets the pull request. A
 # retarget moves a pull request onto another base without moving its head, and
@@ -140,7 +150,9 @@ def prompt_scan(paths):
     """
     if paths is None:
         return UNKNOWN
-    return HOLD if prompt_change(paths) else CLEAR
+    if prompt_change(paths):
+        return HOLD
+    return LOOP_HOLD if any(is_loop_path(path) for path in paths) else CLEAR
 
 
 def one_object(value):
