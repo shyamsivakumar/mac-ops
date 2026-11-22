@@ -115,6 +115,7 @@ def read_json(cmd, fresh=False):
 
 
 LOOP_RELEASE_LABEL = "merge:human-ok"
+LOOP_REPO = "shyamsivakumar/mac-ops"
 PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles,labels"
 PASS_PRS = {}
 PASS_WORKTREES = set()
@@ -1214,7 +1215,7 @@ def prompt_pass(repo, number, head, prompt, labels=()):
     if prompt == prompt_paths.UNKNOWN:
         return (f"skip #{number}: gate PASS, the changed-file list could not be read on "
                 f"head {head[:8]}, next run retries")
-    loop = prompt == prompt_paths.LOOP_HOLD
+    loop = prompt == prompt_paths.LOOP_HOLD and repo == LOOP_REPO
     if prompt != prompt_paths.HOLD and not loop:
         return None
     if loop and any(label.get("name") == LOOP_RELEASE_LABEL for label in labels):

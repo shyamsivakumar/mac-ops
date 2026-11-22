@@ -6,7 +6,8 @@ os.environ["COORDQ_DIR"] = tmp + "/q"; os.environ["COORD_JOURNAL_DIR"] = tmp + "
 import lane_driver as L
 board = tmp + "/decisions.json"
 L.DECISIONS_PATH = board
-L.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+L.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"},
+         "shyamsivakumar/strategy-replay-workbench": {"key": "SRW", "projectId": "fixture"}}
 repo, head = "shyamsivakumar/mac-ops", "a" * 40
 raised = []
 def cards():
@@ -16,7 +17,7 @@ def spy(item):
     raised.append(item["id"])
     return real(item)
 L.publish_decision = spy
-def run(number, paths, labels, ledger):
+def run(number, paths, labels, ledger, repo=repo):
     merges = []
     pr = {"changedFiles": len(paths), "baseRefName": "main", "labels": [{"name": n} for n in labels]}
     gate = {"threadId": "t"}
@@ -33,6 +34,7 @@ run(1, ["coordinator/bin/coordq"], [], led)
 run(1, ["coordinator/bin/coordq"], ["merge:human-ok"], led)
 run(2, ["README.md"], [], {})
 run(3, ["skills/x/SKILL.md", "coordinator/bin/coordq"], ["merge:human-ok"], {})
+run(4, ["heavy_x.py"], [], {}, "shyamsivakumar/strategy-replay-workbench")
 import glob
 for f in glob.glob(tmp + "/**/*.json", recursive=True):
     try:
