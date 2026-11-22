@@ -45,9 +45,11 @@ recut: true=0 false=4 null=28
 
 ## Score with the outcome column (dev split only, scratch copy of labels, 5 repeats)
 
-| Arm | Baseline | n | Lift | outcome_correct arm | outcome_correct baseline | Cases with an outcome |
-| --- | --- | --- | --- | --- | --- | --- |
-| recorded | random | 73 | 42.19 | 25/25 (100%) | 10/21 (47.6%) | 7 of 73 |
-| first-option | random | 73 | 2.47 | 19/21 (90.5%) | 10/21 (47.6%) | 7 of 73 |
+Scoring rules after review: a case is outcome-scorable only when Shyam's recorded answer approved (the only path that was observed). An arm that picks approve is correct when no check is true; an arm that picks reject is correct when some check is true. A bare yes or no takes its polarity from the first approve verb (merge, approve, ship, release, promote) or hold verb (hold, revert, close, stop, pause) in the question; a question with neither is unscored. A malformed line in `outcomes.jsonl` raises with its line number.
 
-Coverage is low because most labeled options (re-cut, take it over) fit neither approve nor reject and stay unscored. The final split was not run.
+| Arm | Baseline | n | Lift | outcome_correct arm | outcome_correct baseline | Scorable cases |
+| --- | --- | --- | --- | --- | --- | --- |
+| recorded | random | 73 | 42.19 | 25/25 (100%) | 10/21 (47.6%) | 5 of 73 |
+| first-option | random | 73 | 2.47 | 19/21 (90.5%) | 10/21 (47.6%) | 5 of 73 |
+
+All four checks found zero bad outcomes on the real labels (no `true` in any check), so the column cannot yet separate arms by correctness: an arm that approves is always "correct", and the 100% versus 47.6% gap only reflects how often each arm picks approve on these 5 cases. The final split was not run.

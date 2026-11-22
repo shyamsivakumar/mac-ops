@@ -91,12 +91,34 @@ class FetchChecks(OutcomeFixture):
 class Scoring(OutcomeFixture):
     def test_option_mapping(self):
         bad, good, unknown = {"reverted": True}, {"reverted": False}, {k: None for k in score.OUTCOME_CHECKS}
-        self.assertFalse(score.outcome_correct("yes", bad))
-        self.assertTrue(score.outcome_correct("yes", good))
-        self.assertTrue(score.outcome_correct("no", bad))
-        self.assertFalse(score.outcome_correct("no", good))
-        self.assertIsNone(score.outcome_correct("yes", unknown))
-        self.assertIsNone(score.outcome_correct("Re-cut it into smaller pull requests", bad))
+        merge = {"item_text": "Merge PR #7?", "answer": "yes"}
+        self.assertFalse(score.outcome_correct("yes", bad, merge))
+        self.assertTrue(score.outcome_correct("yes", good, merge))
+        self.assertTrue(score.outcome_correct("no", bad, merge))
+        self.assertFalse(score.outcome_correct("no", good, merge))
+        self.assertIsNone(score.outcome_correct("yes", unknown, merge))
+        recut = {"item_text": "Re-cut PR #7?", "answer": "yes, merge"}
+        self.assertIsNone(score.outcome_correct("Re-cut it into smaller pull requests", bad, recut))
+
+    def test_yes_polarity_follows_the_question(self):
+        self.assertEqual(score.stance("yes", {"item_text": "Should I merge PR #7?"}), "approve")
+        self.assertEqual(score.stance("yes", {"item_text": "Should I hold PR #7?"}), "reject")
+        self.assertEqual(score.stance("no", {"item_text": "Should I hold PR #7?"}), "approve")
+        self.assertIsNone(score.stance("yes", {"item_text": "Should I restart the tab?"}))
+
+    def test_held_pr_is_unscored_for_every_arm(self):
+        held = {"item_text": "Merge PR #7?", "answer": "no"}
+        good = {"reverted": False, "main_broke": False}
+        self.assertIsNone(score.outcome_correct("yes", good, held))
+        self.assertIsNone(score.outcome_correct("no", good, held))
+        hold_question = {"item_text": "Hold PR #7?", "answer": "yes"}
+        self.assertIsNone(score.outcome_correct("yes", good, hold_question))
+
+    def test_malformed_outcomes_line_fails_with_line_number(self):
+        self.write_labels({"id": "c1", "item_text": "x", "answer": "yes", "options": ["yes", "no"], "ts": LABEL_TS})
+        (self.labels / "outcomes.jsonl").write_text('{"id": "c1"}\nnot json\n')
+        with self.assertRaisesRegex(ValueError, r"outcomes.jsonl:2"):
+            score.read_outcomes(self.labels)
 
     def test_lock_includes_outcomes_when_present(self):
         self.write_labels({"id": "c1", "item_text": "x", "answer": "yes", "options": ["yes", "no"], "ts": LABEL_TS})
@@ -107,7 +129,7 @@ class Scoring(OutcomeFixture):
         self.assertNotEqual(first, score.lock_hashes(self.labels)["outcomes"])
 
     def test_scoring_makes_no_network_call(self):
-        self.write_labels({"id": "c1", "item_text": "x", "answer": "yes", "options": ["yes", "no"], "ts": LABEL_TS, "recommended_option": "yes"})
+        self.write_labels({"id": "c1", "item_text": "Merge PR #7?", "answer": "yes", "options": ["yes", "no"], "ts": LABEL_TS, "recommended_option": "yes"})
         (self.labels / "outcomes.jsonl").write_text(json.dumps({"id": "c1", "reverted": True, "main_broke": None, "rollback_or_incident": None, "recut": None}) + "\n")
         with mock.patch.object(subprocess, "run", side_effect=AssertionError("network")):
             result = score.locked_score(self.labels, "heldout", "recorded", None, "recorded", None, 1)
