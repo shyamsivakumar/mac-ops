@@ -24,7 +24,7 @@ OK
 | --- | --- | --- |
 | reverted | main commits via `gh api repos/R/commits` containing `This reverts commit <merge sha>` after the decision | Works. 10 of 32 rows are merged after the decision, all `false`. Revert PRs exist only for #198 (mac-ops), #77 (SRW, a different change) and #43 (tunerise), none tied to a labeled decision |
 | main_broke | commit status `srw/agent-check` (Mac-published) on the merge commit | SRW only. mac-ops main has no status and no check runs, FFBT has only `Vercel` (not Mac-published, ignored), tunerise and digitized/Concerning have none. 4 rows scored, all `false` |
-| rollback_or_incident | journal events named rollback, rolled_back or incident | No signal. The journal (events-2026-11.jsonl, events-backfill.jsonl) has 25 event names and none is a rollback or incident; alarms carry no repo or PR. All 32 rows are `null` |
+| rollback_or_incident | journal events named rollback, rolled_back or incident | No signal. The journal (events-2026-11.jsonl, events-backfill.jsonl) has 23 event names and none is a rollback or incident; alarms carry no repo or PR. All 32 rows are `null` |
 | recut | journal `recut` rows for the PR after the decision, or `ticket_started` after `ticket_closed` (the scorecard `restarted` rule) | Works for repos the journal covers. 4 rows scored, all `false`; null when the journal has no row for the subject, and null when the chosen answer is itself a re-cut |
 
 `scorecard` computes `restarted` as a ticket whose latest `ticket_started` is later than its `ticket_closed`; the recut check reuses that rule.
