@@ -6,7 +6,10 @@ import sys
 import time
 from datetime import datetime, timezone
 
-LOOP_DIR = os.path.expanduser("~/Code/coordinator/loop")
+COORDINATOR_DIR = os.path.expanduser(
+    os.environ.get("MAC_OPS_COORDINATOR_DIR") or "~/Code/coordinator"
+)
+LOOP_DIR = os.path.join(COORDINATOR_DIR, "loop")
 STATE = os.path.join(LOOP_DIR, ".turn_cap.json")
 TICKS = os.path.join(LOOP_DIR, "ticks.log")
 NOTES = os.path.join(LOOP_DIR, "caps.log")

@@ -56,3 +56,28 @@ Evidence gathered 22 Nov. Job pid 68851 started 16 Nov 00:25 (`ps -o lstart`); p
 4. The Mole whitelist protects the directory but the file is gone anyway. PARTLY TRUE, already fixed outside this repo. `~/.config/mole/whitelist` (mtime 21 Nov 11:27) now lists `/Users/shyamsivakumar/Library/Logs/coordinator`, and the 22 Nov 09:30 run logged `SKIPPED ... (whitelist)`. The whitelist did not exist when the job started, so the file stayed unlinked and the running process never reopened it.
 
 Cause: Mole `mo clean` deleted the log directory before the whitelist entry existed. The whitelist entry is in place, so no cleaner change is needed in this repo. The file returns when launchd reopens its output, which happens only when the job restarts (manual step after merge). The code fix is the per-hit and per-warning stdout line, so a visible log also shows each interrupt.
+
+## Fix round: coordinator dir from MAC_OPS_COORDINATOR_DIR (no hardcoded user path)
+
+turn_cap.py now resolves `MAC_OPS_COORDINATOR_DIR`, else `~/Code/coordinator`, and LOOP_DIR is its `loop` folder (same rule as alarms.py and install_coordinator.coordinator_dir). `retired_files` takes the coordinator dir that `status()` already has.
+
+Ticket proof command on the head: exit 0. On origin/main: AssertionError (see the red run above, unchanged).
+
+Fake 25-minute thread, temp HOME, MAC_OPS_COORDINATOR_DIR=<temp>/coord, interrupt mocked; state and notes land in <temp>/coord/loop/:
+```
+interrupt calls (mocked, nothing real): [('t3mcp', 't3_thread_interrupt', {'threadId': 'fake-thread', 'runId': 'fake-run'})]
+STATE: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpub5ncxql/coord/loop/.turn_cap.json
+FILE: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpub5ncxql/coord/loop/.turn_cap.json
+FILE: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpub5ncxql/coord/loop/caps.log
+FILE: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpub5ncxql/coord/loop/ticks.log
+caps.log:
+- cap mis-sized 2026-11-22T17:17Z | t3 | ticket:fake/repo#1:a1 | fake-run | 25.0 min
+- cap hit 2026-11-22T17:17Z | t3 | ticket:fake/repo#1:a1 | fake-run | 25.0 min
+```
+
+Installer status with MAC_OPS_COORDINATOR_DIR=<temp>/c and a stale <temp>/c/loop/turn_cap.py:
+```
+  "retired_leftovers": [
+    "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.rK9X6sZZbJ/c/loop/turn_cap.py"
+  ]
+```
