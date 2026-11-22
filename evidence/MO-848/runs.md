@@ -21,7 +21,7 @@ observed zero charge was dropped from the distribution. After the fix the same
 run reports `"dollars":{"total":0.0,"median":0.0,"p90":0.0,"tickets":47}`.
 See `check-proof.md` for the before and after lines.
 
-## ticket_costs on real priced tickets (strategy-replay-workbench builder receipts, journal rows empty)
+## ticket_costs on real priced tickets (strategy-replay-workbench builder receipts, journal rows empty; scorecard at `60564179`, before this fix)
 
 ```
 259 {"dollars": {"total": 33.52, "median": 0.24, "p90": 1.47, "tickets": 59}, "list_dollars": {"total": 25.97, "median": 0.24, "p90": 1.17, "tickets": 58}, "tokens": {"total": 7964366186, "median": 23328780, "p90": 75434687, "tickets": 203}, "unpriced_threads": 330}
