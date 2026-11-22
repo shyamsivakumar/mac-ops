@@ -16,7 +16,7 @@ True
 
 ## Lane stub run
 
-Run from the worktree root: `python3 evidence/MO-849/lane_stub_proof.py`. `gh` and the merge call are stubbed, the decisions board, COORDQ_DIR, COORD_JOURNAL_DIR and HOME are temp. Case 1 is one head passed twice, then labelled.
+Run from the worktree root: `python3 evidence/MO-849/lane_stub_proof.py`. `gh` and the merge call are stubbed, the decisions board, COORDQ_DIR, COORD_JOURNAL_DIR and HOME are temp. Case 1 is one head passed twice, then labelled. Case 4 is a strategy-replay-workbench PR touching `heavy_x.py`: it reaches the merge call, because the loop hold applies to shyamsivakumar/mac-ops only.
 ```
    journal: merge_held loop code hold
 #1 ['coordinator/bin/coordq'] labels=[]
@@ -35,6 +35,9 @@ Run from the worktree root: `python3 evidence/MO-849/lane_stub_proof.py`. `gh` a
 #3 ['skills/x/SKILL.md', 'coordinator/bin/coordq'] labels=['merge:human-ok']
    -> skip #3: gate PASS, prompt change, Shyam merges
    merge calls=0 cards=['prompt-merge-MO-1', 'prompt-merge-MO-1', 'prompt-merge-MO-3']
+#4 ['heavy_x.py'] labels=[]
+   -> merge call reached
+   merge calls=1 cards=['prompt-merge-MO-1', 'prompt-merge-MO-1', 'prompt-merge-MO-3']
 board mac-ops-owner.json ['prompt-merge-MO-1', 'prompt-merge-MO-3']
 ```
 
