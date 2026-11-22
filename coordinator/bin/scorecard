@@ -375,7 +375,9 @@ def ticket_costs(accepted, receipts, journal_rows, db_path, rates=None):
     for found in threads.values():
         have = [usage[thread] for thread in found if thread in usage]
         unpriced += sum(1 for thread in found if thread not in usage or not usage[thread]["list"])
-        for name in per_ticket:
+        if have:
+            per_ticket["billed"].append(sum(item["billed"] for item in have))
+        for name in ("tokens", "list"):
             total = sum(item[name] for item in have)
             if total:
                 per_ticket[name].append(total)
