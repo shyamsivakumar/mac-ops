@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import random
+import re
 import shlex
 import statistics
 import subprocess
@@ -136,9 +137,12 @@ def render_markdown(report):
 BUILTIN_ARMS = ("random", "first-option", "recorded")
 OUTCOME_CHECKS = ("reverted", "main_broke", "rollback_or_incident", "recut")
 STANCE = {
-    **dict.fromkeys(("yes", "yes, merge", "approve", "approve all", "merge", "release", "ship", "promote now", "gate it whole", "keep", "keep it as one pr"), "approve"),
-    **dict.fromkeys(("no", "hold", "hold until the freeze lifts", "revert", "wait"), "reject"),
+    **dict.fromkeys(("yes, merge", "approve", "approve all", "merge", "release", "ship", "promote now", "gate it whole", "keep", "keep it as one pr"), "approve"),
+    **dict.fromkeys(("hold", "hold until the freeze lifts", "revert", "wait"), "reject"),
 }
+APPROVE_VERBS = r"merge|approve|ship|release|promote"
+HOLD_VERBS = r"hold|revert|close|stop|pause"
+QUESTION_VERB = re.compile(rf"\b(?:(?P<approve>{APPROVE_VERBS})|(?P<hold>{HOLD_VERBS}))\b", re.IGNORECASE)
 
 
 def sha(path):
@@ -173,22 +177,39 @@ def read_cases(labels_dir, split_key):
 def read_outcomes(labels_dir):
     path = Path(labels_dir) / "outcomes.jsonl"
     rows = {}
-    for line in path.read_text().splitlines() if path.exists() else []:
+    for number, line in enumerate(path.read_text().splitlines() if path.exists() else [], 1):
+        if not line.strip():
+            continue
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+        except json.JSONDecodeError as error:
+            raise ValueError(f"{path}:{number}: malformed outcomes row: {error}") from error
         rows[row["id"]] = row
     return rows
 
 
-def outcome_correct(chosen, row):
-    stance = STANCE.get(norm(chosen))
+def stance(option, label):
+    """A bare yes or no takes its polarity from the first approve or hold verb in the question; no verb leaves it unscored."""
+    text = norm(option)
+    if text not in ("yes", "no"):
+        return STANCE.get(text)
+    found = QUESTION_VERB.search(str(label.get("item_text") or ""))
+    if not found:
+        return None
+    asks_approve = found.lastgroup == "approve"
+    return "approve" if asks_approve == (text == "yes") else "reject"
+
+
+def outcome_correct(chosen, row, label):
+    """Only the path Shyam took is observed, so a case is scorable only when his recorded answer approved."""
     checks = [row.get(k) for k in OUTCOME_CHECKS] if row else []
-    if stance is None or all(c is None for c in checks):
+    if stance(label["answer"], label) != "approve" or all(c is None for c in checks):
         return None
     went_wrong = any(c is True for c in checks)
-    return went_wrong if stance == "reject" else not went_wrong
+    arm_stance = stance(chosen, label)
+    if arm_stance is None:
+        return None
+    return went_wrong if arm_stance == "reject" else not went_wrong
 
 
 def outcome_summary(detail, key):
@@ -225,7 +246,7 @@ def locked_score(labels_dir, split_key, arm, arm_cmd, baseline, baseline_cmd, re
             row = outcomes.get(case["id"])
             detail.append({
                 "id": case["id"], "repeat": repeat, "arm": a, "baseline": b,
-                "arm_outcome": outcome_correct(arm_pick, row), "baseline_outcome": outcome_correct(baseline_pick, row),
+                "arm_outcome": outcome_correct(arm_pick, row, case), "baseline_outcome": outcome_correct(baseline_pick, row, case),
             })
         per_case.append(sum(a - b for a, b in hits) / repeats)
     n = len(per_case)
@@ -250,7 +271,7 @@ def locked_score(labels_dir, split_key, arm, arm_cmd, baseline, baseline_cmd, re
         "outcome_correct": {
             "arm": outcome_summary(detail, "arm_outcome"),
             "baseline": outcome_summary(detail, "baseline_outcome"),
-            "cases_with_outcome": sum(1 for c in cases if any((outcomes.get(c["id"]) or {}).get(k) is not None for k in OUTCOME_CHECKS)),
+            "cases_with_outcome": sum(1 for c in cases if outcome_correct(c["answer"], outcomes.get(c["id"]), c) is not None),
         },
         "per_case": detail,
     }
