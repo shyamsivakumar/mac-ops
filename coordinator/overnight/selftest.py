@@ -445,6 +445,7 @@ def gate_pipeline():
         ("retargeted-after-pass", repo, "PASS", full, {}, [], None),
         ("retargeted-regated-pass", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("trailing-space-pass", repo, "PASS", full.replace(f"PROVIDES: PASS {head}", f"PROVIDES: PASS {head}  "), {}, ["merge", "provides", "ff"], None),
+        ("markdown-verdict-with-trailing-sentence", repo, "PASS", full.replace("VERDICT: PASS", "**VERDICT: PASS** for PR #20. I did not land it."), {}, ["merge", "provides", "ff"], None),
         ("indented-verdict", repo, "none", full.replace("\nVERDICT", "\n  VERDICT"), {}, [], None),
         ("older-pass-not-superseded", repo, "PASS", full, {}, ["merge", "provides", "ff"], None),
         ("older-fail-superseded", repo, "FAIL", "finding\nVERDICT: FAIL", {}, [], None),

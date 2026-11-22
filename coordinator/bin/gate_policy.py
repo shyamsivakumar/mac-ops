@@ -34,10 +34,16 @@ PROMPT_NO_MERGE = (
 )
 
 
+def verdict(report):
+    lines = [line for line in report.splitlines() if line.strip()]
+    match = lines and re.match(r"VERDICT:\s*(PASS|FAIL)\b", re.sub(r"[*`_]", "", lines[-1]))
+    return match.group(1) if match else None
+
+
 def complete_pass(reply, head, provides=True):
     """True when a gate reply carries every line `ticket close` requires on this head."""
     lines = [line.rstrip() for line in reply.splitlines()]
-    return (bool(lines) and lines[-1] == "VERDICT: PASS" and f"CHECK: PASS {head}" in lines
+    return (bool(lines) and verdict(reply) == "PASS" and f"CHECK: PASS {head}" in lines
             and (not provides or f"PROVIDES: PASS {head}" in lines))
 
 
@@ -77,17 +83,12 @@ def parse_verdict(report):
 
 def read_verdict(report):
     data = parse_verdict(report)
-    if report.endswith("VERDICT: FAIL"):
-        verdict = "FAIL"
-    elif report.endswith("VERDICT: PASS"):
-        verdict = "PASS"
-    else:
-        verdict = None
+    outcome = verdict(report)
     if data:
-        return (data["verdict"] if verdict in (None, data["verdict"]) else "CONFLICT", data["findings"])
+        return (data["verdict"] if outcome in (None, data["verdict"]) else "CONFLICT", data["findings"])
     findings = [{"severity": s, "path": p, "line": int(l), "text": t.strip()}
                 for s, p, l, t in re.findall(r"\[(critical|major|minor)\]\s+(\S+?):(\d+)(.*)", report)]
-    return (verdict, findings)
+    return (outcome, findings)
 
 
 def report_for_builder(report):
@@ -170,7 +171,7 @@ Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 {GATE_BAR}
 {ANSWER_FORMAT}
-Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`, as plain text with no markdown and no sentence after them.
 {manual_gate_ending() if mode == "manual" else merge + fast_forward + close} {provides_ask} Never call emp. Never print secrets."""
     if not fast_forward_main and mode != "manual":
         message = message.replace(" Never call emp. Never print secrets.", "\nNever call emp. Never print secrets.")
