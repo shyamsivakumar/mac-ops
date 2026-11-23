@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
-from gate_bar import GATE_BAR
+from gate_bar import GATE_BAR, SEVERITY_BAR
 from gate_policy import complete_pass
 import gh_gateway
 import journal
@@ -1453,6 +1453,14 @@ def fill_run_ids(body, request_id):
     return RUN_ID.sub(replace, body)
 
 
+def builder_bar_section():
+    return SEVERITY_BAR
+
+
+def bar_visible(t):
+    return False
+
+
 def assemble_brief(cfg, t, request_id, issue):
     """The brief the builder receives: the ticket body, the concrete run id and
     every coordinator decision comment, which override the body."""
@@ -1462,6 +1470,8 @@ def assemble_brief(cfg, t, request_id, issue):
     if not filled:
         head.append(f"Run id: `{request_id}`")
     parts = ["\n".join(head), ANSWER_FORMAT, body]
+    if bar_visible(t):
+        parts.append(builder_bar_section())
     decisions = coordinator_decisions(issue)
     if decisions:
         parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))

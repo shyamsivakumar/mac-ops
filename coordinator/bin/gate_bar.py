@@ -1,6 +1,13 @@
 """The merge bar both gate brief builders read, so the text lives only once."""
 
-GATE_BAR = """Merge bar (Shyam, 2026-11-16). This overrides any stricter proof wording in the ticket.
+SEVERITY_BAR = """Severity bar (Shyam, 2026-11-19). This applies to every gate:
+- A finding is critical or major only when it is likely to happen in this fleet's real use, or would cause harm that is hard to undo: data loss, a merge or push that should not happen, a lane or queue that stays stuck, a secret leak, a wrong trade or exit. State in one sentence how it happens in practice: who or what triggers it, and how often.
+- A case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce is minor. Minors never fail a PR. List them under 'Left for later'; the Coordinator turns them into a follow-up issue.
+- A proof or check that fails the same way on origin/main is pre-existing: note it as minor, not the PR's finding. One that fails only on this PR's head, or fails differently, is the PR's finding. Compare against origin/main before calling a proof failure major.
+- If every remaining finding is minor, the verdict is PASS."""
+
+GATE_BAR = (
+    """Merge bar (Shyam, 2026-11-16). This overrides any stricter proof wording in the ticket.
 
 PASS when all of these hold:
 - The diff is correct: no bug you can point to at file:line.
@@ -13,11 +20,9 @@ Exception, full proof bar kept: if the diff changes stop logic, exit logic, or t
 
 Say in one line which bar you applied and why.
 
-Severity bar (Shyam, 2026-11-19). This applies to every gate:
-- A finding is critical or major only when it is likely to happen in this fleet's real use, or would cause harm that is hard to undo: data loss, a merge or push that should not happen, a lane or queue that stays stuck, a secret leak, a wrong trade or exit. State in one sentence how it happens in practice: who or what triggers it, and how often.
-- A case that needs an unlikely sequence of events, an attacker inside our own agents, or input our own tools never produce is minor. Minors never fail a PR. List them under 'Left for later'; the Coordinator turns them into a follow-up issue.
-- A proof or check that fails the same way on origin/main is pre-existing: note it as minor, not the PR's finding. One that fails only on this PR's head, or fails differently, is the PR's finding. Compare against origin/main before calling a proof failure major.
-- If every remaining finding is minor, the verdict is PASS.
+"""
+    + SEVERITY_BAR
+    + """
 
 Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies to every gate:
 - Round 1 must list every critical and major found, not just the first.
@@ -30,3 +35,4 @@ Failure blast radius (Shyam, 2026-11-18, after a sell-recovery check blocked eve
 - Ask whether real production data could contain inputs the tests do not (old id formats, test trades, partial records). If the PR's proofs only use clean fixtures, list that as a major gap for exit and order paths.
 
 When a question is for Shyam, start it with 'Shyam,' so the board routes it to Needs you; otherwise the question goes to the coordinator."""
+)
