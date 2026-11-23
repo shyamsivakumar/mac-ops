@@ -133,6 +133,8 @@ RETIRED_FILES = (("loop", "turn_cap.py"),)
 # queue here: the board is the list.
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
+HILLCLIMB_SOURCE = "coordinator/evals/hillclimb"
+HILLCLIMB_FILES = ("build_labels.py", "daily3.py", "burst.py", "arms/plain_agent.py", "README.md")
 OVERNIGHT_BIN_FILES = ("overnight",) + tuple(
     path.name for path in sorted(
         (Path(__file__).resolve().parent / "coordinator/overnight").glob("*.py")
@@ -814,6 +816,10 @@ def changes(
         wanted.append(
             (overnight_root(coordinator) / "README.md", readme.read_bytes(), 0o644)
         )
+    if coordinator.is_dir():
+        source = checkout / HILLCLIMB_SOURCE
+        for name in HILLCLIMB_FILES:
+            wanted.append((coordinator / "evals/hillclimb" / name, (source / name).read_bytes(), 0o644))
     ignore = gitignore_item(coordinator)
     if ignore is not None:
         wanted.append((ignore[0], ignore[1], 0o644))
