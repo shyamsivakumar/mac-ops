@@ -1,0 +1,27 @@
+Read the doc. Three lists below, most important first within each.
+
+**1. Omissions**
+
+1. The baseline is measured on a broken system, not a healthy one: §2 shows 39% of launcher runs died on `402 Insufficient Balance` and `ticks.log` stops on 22 Nov, yet §5 adopts the 26.3-minute median and 53% empty share as pre-cutover numbers, so any "improvement" is partly just the model working again.
+2. §1 says the inbox can be rebuilt from the journal, but never says where the replay cursor lives; if it lives in `inbox.db`, losing the file loses the cursor, and the backfill either restarts from zero or silently skips the gap.
+3. §3.3 accepts `approve <id>` from a resolved card, a t56 message and a phone relay with no attribution or single-use nonce, so the design has no answer to which human actually approved a merge.
+4. §3.6 leaves the load-bearing mechanism ("how the extension ends a run from inside a `tool_call` handler") unconfirmed and falls back to a prompt line the model must obey; the whole approvals story therefore rests on unproven behaviour, not on the state machine the doc spends most of its length on.
+5. There is no throughput or cost cap: §3.5 claims up to 50 rows and starts one run per pass with no run budget, and invariant 7 only alarms when the oldest pending row is 30 minutes old, so a burst of event classes can quietly multiply model runs while §5's "at most 15 a day" stays a target rather than a limiter.
+6. Nothing covers schema versioning, outbox retention, WAL growth or vacuum (§3.2, §3.7); only inbox rows get the 30-day rule, and a single SQLite file in `~/.local/state` accumulates outbox, counters and done rows with no migration story for the second shape change.
+
+**2. Failure modes and race conditions**
+
+1. `alarm` is both an inbox kind (§3.2) and something the worker raises from inside a pass (invariant 7), so a persistently failing source manufactures alarm rows that wake runs whose only possible output is another alarm.
+2. The journal hook writes the inbox row after the journal line and only prints to stderr on failure (§3.3); that event is now in the journal but behind the producer's position, so it is invisible to the inbox unless the cursor is explicitly not advanced, which the doc never states.
+3. Outbox delivery is at-least-once (§3.7) and the only defence against a repeated `hc send` is a key printed in the body; t56 pasting "merge PR 887" twice and acting twice is a real outcome, and the doc treats at-least-once as harmless.
+4. `pr_new_head:<repo>#<n>:<head>` (§3.2) collapses a force-push back to a previously seen head into a duplicate, so exactly the case a re-cut produces is the case the dedupe key drops.
+5. Two answers to one approval (approve then deny, or a card resolve plus a phone relay) both become `approval_answer:<id>` rows and both resume the same saved session file with no in-flight guard (§3.6), and the 900-second lease in invariant 2 says nothing about a resumed run whose session is already open.
+6. Timers and leases use wall-clock epoch values (§3.2, §3.4) while nothing addresses a sleeping laptop: `due_ts` timers are skipped across sleep, the 2-hour fallback never fires while closed, and a `lease_until` that passes during suspend reaps work whose process was merely frozen.
+
+**3. Simpler alternatives that meet the same goals**
+
+1. Keep the single launchd tick and put a precheck in front of it: tail the journal from a saved offset plus one conditional `gh` call, and exit before the selftest and model call when nothing is new (§1 path 1, §3.6a). That kills the empty wake for a few dozen lines, with no new process, no second store and no cutover.
+2. Fix `coord-watch` instead of building an inbox: it already emits the `EVENT` lines the doc retires in §6/T13 and only lacks a LaunchAgent and a wake instead of a print (§1.3). The doc deletes a working detector to replace it with a store, a worker and an outbox.
+3. Replace the `inbox` table with a spool directory: one file per event, filename as the dedupe key, claim as an atomic rename into `claimed/` (§1 "why the inbox lives where it lives", §3.2). No schema, no `BEGIN IMMEDIATE`, no `UNIQUE` index to get wrong, and the lease is `ls -t`.
+4. Drop session resume entirely: on a blocked call, write the approval card and end the run, then let the next normal pass reread the board and re-issue the command. That removes T10 and T11, `--session-dir`, and the unconfirmed §3.6 exit mechanism.
+5. Send inline and journal afterwards, accepting at-most-once, rather than an outbox table plus a dispatcher (§3.7). Given a run reads the board fresh each pass, a lost alert is cheaper than a duplicated merge instruction, and the dispatcher is the most complex part of the design.
