@@ -4418,7 +4418,57 @@ def builder_receipt():
               [f"ticket:{repo}#1580:a1", f"ticket:{repo}#7:a2"])
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt}
+def closed_ticket_merge():
+    import lane_driver as lane
+    repo, head, key = "shyamsivakumar/mac-ops", "a" * 40, "FIX"
+    row, merges, items = dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main"), [], []
+
+    def merge(repo_, number, head_, pr, issue, gate, ledger):
+        merges.append(issue)
+
+    def decision(item):
+        items.append(item["id"])
+
+    def act(reason, verdict=("PASS", {"threadId": "gate"}, "VERDICT: PASS"), unreadable=False, ledger=None, dry=False):
+        pr = dict(number=20, state="OPEN", headRefOid=head, labels=[], mergeable="MERGEABLE", body=f"Refs #10\nBuilder check: PASS {head}")
+        snapshot = {"repos": {repo: {"prs": [pr], "issues": []}}}
+
+        def read_json(command, **_):
+            if command[:3] != ["gh", "issue", "view"]:
+                return pr_reads(lane, row)(command)
+            if unreadable:
+                raise RuntimeError("snapshot read failed")
+            return {"state": "CLOSED", "stateReason": reason}
+
+        with patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
+             patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", dry), \
+             patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+             patch.object(lane, "gate_verdict", return_value=verdict), patch.object(lane, "read_json", read_json), \
+             patch.object(lane, "run", side_effect=AssertionError("unexpected command")), \
+             patch.object(lane, "merge_passed_pr", merge), patch.object(lane, "publish_decision", decision):
+            return lane.act_on_pr(repo, 20, {} if ledger is None else ledger)
+
+    act("completed")
+    exact((merges, items), ([""], []))
+    merges.clear()
+    ledger = {}
+    result = act("not_planned", ledger=ledger)
+    exact((merges, items), ([], [f"closed-not-planned-{key}-20"]))
+    exact(result, "#20: ticket #10 closed as not planned, no merge, decisions item raised")
+    exact(ledger, {f"closed-not-planned:{repo}#20:{head}": "item raised"})
+    act("not_planned", ledger=ledger)
+    exact(items, [f"closed-not-planned-{key}-20"])
+    act("completed", verdict=("absent", None, ""))
+    exact(merges, [])
+    items.clear()
+    result = act("not_planned", unreadable=True)
+    exact(result, "skip #20: ticket #10 is not in the open snapshot and its state could not be read")
+    exact((merges, items), ([], []))
+    act("not_planned", ledger={}, dry=True)
+    exact((merges, items), ([], []))
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge}
 
 
 def main():
