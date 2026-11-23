@@ -51,7 +51,9 @@ def read_journal(journal_dir):
 
 def revert_check(gh, cache, repo, sha, since):
     if repo not in cache:
-        pages = gh(["api", "--paginate", "--slurp", f"repos/{repo}/commits?sha=main&since={since}&per_page=100"]) or []
+        pages = gh(["api", "--paginate", "--slurp", f"repos/{repo}/commits?sha=main&since={since}&per_page=100"])
+        if pages is None:
+            return None, {}
         cache[repo] = [commit for page in pages for commit in page]
     hits = [c["sha"] for c in cache[repo] if f"This reverts commit {sha}" in ((c.get("commit") or {}).get("message") or "")]
     return (True, {"revert_sha": hits[0]}) if hits else (False, {})
