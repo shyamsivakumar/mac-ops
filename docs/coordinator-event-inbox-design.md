@@ -135,8 +135,8 @@ cannot flood it.
 1. **Activation watermark.** The first time the hook is enabled it writes
    `activated_at` to the `meta` table. Journal lines older than that go straight
    into `seen` and never become pending rows. Without it, a replay from the
-   start of this month would enqueue 1,404 old facts (425 on 21 Nov, 699 on
-   22 Nov, 280 on 23 Nov; `evidence/event-inbox-design/replay_wakes.out`) and
+   start of this month would enqueue 1,461 old facts (425 on 21 Nov, 699 on
+   22 Nov, 337 on 23 Nov; `evidence/event-inbox-design/replay_wakes.out`) and
    start a wake storm.
 2. **Per-file offset cursor.** `meta` keeps `(journal file name, byte offset)`.
    Replay seeks to the offset, reads to the end of that file, then reads every
@@ -259,46 +259,111 @@ approval request to Shyam sooner.
 The first draft set at most 15 wakes a day and a median latency of 3 minutes
 without measuring how many events arrive. The Coordinator's review counted
 ten-minute windows with at least one `gate_queued`, `gate_verdict`, `merged`,
-`merged_outside_lane` or `alarm_raised` line. Re-counted from the journal, in US
-Eastern days: 73 windows on 21 Nov (partial), 137 on 22 Nov, 61 on 23 Nov
-(partial). The counts match. Raw lines of those kinds on those days: 404, 707
-and 342. By kind over the whole window: 474 `gate_queued`, 370 `alarm_raised`,
-310 `gate_verdict` (185 PASS, 125 FAIL), 170 `merged` and 129
+`merged_outside_lane` or `alarm_raised` line. Re-counted from the journal at the
+time of that review, in US Eastern days: 73 windows on 21 Nov (partial), 137 on
+22 Nov, 61 on 23 Nov (partial). The counts match. Raw lines of those kinds on
+those days: 404, 707 and 342. The journal is live, so figures below that come
+from the replay scripts use the journal as read on 23 Nov at 22:39 UTC (a window
+of 54.5 hours from 21 Nov 16:07 UTC). By kind over the window: 474 `gate_queued`,
+375 `alarm_raised`, 310 `gate_verdict` (185 PASS, 125 FAIL), 170 `merged` and 129
 `merged_outside_lane`. 226 of the 299 merges are in `strategy-replay-workbench`
-(SRW), 52 in mac-ops. Alarms repeat: 73 of the 370 raises are the same
-`factory-watchdog` alarm, so alarm dedupe must be by name until withdrawn.
+(SRW), 52 in mac-ops.
 
-If every one of those kinds woke the Coordinator, the target could not hold.
 `evidence/event-inbox-design/replay_wakes.py` replays the journal through the
 proposed rules (60-second debounce, a minimum gap between runs, a fallback only
-when no run happened for 2 hours). Runs a day, 21, 22 and 23 Nov (the first and
-last are partial days):
+when no run happened for 2 hours). Runs a day on 21, 22 and 23 Nov (the first
+and last are partial days):
 
-- Variant A, all five kinds wake: 74, 134 and 54 runs with a 10-minute gap; 26,
-  48 and 23 with a 30-minute gap. The clock itself is 48 a day.
+- Variant A, all five kinds wake: 74, 134 and 59 runs with a 10-minute gap; 26,
+  48 and 25 with a 30-minute gap (99 in all).
 - Variant B, only kinds that need Coordinator judgment wake (`alarm_raised` as a
   new generation, `round_cap`, `merge_held`, `close_failed`, `launch_failed`,
   `recut`), and `gate_queued`, `gate_verdict`, `merged` and
-  `merged_outside_lane` ride along in the next batch: 41, 65 and 28 runs with a
-  10-minute gap; **22, 40 and 18 with a 30-minute gap**; 13, 23 and 13 with a
-  60-minute gap.
-- Variant C, B plus merges and verdicts outside SRW: 26, 40 and 18 with a
-  30-minute gap, about 5% more runs than B.
+  `merged_outside_lane` ride along in the next batch: 41, 65 and 32 runs with a
+  10-minute gap (138 in all); **22, 40 and 20 with a 30-minute gap (82 in all)**;
+  13, 23 and 14 with a 60-minute gap (50 in all).
+- Variant C, B plus merges and verdicts outside SRW: 26, 40 and 20 with a
+  30-minute gap (86 in all), about 5% more runs than B.
 
-Latency for variant B at a 30-minute gap: a wake row waits a median of 14.1
-minutes and p90 of 26.6 minutes for its run; a row that arrives after at least
-30 quiet minutes starts a run in about 1 minute (40 of 323 wake rows); a
-batch-only row waits a median of 15.7 and p90 of 29.8 minutes. A 10-minute gap
-gives a median of 1.1 minutes but 134 runs over the window, which is more than
-the clock. The honest reading is that wake count and latency trade against each
-other at this volume. The inbox saves about 25% of runs against the clock and
-about 45% of the median delay (14 against 26 minutes), and a quiet hour costs no
-run at all. A larger saving needs a smaller urgent set. Duplicate sources are
-the first lever: 68 `close_failed` events plus 52 `lane-close-failed` alarms,
-and 62 `recut` events plus 44 `recut` alarms, describe the same tickets twice.
-The kinds `ci_main`, `pr_review` and the human signal have no journal history,
-so the replay cannot size them. The shadow week measures them, and the targets
-below are checked again after it.
+#### What the saving really is
+
+The comparison that matters is against the clock as it ran, not against 48 a
+day. The measured launcher count is 88 runs in about 52 hours (41 a day, 1.7 an
+hour), and 34 of those were failed 402 runs. Variant B at a 30-minute gap
+replays to 82 runs in 54.5 hours (36 a day, 1.5 an hour). That is **about 11%
+fewer runs than measured**, not the 25% that the nominal 48 a day would suggest.
+Against 48 nominal it is 25% fewer, but the clock did not run 48 a day. A target
+of a mean of 36 a day and no day above 48 must be read next to the measured 41
+a day: it asks for about 11% fewer runs, and the cap of 48 is the nominal clock,
+a ceiling and not a saving.
+
+The delay figures are not the same measurement and must not be compared as a
+before and after. The 26.3 minutes is the time from a PR opening to the first
+tick summary that names it, on 12 PRs, and includes the tick's own run time and
+the PR-specific fact. The 14.1 minutes is the replayed wait from a wake-class
+journal row to the start of the next run, over 330 rows. The like-for-like figure
+for the clock is the T0 replay below, where a wake-class row waits a median of
+16.2 minutes (p90 26.6) for the next clock tick. So at a 30-minute gap the inbox
+shortens the wait by about 2 minutes at the median (14.1 against 16.2, p90 25.9
+against 26.6). Its real latency gain is for rows that arrive after at least 30
+quiet minutes: 40 of the 330 wake rows start a run in about 1 minute, where a
+clock tick waits up to 30. A 10-minute gap gives a median of 1.1 minutes but 138
+runs, which is more than the clock made. At this volume, wake count and latency
+trade against each other.
+
+#### T0 replay: skip the tick when nothing wake-class is new
+
+`evidence/event-inbox-design/t0_replay.py` keeps the 30-minute clock and skips a
+tick when no wake-class fact is newer than the last tick that ran, with a tick
+forced if none ran for 2 hours. Over the same 54.5 hours (109 clock ticks, 48 a
+day):
+
+- With the variant B wake kinds: **78 of 109 ticks run (34.3 a day), 31 skipped
+  (28%)**. That is about 15% fewer runs per hour than the measured clock (1.43
+  against 1.69 an hour), and it is fewer than the inbox's 82 runs under variant
+  B. A wake-class row waits a median of 16.2 and p90 of 26.6 minutes.
+- With all five kinds: 95 of 109 run (41.8 a day), 14 skipped (13%), which is
+  the same as the measured clock. Skipping only works when the wake set is
+  narrow.
+
+Reading it plainly: at this volume T0 captures about all of the run-count saving
+that the inbox replays to, in a few dozen lines and with no new store, because
+events bunch and the clock batches them. What T0 does not give is the roughly
+1-minute response to a row after a quiet spell, the durable rows, per-session
+batching, the outbox and the lost-event accounting. Those are the inbox's
+reasons to exist, and the run count is not one of them. T0 is therefore worth
+shipping first, and the inbox's pass criteria in section 5 do not claim a larger
+run-count win than the replay shows.
+
+#### Alarms drive the wake rows
+
+`evidence/event-inbox-design/alarm_breakdown.py` counts the 330 wake rows of
+variant B: 165 `alarm_raised`, 70 `close_failed`, 62 `recut`, 19 `round_cap`, 13
+`merge_held` and 1 `launch_failed`. Alarm rows are 50% of wake rows. The
+`close_failed` and `recut` events repeat alarm families (`lane-close-failed-*`,
+`recut-*`), so with them the alarm-driven share is 90%. By alarm family, raise
+lines against distinct episodes (generations, which are the wake rows):
+
+- `lane-gate-rounds-SRW-N`: 130 raises, 20 episodes (20 names). Repeated raises
+  of one alarm each round.
+- `factory-watchdog`: 73 raises, 2 episodes. A flapping alarm, so dedupe by name
+  until withdrawn takes 73 rows to 2.
+- `recut-SRW-N`: 60 raises, 44 episodes.
+- `lane-close-failed-SRW-N`: 54 raises, 54 episodes, one per ticket.
+- `lane-close-failed-MO-N`: 14 and 14. `herdr-build-MO-N`: 12 raises, 6 episodes.
+  `prompt-merge-MO-N`: 10 and 10. `factory-zero-merge`: 9 raises, 5 episodes.
+- Under 5 each: `factory-overnight-stall`, `lane-close-failed-FFBT-N`,
+  `lane-merged-unreviewed-SRW-N`, `prompt-merge-LMW-N`, `recut-MO-N`,
+  `lane-close-failed-LMW-N`, `closed-not-planned-SRW-N`.
+
+The biggest raise-line sources, `lane-gate-rounds` and `factory-watchdog`, are
+cut by generation dedupe (203 raise lines to 22 episodes). What is left is
+`lane-close-failed` and `recut`, which each fire once per ticket and are also
+journaled as `close_failed` and `recut` events. Merging each alarm with its event
+is the first lever for a smaller urgent set, worth up to 130 of the 330 wake
+rows. The kinds `ci_main`, `pr_review` and the human signal have no journal
+history, so the replay cannot size them. The shadow week measures them, and the
+targets below are checked again after it.
 
 Gaps in the baseline, stated plainly: the in-session idle wake (path 2) leaves
 no log, so its count is unknown. Tick time zones in `ticks.log` are labelled PT
@@ -364,9 +429,13 @@ One table, `inbox`.
 - `attempts`
   - Type: int
   - Meaning: claims that reached a model run
-- `claimed_by`, `lease_until`, `run_id`
-  - Type: text, real, text
-  - Meaning: who holds the row and until when
+- `claimed_by`, `claimed_pid`, `lease_until`, `run_id`
+  - Type: text, int, real, text
+  - Meaning: who holds the row, its process, and until when
+- `tier`
+  - Type: text
+  - Meaning: `wake` or `batch`, set at enqueue from the wake-kind setting (section
+    3.3a)
 - `done_ts`, `error`
   - Type: real, text
   - Meaning: end of life
@@ -496,18 +565,26 @@ Invariants:
 11. The database carries `PRAGMA user_version` for schema changes. Done rows and
     sent outbox rows have their payload purged after 30 days (keys stay in
     `seen`), and the worker runs `wal_checkpoint(TRUNCATE)` once a day.
-12. Liveness has two bounds. The worker touches `inbox.worker.heartbeat` every 30
-    seconds from a timer thread for as long as a pass runs, and at pass end. A
-    model run is killed at 600 seconds (`coord-tick:46`), so a healthy pass ends
-    within about 11 minutes. The worker sets a 20-minute `SIGALRM` on the whole
-    pass so a wedged pass cannot hold the lock. The watchdog is
-    `lane_driver.py`, which already raises `factory-watchdog` and runs every 180
-    seconds (`dev.coordinator.lanes.plist`, `StartInterval` 180). It alarms when
-    the worker lock is held and the heartbeat is more than 4 minutes old, or when
-    no pass has finished in 5 minutes (the job runs every 60 seconds). Worst case
-    detection is 4 minutes plus one 180-second watchdog cycle, about 7 minutes.
-    The hourly selftest is not used for this, because its cadence cannot give a
-    minutes-level alarm.
+12. Liveness is judged one way at a time, so a legal 10-minute run never alarms.
+    The worker touches `inbox.worker.heartbeat` every 30 seconds from a timer
+    thread for as long as a pass runs, and once at pass end. A model run is killed
+    at 600 seconds (`coord-tick:46`), so a healthy pass ends within about 11
+    minutes, and the worker sets a 20-minute `SIGALRM` on the whole pass so a
+    wedged pass cannot hold the lock. The watchdog is `lane_driver.py`, which
+    already raises `factory-watchdog` and runs every 180 seconds
+    (`dev.coordinator.lanes.plist`, `StartInterval` 180).
+    - While the worker lock is held, the watchdog judges by heartbeat age only:
+      it alarms when the heartbeat is more than 4 minutes old. Pass age is not
+      looked at, because a pass may legally run 10 minutes.
+    - While the lock is free, the watchdog judges by pass age only: it alarms
+      when the last finished pass is more than 5 minutes old, and only when the
+      setting `COORD_INBOX_EXPECT_PASSES` is on (default off in shadow, where
+      passes are run by hand).
+    - A free lock with no heartbeat file means the worker never ran and raises
+      nothing.
+    Worst case detection of a wedged run is 4 minutes plus one 180-second
+    watchdog cycle, about 7 minutes. The hourly selftest is not used for this,
+    because its cadence cannot give a minutes-level alarm.
 
 ### 3.5 Claim, batch and run
 
@@ -651,22 +728,26 @@ numbers are in section 2 and reproduced by the script on 16 to 22 Nov.
 
 - Event volume (new)
   - Before (measured): 404, 707 and 342 raw wake-kind lines on 21, 22 and 23 Nov
-    (73, 137 and 61 ten-minute windows); 1,404 distinct facts after alarm
+    (73, 137 and 61 ten-minute windows at the time of review); 1,461 distinct facts
+    after alarm
     generations
   - Definition after: inbox rows enqueued per day, by kind and tier, plus
     ignored duplicates
   - Pass criterion: reported only. It is the input that the wake and latency
     targets are set from, and the shadow week re-prices them.
 - Wake count (runs a day)
-  - Before (measured): 41 model runs a day on the clock (88 in 52 h; 48 nominal)
+  - Before (measured): 41 model runs a day on the clock (88 in 52 h, 1.7 an
+    hour, 34 of them failed 402 runs); 48 a day is the nominal clock, not what ran
   - Definition after: `inbox_batch` journal lines with a started run, plus
     fallback runs. Runs that failed on the model (a 402, a timeout) are listed
     separately and never counted as saved wakes.
-  - Replay prediction (section 2, variant B, 30-minute gap): 80 runs in 53.6
-    hours, about 36 a day (22, 40 and 18 on the three partial days).
+  - Replay prediction (section 2, variant B, 30-minute gap): 82 runs in 54.5
+    hours, about 36 a day (22, 40 and 20 on the three partial days), 1.5 an
+    hour. The T0 replay predicts 78 runs (34 a day) with no new store.
   - Pass criterion (7 consecutive days after cutover): mean at most 36 a day,
-    no day above 48, and at least 25% fewer runs than the clock would have made
-    in the same window.
+    read next to the measured 41 a day, which is about 11% fewer runs and not
+    more. No day above 48 (the nominal clock, a ceiling and not a saving). The
+    criterion does not claim the 25% that 48 a day would suggest.
 - Run outcome split (replaces the single empty-run share). Every run falls in
   exactly one bucket.
   - Bucket 1, no events: a fallback run whose batch holds only the timer row.
@@ -688,12 +769,15 @@ numbers are in section 2 and reproduced by the script on 16 to 22 Nov.
   - Definition after: row `ts` (the source event time, such as the PR
     `createdAt`, not the row creation time) to its outbox row `sent_ts`
   - Replay prediction (variant B, 30-minute gap): wake rows median 14.1 min, p90
-    26.6; rows after a quiet 30 minutes about 1 min; batch-only rows median
-    15.7, p90 29.8.
+    25.9; rows after a quiet 30 minutes about 1 min; batch-only rows median
+    15.5, p90 29.6. The like-for-like clock figure is the T0 replay: median 16.2,
+    p90 26.6. The 26.3 minute baseline above measures PR open to the first
+    tick that names it, which is a different quantity, so it is not the
+    comparison.
   - Pass criterion (7 consecutive days after cutover): wake rows median at most
     15 min and p90 at most 30 min; rows after a quiet 30 minutes p90 at most 2
     min; batch-only rows p90 at most 60 min. Each is within 20% of the replay and
-    below the clock's 26.3 min median.
+    below the 16.2 min the clock gives for the same rows.
 - Lost events
   - Before (measured): not measurable
   - Definition after: rows not `done` more than 2 hours after `ts` (`failed`
@@ -722,11 +806,14 @@ are counted too, so the shadow week also predicts the new wake count.
 2. **Build every producer.** The poll pass (reviews, Shyam labels, CI on main),
    timers and the request-notice writer are built before shadow starts, so the
    shadow week covers every source that will go live.
-3. **Shadow.** Enable the journal hook and load the worker job in `--shadow`: it
-   claims nothing, makes no model call and sends nothing. It writes an
-   `inbox_would_wake` journal line for every batch it would have started. The
-   30-minute tick is unchanged. Run 7 days. Compare with the criterion in
-   section 5.
+3. **Shadow.** Enable the journal hook and run the worker pass in shadow: it
+   makes no model call and sends nothing. It writes an `inbox_would_wake`
+   journal line for every batch it would have started, runs the batch through a
+   shadow runner that answers `NOTHING: shadow`, and consumes the rows. No
+   shipped ticket adds a launchd job, because the installer loads every plist
+   in `coordinator/launchd`. The shadow passes are run by hand, or by a worker
+   plist that Shyam adds and loads himself for the week. The 30-minute tick is
+   unchanged. Run 7 days. Compare with the criterion in section 5.
 4. **Switch.** Unload the old tick, turn the worker's shadow flag off and set
    `COORD_WAKE=0` for the in-session timer. This step needs Shyam's go. The
    change is a plist and env edit, listed in the cutover ticket.
@@ -811,8 +898,8 @@ same work from the board.
    events as wake sources, and at SRW volume all of them cannot wake and meet a
    wake target.
 3. **Minimum gap between runs.** 10 minutes gives a median wake latency of 1
-   minute and 134 runs over the replay window, more than the clock. 30 minutes
-   gives 14 minutes and 80 runs. 60 minutes gives 28 minutes and 49 runs. The
+   minute and 138 runs over the replay window, more than the clock. 30 minutes
+   gives 14 minutes and 82 runs (the measured clock made 88 in about 52 hours). 60 minutes gives 29 minutes and 50 runs. The
    design uses 30.
 
 ## 10. Critiques
@@ -840,7 +927,7 @@ revision 2 (the Coordinator's review, below): the inbox carries no grant.
 3. **Major: first replay floods.** **Accepted.** An activation watermark sends
    older facts to `seen`, a per-file offset cursor crosses the month boundary,
    and replay runs at startup and hourly from the offset (section 1). Without
-   the watermark the replay would enqueue 1,404 pending rows.
+   the watermark the replay would enqueue 1,461 pending rows.
 4. **Major: `pr_opened` is not PR opened.** **Accepted.** `gate_queued` is now a
    batch kind. `pr_opened` and `pr_new_head` come from the poll pass over the
    open PR list (section 3.3), with a stated detection lag of up to 2 minutes.
@@ -914,135 +1001,68 @@ Simpler alternatives
 
 ## 11. Ticket cut
 
-Each ticket stays within 150 code lines and 3 code files. Tests extend
-`coordinator/overnight/selftest.py` or `EXPECTED` in
-`coordinator/bin/hourly_selftest.py`; no new test files. None are opened by this
-PR.
+Ready-to-file bodies for T1 to T11 are in `evidence/event-inbox-design/tickets/`,
+one file each, in the format of issue #900. T12 (cutover) and T13 (retire
+`coord-watch`) are listed below and have no body yet, because each needs Shyam's
+go. None of the tickets is opened by this PR.
 
-- T1
-  - Ticket: Inbox core: schema, `enqueue` with dedupe, `claim`, `ack`, `reap`,
-    lease
-  - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/selftest.py`
-  - Blocked by: none
-  - Proof idea: Temp `COORD_INBOX_DIR`. Enqueue the same key twice (one row).
-    Claim, kill the claimer, advance the clock, reap (row is `pending`, attempts
-    1). Third lease expiry gives `failed`.
-- T2
-  - Ticket: Journal hook: event-to-kind and tier map, `inbox.enqueue` after the
-    journal write, off switch; activation watermark and per-file offset replay
-    across month files
-  - Files: `coordinator/bin/journal.py`, `coordinator/bin/inbox.py`
-  - Blocked by: T1
-  - Proof idea: Temp dirs with a two-month journal fixture. First enable: old
-    lines go to `seen`, zero pending rows. New `gate_verdict` twice gives one
-    row. A late line appended to the old month after the cursor moved is still
-    read. With the switch off, zero rows and the same journal bytes.
-- T3
-  - Ticket: Outbox table and dispatcher (`hc_send`, `coordq_send`, `none`,
-    `no_decision`)
-  - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/selftest.py`
-  - Blocked by: T1
-  - Proof idea: Fake `hc` on `PATH`. Crash between send and mark gives one
-    resend with the same key. A run with no outbox rows is recorded as failed.
-- T4
-  - Ticket: Shadow worker pass: per-session batch and coalesce,
-    `inbox_would_wake` journal line, no model, no send; launchd job file
-  - Files: `coordinator/bin/inbox.py`,
-    `coordinator/launchd/dev.coordinator.inbox.plist`, `install_coordinator.py`
-  - Blocked by: T2
-  - Proof idea: Fill a temp inbox with 12 events on 5 PRs. The pass prints 1
-    batch of 5 lines and sends nothing. Load the plist only in a throwaway
-    `launchctl` domain, or lint it with `plutil`.
-- T5
-  - Ticket: Metrics script: event volume, runs a day, the four outcome buckets,
-    latency from source event time, lost events including the weekly GitHub
-    reconciliation, duplicate rate
-  - Files: `scripts/coord_wake_metrics.py`
-  - Blocked by: none
-  - Proof idea: Run on 16 to 22 Nov and reproduce 53%, the 26.3 minute median and
-    the volume counts in this doc, and compare `replay_wakes.out` with the
-    script's own replay of the same journal.
-- T6
-  - Ticket: Timers table and the 2-hour `fallback` timer; timers only enqueue
-  - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/selftest.py`
-  - Blocked by: T1
-  - Proof idea: A timer due now gives one `timer_due` row once. A second pass
-    gives no new row. Advance by the period and get a new row.
-- T7
-  - Ticket: Poll pass: `pr_opened`, `pr_new_head`, `pr_review` and unverified
-    `human_signal` rows from the open PR list via `gh_gateway` ETag
-  - Files: `coordinator/bin/inbox.py`, `coordinator/bin/gh_gateway.py`
-  - Blocked by: T2
-  - Proof idea: Fake gh fixture with a held draft PR and an ungated PR: both give
-    `pr_opened` (which `gate_queued` would miss). A repeat poll returns 304 and
-    adds no row. A label by the `shyamsivakumar` login gives a `human_signal`
-    row with `verified=false`.
-- T8
-  - Ticket: Poll pass: `ci_main` from Mac-published statuses only
-  - Files: `coordinator/bin/inbox.py`
-  - Blocked by: T7
-  - Proof idea: Fake status fixture with a Mac context and a non-Mac context.
-    Only the Mac one produces a row. A repo with no Mac context is skipped and
-    logged.
-- T9
-  - Ticket: Worker run: batch prompt into `coord-tick`'s runner, parse `SEND`
-    and `NOTHING`, one transaction for outbox plus `done`, model-unavailable
-    returns rows to pending uncounted
-  - Files: `coordinator/pi/bin/coord-tick`, `coordinator/bin/inbox.py`
-  - Blocked by: T3, T4
-  - Proof idea: `COORD_TICK_PROMPT_OVERRIDE` with a fake `pi` script that prints
-    each reply shape (send, nothing, garbage, 402). Rows end done, done, pending
-    (failed run counted), pending (not counted).
-- T10
-  - Ticket: Request notice: the run's request line becomes a `request_notice`
-    outbox row through the existing card path; a `pr_merged` or new-head row
-    closes it; an unanswered notice is raised again once after 24 hours. No grant
-    table, no `approve` parsing, no guard change.
-  - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/selftest.py`
-  - Blocked by: T9
-  - Proof idea: Fake run replies with a request line. One notice row is written.
-    A later `pr_merged` row for the same PR and head closes it. A forged
-    `approve <id>` message or card change leaves it open and creates no row of
-    any kind.
-- T11
-  - Ticket: Worker liveness: heartbeat every 30 seconds, 20-minute pass alarm,
-    and the `lane_driver.py` check that raises `factory-watchdog` when the lock is
-    held and the heartbeat is more than 4 minutes old or no pass finished in 5
-    minutes
-  - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/lane_driver.py`
-  - Blocked by: T4
-  - Proof idea: Temp state dir with a stale heartbeat file and a held lock: one
-    alarm, once per episode. A fresh heartbeat: none. A pass that sleeps past the
-    alarm is killed and the lock released.
-- T12
-  - Ticket: Cutover config: unload the old tick, `COORD_WAKE=0` for the
-    in-session timer, worker out of shadow. Needs Shyam's go. Pass criteria are
-    the section 5 targets: at most 36 runs a day mean, wake-row median 15 min
-    and p90 30 min, no stuck rows.
-  - Files: `coordinator/launchd/dev.coordinator.tick.plist`,
-    `coordinator/launchd/dev.coordinator.inbox.plist`,
-    `docs/coordinator-event-inbox-design.md`
-  - Blocked by: T5 to T11, and 7 shadow days (run with every producer on) meeting the shadow criterion and re-pricing the tiers
-  - Proof idea: `plutil -lint`; metrics script after 7 days against the pass
-    table.
-- T13
-  - Ticket: Retire `coord-watch`: remove the script, the fast-check entry,
-    `docs/coord-watch.md` and the README activation steps. Deleting needs
-    Shyam's yes.
-  - Files: `coordinator/bin/coord-watch`, `scripts/mac_ops_fast_check.py`,
-    `coordinator/pi/README.md`
-  - Blocked by: T12 plus 14 days on the inbox
-  - Proof idea: Fast check passes with the entry gone; `grep -r coord-watch`
-    shows only history.
+Every ticket is shadow mode only: none makes a model call, sends a message, loads
+a live job, or touches t56, the guard or the tick. Specifically, no ticket adds a
+plist under `coordinator/launchd`, because `install_coordinator.py` loads every
+plist in that folder, and no ticket edits `coord-tick`, `coordinator.ts` or
+`dev.coordinator.tick.plist`. A shadow pass is therefore run by hand
+(`python3 coordinator/bin/inbox_worker.py`) until the cutover ticket adds the
+worker job. Settings carry the open questions: `COORD_INBOX_WAKE_KINDS` (which
+kinds wake, default variant B), `COORD_INBOX_MIN_GAP` (default 1800 seconds),
+`COORD_INBOX_SHADOW` (default on). The authenticated approval channel is not
+built, and no ticket creates a grant.
 
-T0 is an optional interim step that can ship first and stands alone: a
-precheck in `coord-tick` that reads the journal past a saved offset and exits
-before the selftest and the model call when no wake-class event is new. It
-removes the empty wakes for a few dozen lines but leaves the 30-minute latency,
-so it does not replace the inbox. Files: `coordinator/pi/bin/coord-tick` and
-one small helper. Blocked by: none. Proof: run with a temp journal holding no
-new event (exit before `pi`) and one `gate_verdict` (reaches `pi`).
+Each ticket is within 150 code lines and 3 code files. Tests extend the `inbox`
+eval in `coordinator/overnight/selftest.py` (added to `EXPECTED` in
+`coordinator/bin/hourly_selftest.py` by T1); there are no new test files. Each
+proof is one command that is HOME independent (`HOME=/nonexistent`, temp
+`COORD_INBOX_DIR`), red on main, with one expected red signature. Proof status:
+T1's proof was run green against a throwaway prototype and red on the current
+main. T3, T4, T7 and T9 were run red on the current main with their stated
+signature. T2, T6, T8, T10 and T11 are red with the stated signature only once
+their blockers have merged (they fail earlier with a missing module until
+then), and T5 is red on a missing script. The remaining proofs compile and have
+been read through, but were not run green.
 
-Order of work: T1, then T2, T3, T5, T6 in parallel, then T4, T7, then T8, T9,
-then T10, T11, then T12 after the shadow week, then T13. No ticket changes
-`coordinator/pi/extensions/coordinator.ts`.
+- T1 (`inbox.py`, `selftest.py`, `hourly_selftest.py`): tables, `enqueue` with
+  dedupe and a closed kind set, `claim`, `ack`, `reap`, tier setting. Blocked by:
+  none.
+- T2 (`journal.py`, `inbox.py`, `selftest.py`): the journal hook and
+  `from_journal`, with alarm generations. Blocked by: T1.
+- T3 (`inbox_outbox.py`, `selftest.py`): outbox writer and shadow-safe
+  dispatcher. Blocked by: T1.
+- T4 (`inbox_replay.py`, `selftest.py`): activation watermark and replay across
+  month files. Blocked by: T1, T2.
+- T5 (`scripts/coord_wake_metrics.py`, fixtures): the metrics script. Blocked
+  by: T1.
+- T6 (`inbox.py`, `selftest.py`): timers and the 2-hour fallback. Blocked by: T1.
+- T7 (`inbox_poll.py`, `selftest.py`): poll pass for `pr_opened`, `pr_new_head`,
+  `pr_review` and unverified `human_signal`. Blocked by: T1.
+- T8 (`inbox_poll.py`, `selftest.py`): poll pass for `ci_main`. Blocked by: T7.
+- T9 (`inbox_worker.py`, `selftest.py`): the shadow worker pass (batch,
+  coalesce, parse, would-wake line). Blocked by: T3, T4, T6, T7, T8.
+- T10 (`inbox_outbox.py`, `selftest.py`): request notice and outcome close, no
+  grant. Blocked by: T3, T9.
+- T11 (`inbox_worker.py`, `lane_driver.py`, `selftest.py`): heartbeat, pass alarm
+  and the watchdog check. Blocked by: T9.
+- T12, cutover (no body yet; needs Shyam's go): add the worker plist, swap in
+  the real runner, unload the old tick, turn the in-session timer off, shadow
+  off. Blocked by: T5 to T11 and 7 shadow days (all producers on) that meet the
+  shadow criterion and re-price the tiers. Pass criteria are the section 5
+  targets.
+- T13, retire `coord-watch` (no body yet; deleting needs Shyam's yes): remove the
+  script, its fast-check entry and the README activation steps. Blocked by: T12
+  and 14 days on the inbox.
+
+T0 (skip the tick when nothing wake-class is new, section 2) is an optional
+stand-alone step that can ship first. It edits `coord-tick`, so it is outside the
+shadow-only set above and has no body in the tickets folder. The T0 replay shows
+it captures about the whole run-count saving of the inbox at current volume.
+
+Order of work: T1; then T2, T3, T5, T6, T7 in parallel; then T4, T8; then T9;
+then T10 and T11; then T12 after the shadow week; then T13.
