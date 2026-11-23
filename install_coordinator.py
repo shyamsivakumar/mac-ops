@@ -133,6 +133,7 @@ RETIRED_JOBS: tuple[str, ...] = ("dev.coordinator.overnight",)
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
 HILLCLIMB_SOURCE = "coordinator/evals/hillclimb"
+HILLCLIMB_FILES = ("build_labels.py", "daily3.py", "burst.py", "arms/plain_agent.py", "README.md")
 OVERNIGHT_BIN_FILES = ("overnight",) + tuple(
     path.name for path in sorted(
         (Path(__file__).resolve().parent / "coordinator/overnight").glob("*.py")
@@ -811,11 +812,8 @@ def changes(
         )
     if coordinator.is_dir():
         source = checkout / HILLCLIMB_SOURCE
-        for path in sorted(source.rglob("*")):
-            if path.is_file() and "__pycache__" not in path.parts:
-                wanted.append(
-                    (coordinator / "evals/hillclimb" / path.relative_to(source), path.read_bytes(), 0o644)
-                )
+        for name in HILLCLIMB_FILES:
+            wanted.append((coordinator / "evals/hillclimb" / name, (source / name).read_bytes(), 0o644))
     ignore = gitignore_item(coordinator)
     if ignore is not None:
         wanted.append((ignore[0], ignore[1], 0o644))

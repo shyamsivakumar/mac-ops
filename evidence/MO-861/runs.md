@@ -60,3 +60,25 @@ Ran 5 tests in 0.042s
 
 FAILED (failures=1)
 ```
+
+## Fix round: installer enumerates exactly the five managed files
+
+Old head 781ccec9 installer, new test with stray `split.json` and `labels.jsonl` in the source dir:
+
+```text
+AssertionError: Items in the first set but not the second:
+'labels.jsonl'
+'split.json'
+
+FAILED (failures=1)
+```
+
+This branch, same test (`python3 -m unittest tests.test_hillclimb_scripts`):
+
+```text
+Ran 5 tests in 0.117s
+
+OK
+```
+
+`cmp` of the five scripts against `~/Code/coordinator/evals/hillclimb`: identical.

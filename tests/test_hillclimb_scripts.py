@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -175,7 +176,12 @@ class InstallPlan(unittest.TestCase):
             home.mkdir()
             coordinator = base / "coordinator"
             coordinator.mkdir()
-            with mock.patch.object(install_coordinator, "shim_item", return_value=None):
+            source = base / "source"
+            shutil.copytree(HILLCLIMB, source, ignore=shutil.ignore_patterns("__pycache__"))
+            (source / "split.json").write_text("{}")
+            (source / "labels.jsonl").write_text("")
+            with mock.patch.object(install_coordinator, "shim_item", return_value=None), \
+                    mock.patch.object(install_coordinator, "HILLCLIMB_SOURCE", str(source)):
                 pending = install_coordinator.changes(ROOT, home, coordinator)
             root = coordinator / "evals/hillclimb"
             names = {
@@ -183,12 +189,4 @@ class InstallPlan(unittest.TestCase):
                 for target, _, _ in pending
                 if target.is_relative_to(root)
             }
-            for name in (
-                "build_labels.py", "daily3.py", "burst.py",
-                "arms/plain_agent.py", "README.md",
-            ):
-                self.assertIn(name, names)
-            self.assertEqual(
-                [name for name in names if name.endswith(".jsonl") or name == "split.json"],
-                [],
-            )
+            self.assertEqual(names, set(install_coordinator.HILLCLIMB_FILES))
