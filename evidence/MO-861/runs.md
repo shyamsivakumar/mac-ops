@@ -100,7 +100,7 @@ This branch (`python3 -m unittest tests.test_hillclimb_scripts`): `Ran 6 tests .
 The scripts now differ from live. sha256 change (live to mac-ops source); `daily3.py`, `burst.py` and `plain_agent.py` still match live:
 
 ```text
-build_labels.py  946c7582a862a0f612032c2bbd89a1612fd61d6f06cae0ac9a2e80bb2daeb500 -> cc253d80fdaf9fd649e0734ff17b66138c6947240f8cedcfd9359a46c4718971
+build_labels.py  946c7582a862a0f612032c2bbd89a1612fd61d6f06cae0ac9a2e80bb2daeb500 -> 5c4fd7855a38fa2ff65f796ffd69ab8fd77c35b82a41672b613be4a1e183d2b5
 README.md        2f5237bfcfa215f91bf9d446fdfcc2905b8c18df31a61b97079a7c8bf0ea460b -> 888937c93f99687baef5c57fbd94a4d93c2c25e882a3c5303f0cc2f68b949c2f
 ```
 
@@ -114,4 +114,4 @@ Cases added to `RebuildKeepsRecords` (malformed line leaves both files unchanged
 
 Live `labels.jsonl` load check (read only, counts only): 147 non-blank lines, 0 unparsable, 0 missing id, 0 duplicate ids.
 
-build_labels.py sha256 is now cc253d80fdaf9fd649e0734ff17b66138c6947240f8cedcfd9359a46c4718971.
+build_labels.py sha256 is now 5c4fd7855a38fa2ff65f796ffd69ab8fd77c35b82a41672b613be4a1e183d2b5.
