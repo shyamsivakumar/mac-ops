@@ -104,4 +104,4 @@ build_labels.py  946c7582a862a0f612032c2bbd89a1612fd61d6f06cae0ac9a2e80bb2daeb50
 README.md        2f5237bfcfa215f91bf9d446fdfcc2905b8c18df31a61b97079a7c8bf0ea460b -> 888937c93f99687baef5c57fbd94a4d93c2c25e882a3c5303f0cc2f68b949c2f
 ```
 
-The installer will overwrite the live copies of these two files.
+`build_labels.py` and `README.md` now differ from the live copies until the installer runs.
