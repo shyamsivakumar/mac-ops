@@ -647,7 +647,7 @@ def prior_rows(path):
             try:
                 row = json.loads(ln)
             except json.JSONDecodeError as e:
-                raise ValueError(f"{path}:{n}: unparsable line: {e}")
+                raise ValueError(f"{path}:{n}: unparsable line: {e}") from None
             if not isinstance(row, dict) or not row.get("id"):
                 raise ValueError(f"{path}:{n}: row has no id")
             if row["id"] in out:
