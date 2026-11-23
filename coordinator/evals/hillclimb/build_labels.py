@@ -630,6 +630,27 @@ def split_of(iid):
 
 # ------------------------------------------------------------- build
 
+def write_atomic(path, text):
+    with open(path + ".tmp", "w") as fh:
+        fh.write(text)
+    os.replace(path + ".tmp", path)
+
+
+def prior_rows(path):
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path) as fh:
+        for ln in fh:
+            try:
+                row = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("id"):
+                out[row["id"]] = row
+    return out
+
+
 def main():
     recs = load_messages()
     panel = load_panel(recs)
@@ -718,25 +739,39 @@ def main():
             continue
         lab["agree"] = agreement(lab["recommended"], lab["answer"], lab["options"])
 
-    rows = sorted(labels.values(), key=lambda x: (x["ts"] or "", x["id"]))
+    labels_path = f"{OUT}/labels.jsonl"
+    prior = prior_rows(labels_path)
+    kept = [r for i, r in prior.items() if i not in labels]
+    for iid, lab in labels.items():
+        old = prior.get(iid, {})
+        for k in ("reason", "recommended_option"):
+            if k in old:
+                lab[k] = old[k]
+        lab.setdefault("recommended_option", pick_option(lab["recommended"], lab["options"]))
+
+    rows = sorted(
+        list(labels.values()) + kept, key=lambda x: (x.get("ts") or "", x.get("id") or "")
+    )
     os.makedirs(OUT, exist_ok=True)
-    with open(f"{OUT}/labels.jsonl", "w") as fh:
-        for r in rows:
-            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    write_atomic(labels_path, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
 
     split = {"FINAL": [], "DEV": [], "HELDOUT": []}
     for r in rows:
         split[split_of(r["id"])].append(r["id"])
-    with open(f"{OUT}/split.json", "w") as fh:
-        json.dump(
+    write_atomic(
+        f"{OUT}/split.json",
+        json.dumps(
             {
                 "rule": "sha256(id) -> h; FINAL if h%100<15; else DEV if (h//100)%100<80 else HELDOUT",
                 "counts": {k: len(v) for k, v in split.items()},
                 "splits": split,
+                "final": split["FINAL"],
+                "dev": split["DEV"],
+                "heldout": split["HELDOUT"],
             },
-            fh,
             indent=1,
-        )
+        ),
+    )
 
     json.dump(
         {"repeats": repeats, "dropped": dropped},

@@ -2,6 +2,7 @@ import argparse
 import json
 import shutil
 import sys
+import importlib.util
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HILLCLIMB = ROOT / "coordinator/evals/hillclimb"
 sys.path[:0] = [str(ROOT), str(HILLCLIMB)]
 
+import build_labels
 import burst
 import daily3
 import install_coordinator
@@ -166,6 +168,37 @@ class BurstMining(unittest.TestCase):
             self.assertEqual([row["id"] for row in rows], ["m1"])
             self.assertEqual(rows[0]["answer"], "")
             self.assertEqual(first, second)
+
+
+class RebuildKeepsRecords(unittest.TestCase):
+    def test_rebuild_keeps_daily3_row_and_writes_scorer_split(self):
+        spec = importlib.util.spec_from_file_location("score", ROOT / "evals/ladder/score.py")
+        score = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(score)
+        row = {
+            "id": "x1", "kind": "merge", "item_text": "Merge PR 901 now?",
+            "options": ["merge it", "hold it"], "answer": "merge it",
+            "recommended": "merge it", "recommended_option": "merge it", "agree": True,
+            "ts": "2026-01-01T00:00:00Z", "source": "daily3 record", "reason": "ok",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            out = base / "out"
+            out.mkdir()
+            (base / "hc").mkdir()
+            (out / "labels.jsonl").write_text(json.dumps(row) + "\n")
+            with mock.patch.object(build_labels, "load_messages", return_value=[]), \
+                    mock.patch.object(build_labels, "load_panel", return_value={}), \
+                    mock.patch.object(build_labels, "load_board", return_value=[]), \
+                    mock.patch.object(build_labels, "load_typed", return_value=[]), \
+                    mock.patch.object(build_labels, "OUT", str(out)), \
+                    mock.patch.object(build_labels, "TMP", str(base)):
+                build_labels.main()
+            rows = [json.loads(line) for line in (out / "labels.jsonl").read_text().splitlines()]
+            self.assertEqual(rows, [row])
+            key = build_labels.split_of("x1").lower()
+            cases, _ = score.read_cases(out, key)
+            self.assertEqual([c["id"] for c in cases], ["x1"])
 
 
 class InstallPlan(unittest.TestCase):
