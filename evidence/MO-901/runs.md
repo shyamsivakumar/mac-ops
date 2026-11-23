@@ -20,4 +20,4 @@ After (this branch): exit 0.
 
 ## Merge check with PR #899 (origin/mo898-defaulttools)
 
-See PR body.
+git merge-tree --write-tree against origin/mo898-defaulttools: exit 0, no conflicts (settings.json edits are in different hunks).
