@@ -1,0 +1,25 @@
+2026-11-15 12 noaction 12
+2026-11-16 35 noaction 34
+2026-11-17 39 noaction 39
+2026-11-18 41 noaction 40
+2026-11-19 45 noaction 40
+2026-11-20 35 noaction 24
+2026-11-21 25 noaction 8
+2026-11-22 26 noaction 8
+7d (11-16..11-22): 246 ticks, no-action 193 78.5 %
+False 2026-11-16 23:42 no starts, no gates, no sends, no merges from here
+False 2026-11-19 16:19 0 launches, 0 sends, 0 gates queued, 0 merges, no repo writes
+True 2026-11-21 21:56 1 send (SRW#1781 check at 1a2cf366 to its builder mcp:launch:e2bf99eb, queued #13197, started 00:53:06), 0 launches, 0 gates by me, 0 merges by me, 0 repo write
+True 2026-11-21 15:35 1 launch (#12913, MO chore reinstall coordinator tools from main 9a60db3a), 0 sends, 0 gates, 0 merges by me, 0 repo writes, 0 parks
+True 2026-11-21 09:40 1 launch, 0 sends, 0 gates, 0 merges by me, 0 repo writes, 0 parks, 0 decisions raised
+False 2026-11-16 10:41 no routes, no starts, no gates
+False 2026-11-17 18:57 no starts, no gates, no merges, no deletions from here
+False 2026-11-16 21:34 no starts, no gates, no sends, no merges from here
+False 2026-11-19 05:55 no starts, no repo writes, no merges, no gates by this tick
+False 2026-11-20 19:37 0 launches, 0 sends, 0 gates, 0 merges by me, 0 repo writes, 0 parks, 0 decisions raised
+False 2026-11-19 00:02 no ticket starts, no repo writes, no merges, no gates by this tick
+False 2026-11-19 02:42 no starts, no repo writes, no merges, no gates by this tick
+False 2026-11-20 03:36 0 launches, 0 sends, 0 gates, 0 merges by me, 0 repo writes, 0 parks, 0 decisions raised
+False 2026-11-18 14:06 no ticket starts, no repo writes, no merges by this tick.
+structured-count era (from 2026-11-19 13:39): 106 ticks, no-action 56 52.8 %
+prose era: 140 ticks, no-action 137
