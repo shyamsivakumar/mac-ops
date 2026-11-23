@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 evals/ladder/runs/
 evals/ladder/traces/
+evals/ladder/score.lock
 
 # Harbor eval snapshots
 evals/harbor/.cache/
