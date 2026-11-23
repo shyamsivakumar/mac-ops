@@ -63,6 +63,14 @@
     "--force-with-lease",
     "--force-if-includes"
   ],
+  "claude_ask_commands": {
+    "merge": [
+      "gh pr merge"
+    ],
+    "push_protected": [
+      "git push"
+    ]
+  },
   "families": {
     "merge": {
       "mode": "ask"
