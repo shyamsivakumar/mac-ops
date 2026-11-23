@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
+from reviewer_audit.board_io import DEFAULT_REVIEWER_INSTRUCTIONS
 from reviewer_audit.bundles import AdjudicatedDefect, ReviewBundle
 from reviewer_audit.shadow import LEGACY_PASS_RULE, _shadow_prompt
 
@@ -33,9 +35,17 @@ def _minimal_bundle() -> ReviewBundle:
     )
 
 
+def _default_instructions():
+    return mock.patch(
+        "reviewer_audit.shadow.read_reviewer_instructions",
+        return_value=DEFAULT_REVIEWER_INSTRUCTIONS,
+    )
+
+
 class TestShadowPrompt(unittest.TestCase):
     def test_board_policy_includes_ship_and_score(self):
-        prompt = _shadow_prompt(_minimal_bundle(), review_policy="board")
+        with _default_instructions():
+            prompt = _shadow_prompt(_minimal_bundle(), review_policy="board")
         self.assertIn("reviewer.instructions (board mac-ops)", prompt)
         self.assertIn("Ship-and-score policy", prompt)
         self.assertNotIn(LEGACY_PASS_RULE, prompt)
@@ -51,7 +61,8 @@ class TestShadowPrompt(unittest.TestCase):
             AdjudicatedDefect("REQ-SPX-LEVEL-TRACK", "critical"),
         ]
         for policy in ("board", "legacy"):
-            prompt = _shadow_prompt(bundle, review_policy=policy)
+            with _default_instructions():
+                prompt = _shadow_prompt(bundle, review_policy=policy)
             self.assertNotIn("adjudicated_defects_for_recall", prompt)
             self.assertNotIn("REQ-SPX-LEVEL-TRACK", prompt)
 
