@@ -1555,6 +1555,16 @@ def merge_passes(ledger):
                 merge_pass(repo, ledger)
 
 
+def closed_ticket_reason(repo, issue):
+    try:
+        row = read_json(["gh", "issue", "view", issue, "-R", repo, "--json", "state,stateReason"])
+    except RuntimeError:
+        return None
+    if (row.get("state") or "").upper() != "CLOSED":
+        return ""
+    return (row.get("stateReason") or "").lower()
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -1573,17 +1583,35 @@ def act_on_pr(repo, number, ledger):
     pr = {**pr, **current_pr}
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
+    closed = False
     if (issue and superseded_by(repo, number, int(issue))
             and gate_verdict(repo, number, head, pr.get("baseRefName") or "main")[0] != "PASS"):
         return f"skip #{number}: superseded by a newer pull request for #{issue}"
     proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
         record = issue_record(SNAPSHOT, repo, issue)
-        if record is None or issue_held(record):
+        if record is not None and issue_held(record):
             return None
+        if record is None:
+            reason = closed_ticket_reason(repo, issue)
+            if reason is None:
+                return f"skip #{number}: ticket #{issue} is not in the open snapshot and its state could not be read"
+            if reason == "not_planned":
+                key = f"closed-not-planned:{repo}#{number}:{head}"
+                if not DRY and key not in ledger:
+                    ledger[key] = "item raised"
+                    publish_decision({"id": f"closed-not-planned-{CFG[repo]['key']}-{number}", "group": "Coordinator", "kind": "action",
+                        "title": f"{CFG[repo]['key']}-{number} at head {head[:8]} refers to ticket #{issue}, which was closed as not planned: merge it or close it.",
+                        "why": "The lane merges a pull request whose ticket closed as completed, and holds one whose ticket closed as not planned."})
+                return f"#{number}: ticket #{issue} closed as not planned, no merge, decisions item raised"
+            if reason != "completed":
+                return None
+            closed = True
     agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
                    for c in pr.get("statusCheckRollup") or [])
     check_ok = f"Builder check: PASS {head}" in body or agent_ok
+    if closed and (pr.get("mergeable") == "CONFLICTING" or not check_ok):
+        return None
     if pr.get("mergeable") == "CONFLICTING" or not check_ok:
         why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
         if CFG[repo].get("build") == "here":
@@ -1596,6 +1624,8 @@ def act_on_pr(repo, number, ledger):
         return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
     base = pr.get("baseRefName") or "main"
     verdict, gate, reply = gate_verdict(repo, number, head, base)
+    if closed and verdict != "PASS":
+        return None
     if verdict == "running":
         return f"#{number}: gate running"
     if gate:
@@ -1605,7 +1635,7 @@ def act_on_pr(repo, number, ledger):
                      f"journal-held:{repo}#{number}:{head}:split", reason="split")
         return gate_split_decision(repo, number, head)
     if verdict == "PASS":
-        return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
+        return merge_passed_pr(repo, number, head, pr, "" if closed else issue, gate, ledger)
     if verdict == "FAIL":
         # The failed review in hand is one after the reviews the pull
         # request already had. The convergence rule gives it three
