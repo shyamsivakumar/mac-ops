@@ -1,6 +1,6 @@
 # Coordinator event inbox: wake on events, not on a clock
 
-Design doc, 2026-11-23. Requested by Coder, approved by Shyam on 23 Nov. Nothing
+Design doc, 2026-11-23, revision 2 after the Coordinator's review of PR #897. Requested by Coder, approved by Shyam on 23 Nov. Nothing
 in this document is built. This PR changes no live job, no queue, no journal and
 no session.
 
@@ -25,8 +25,9 @@ history, and the inbox is the mutable work list.
   be); Shyam's replies and approvals; due timers. Timers only enqueue.
 - One worker claims pending rows, dedupes and batches per session. Claimed rows
   go back to pending if the worker crashes.
-- A tool call that needs approval ends the run, saves the session, and returns
-  as an inbox event.
+- A tool call that needs approval ends the run with a request notice to Shyam.
+  Shyam performs the guarded action himself and the inbox sees the result. Review
+  changed this bullet: no grant ever unlocks a guarded call (section 3.6).
 - All sends go through an outbox, with an explicit send-nothing row.
 - Keep a slow fallback tick until the inbox is proven.
 - Measure wake count, event to action latency and the empty-tick share, before
@@ -128,12 +129,30 @@ A flat JSON file with a lock would also work for one consumer, but each claim
 would rewrite the whole file, and dedupe, lease expiry and the outbox join would
 be hand-written. SQLite is the simpler choice at this size.
 
-The inbox can be rebuilt from the journal. A backfill pass replays journal
-lines through the same hook. Dedupe keys make the replay idempotent, so it can
-start from the first line of the month and needs no cursor that could be lost
-with the file. The worker runs this pass on every wake, which also covers an
-enqueue that failed after its journal line was written. That is the reason
-producers write through the journal.
+The inbox can be rebuilt from the journal, with three rules so that a replay
+cannot flood it.
+
+1. **Activation watermark.** The first time the hook is enabled it writes
+   `activated_at` to the `meta` table. Journal lines older than that go straight
+   into `seen` and never become pending rows. Without it, a replay from the
+   start of this month would enqueue 1,404 old facts (425 on 21 Nov, 699 on
+   22 Nov, 280 on 23 Nov; `evidence/event-inbox-design/replay_wakes.out`) and
+   start a wake storm.
+2. **Per-file offset cursor.** `meta` keeps `(journal file name, byte offset)`.
+   Replay seeks to the offset, reads to the end of that file, then reads every
+   later `events-YYYY-MM.jsonl` file in name order from its start, and moves the
+   cursor into the new file. A month change therefore loses nothing: late lines
+   in the old month are read before the cursor moves on. A line that does not
+   parse is skipped.
+3. **Replay is a repair, not the main path.** The hook enqueues live. The worker
+   replays on startup and once an hour, from the saved offset, to catch a hook
+   write that failed. It never parses the whole month file every 60 seconds
+   (the file is 6 MB and grows about 2 MB a day). Idempotent dedupe keys make a
+   repeated replay harmless.
+
+If `inbox.db` is lost, the cursor is lost with it. The rebuild then starts at a
+fresh `activated_at`, and any events between the loss and the rebuild are
+covered by the fallback tick.
 
 ## 2. Baseline from real data (read-only)
 
@@ -235,6 +254,52 @@ is its only input. The long `gate_verdict` to `merged` gaps are waits for Shyam,
 not clock latency, and the inbox cannot shorten them except by pushing the
 approval request to Shyam sooner.
 
+### Event volume and the wake rules it allows
+
+The first draft set at most 15 wakes a day and a median latency of 3 minutes
+without measuring how many events arrive. The Coordinator's review counted
+ten-minute windows with at least one `gate_queued`, `gate_verdict`, `merged`,
+`merged_outside_lane` or `alarm_raised` line. Re-counted from the journal, in US
+Eastern days: 73 windows on 21 Nov (partial), 137 on 22 Nov, 61 on 23 Nov
+(partial). The counts match. Raw lines of those kinds on those days: 404, 707
+and 342. By kind over the whole window: 474 `gate_queued`, 370 `alarm_raised`,
+310 `gate_verdict` (185 PASS, 125 FAIL), 170 `merged` and 129
+`merged_outside_lane`. 226 of the 299 merges are in `strategy-replay-workbench`
+(SRW), 52 in mac-ops. Alarms repeat: 73 of the 370 raises are the same
+`factory-watchdog` alarm, so alarm dedupe must be by name until withdrawn.
+
+If every one of those kinds woke the Coordinator, the target could not hold.
+`evidence/event-inbox-design/replay_wakes.py` replays the journal through the
+proposed rules (60-second debounce, a minimum gap between runs, a fallback only
+when no run happened for 2 hours). Runs a day, 21, 22 and 23 Nov (the first and
+last are partial days):
+
+- Variant A, all five kinds wake: 74, 134 and 54 runs with a 10-minute gap; 26,
+  48 and 23 with a 30-minute gap. The clock itself is 48 a day.
+- Variant B, only kinds that need Coordinator judgment wake (`alarm_raised` as a
+  new generation, `round_cap`, `merge_held`, `close_failed`, `launch_failed`,
+  `recut`), and `gate_queued`, `gate_verdict`, `merged` and
+  `merged_outside_lane` ride along in the next batch: 41, 65 and 28 runs with a
+  10-minute gap; **22, 40 and 18 with a 30-minute gap**; 13, 23 and 13 with a
+  60-minute gap.
+- Variant C, B plus merges and verdicts outside SRW: 26, 40 and 18 with a
+  30-minute gap, about 5% more runs than B.
+
+Latency for variant B at a 30-minute gap: a wake row waits a median of 14.1
+minutes and p90 of 26.6 minutes for its run; a row that arrives after at least
+30 quiet minutes starts a run in about 1 minute (40 of 323 wake rows); a
+batch-only row waits a median of 15.7 and p90 of 29.8 minutes. A 10-minute gap
+gives a median of 1.1 minutes but 134 runs over the window, which is more than
+the clock. The honest reading is that wake count and latency trade against each
+other at this volume. The inbox saves about 25% of runs against the clock and
+about 45% of the median delay (14 against 26 minutes), and a quiet hour costs no
+run at all. A larger saving needs a smaller urgent set. Duplicate sources are
+the first lever: 68 `close_failed` events plus 52 `lane-close-failed` alarms,
+and 62 `recut` events plus 44 `recut` alarms, describe the same tickets twice.
+The kinds `ci_main`, `pr_review` and the human signal have no journal history,
+so the replay cannot size them. The shadow week measures them, and the targets
+below are checked again after it.
+
 Gaps in the baseline, stated plainly: the in-session idle wake (path 2) leaves
 no log, so its count is unknown. Tick time zones in `ticks.log` are labelled PT
 or EST per line and the script trusts the label. The manifesto reference was not
@@ -254,12 +319,12 @@ flowchart LR
   J[journal.emit] -- hook --> I[(inbox.db)]
   P[poller: PR review, CI on main, Shyam labels] --> I
   T[timers table] -- due --> I
-  A[approval answers] --> I
+  H[unverified human signals] --> I
   I -- claim per session --> W[worker run]
   W -- outbox rows --> O[(outbox)]
   O --> D[dispatcher: hc send, coordq create, none]
-  W -- approval needed --> S[grant row + card]
-  S -. answer event .-> I
+  W -- guarded call blocked --> R[request notice to Shyam]
+  R -. Shyam acts himself; outcome seen as pr_merged .-> I
 ```
 
 ### 3.2 Inbox row
@@ -274,18 +339,18 @@ One table, `inbox`.
   - Meaning: event time (UTC epoch)
 - `source`
   - Type: text
-  - Meaning: `journal`, `poll`, `timer`, `shyam`, `approval`
+  - Meaning: `journal`, `poll`, `timer`, `human`
 - `kind`
   - Type: text
   - Meaning: `pr_opened`, `pr_new_head`, `pr_merged`, `pr_review`,
-    `gate_verdict`, `ci_main`, `shyam_reply`, `approval_answer`, `timer_due`,
-    `alarm`
+    `gate_verdict`, `gate_queued`, `ci_main`, `human_signal`, `timer_due`,
+    `alarm`, `round_cap`, `merge_held`, `close_failed`, `recut`
 - `dedupe_key`
   - Type: text, unique
   - Meaning: see below
 - `session`
   - Type: text
-  - Meaning: target session, default `coordinator`; `approval:<id>` for a grant run
+  - Meaning: target session, default `coordinator`
 - `repo`, `pr`, `head`
   - Type: text, int, text
   - Meaning: same field names as the journal
@@ -313,8 +378,9 @@ today.
 **Dedupe key.** One stable key per real-world fact: `pr_opened:<repo>#<n>`,
 `pr_new_head:<repo>#<n>:<head>`, `pr_merged:<repo>#<n>`,
 `gate_verdict:<repo>#<n>:<head>`, `ci_main:<repo>:<sha>:<context>:<state>` (terminal states only: success, failure, error),
-`pr_review:<repo>#<n>:<review id>`, `shyam_reply:<comment or label event id>`,
-`timer_due:<timer id>:<due ts>`, `approval_answer:<approval id>`. `INSERT OR
+`pr_review:<repo>#<n>:<review id>`, `human_signal:<comment, review or label event id>`,
+`timer_due:<timer id>:<due ts>`, `alarm:<name>:<generation>` (the generation
+increments on `alarm_withdrawn`, so a flapping alarm is one row per episode). `INSERT OR
 IGNORE` on the unique column drops repeats, including a second poller seeing the
 same event. The ignored count is kept in a `counters` row so the duplicate rate
 is measurable. The `payload` of a done row is purged after 30 days, but its key
@@ -325,39 +391,64 @@ in a `meta` table, and losing them only re-reads facts that `seen` drops.
 ### 3.3 Sources and writers
 
 - Journal events
-  - Kinds: `pr_new_head` and `pr_opened` (from gatekeep's `gate_queued`, which
-    fires 0.5 to 5.4 minutes after a PR opens), `gate_verdict`, `pr_merged`
-    (from `merged` and `merged_outside_lane`), `alarm`
+  - Kinds: `gate_queued`, `gate_verdict`, `pr_merged` (from `merged` and
+    `merged_outside_lane`), `alarm`, `round_cap`, `merge_held`, `close_failed`,
+    `recut`
   - Writer: A hook in `journal.emit`: a small map of journal event name to inbox
     kind, and one call to `inbox.enqueue` after the journal line is written.
     Lane and gatekeep code does not change. A failed enqueue prints to stderr
-    and returns, as a failed journal write does.
-- PR review and Shyam on GitHub
-  - Kinds: `pr_review`, `shyam_reply` (review by Shyam, `merge:human-ok` label
-    added)
+    and returns, as a failed journal write does. `gate_queued` is a batch kind
+    only. It is not used as the PR opened event, because it misses held, draft
+    and ungated PRs (#868 and #882 were queued 27 hours after they opened).
+- PR opened, new head, review, label and comment events
+  - Kinds: `pr_opened`, `pr_new_head`, `pr_review`, `human_signal`
   - Writer: One poll pass inside the worker, through `gh_gateway` with its ETag
-    cache, so an unchanged PR list costs a 304. At most one call per open PR per
-    5 minutes.
+    cache. It lists open PRs per configured repo (one conditional call per repo,
+    a 304 when nothing changed, every 2 minutes) and reads reviews and comments
+    only for PRs whose list entry changed. This is the real source of `pr_opened`
+    for every PR, draft or held or not. The cost is up to 2 minutes of detection
+    lag, and `pr_opened` is a batch kind, so it adds no wake. Until T7 ships the
+    kind does not exist, and the doc does not claim it.
+  - Human signals are hints. A review, comment or `merge:human-ok` label made by
+    the `shyamsivakumar` login is recorded as `human_signal` with the payload
+    `login=shyamsivakumar, verified=false`. Agents also act under that GitHub
+    account, so the login proves no person. The Coordinator treats the row as a
+    cue to look at the PR, never as authority to act.
 - CI on `main`
   - Kinds: `ci_main`
   - Writer: The same poll pass reads the combined commit status of each
     configured repo's default branch head and keeps only the contexts the Mac
-    publishes (for example `srw/agent-check`). It never reads Actions or
-    check-runs from workflows. If a repo's `main` has no Mac-published context,
-    the source stays off for that repo.
-- Shyam's messages
-  - Kinds: `shyam_reply`
-  - Writer: A message typed in t56 reaches the live session directly and stays
-    direct. Inbox rows cover the asynchronous kinds: a resolved card on the
-    decisions board, an `approve <id>` or `deny <id>` message parsed by the
-    extension's `input` hook (`coordinator.ts:295-307`), and phone relay
-    messages.
+    publishes (for example `srw/agent-check`) and only terminal states. It never
+    reads Actions or check-runs from workflows. If a repo's `main` has no
+    Mac-published context, the source stays off for that repo.
+- Messages to the live session
+  - A message typed in t56 reaches the live session directly and stays direct.
+    The inbox does not parse `approve` or `deny` text from t56. Any agent can
+    `hc send t56 "..."`, and the pi input hook cannot tell it from Shyam.
 - Timers
   - Kinds: `timer_due`
   - Writer: A `timers` table in the same file (`id`, `due_ts`, `period`,
     `payload`). The worker, at the start of each pass, turns due timers into
     inbox rows. A timer never starts a run. The 2-hour fallback is one periodic
-    timer.
+    timer that is enqueued only when no run happened for 2 hours.
+
+### 3.3a Which kinds wake the Coordinator
+
+A row has a tier, set in the same small map as the journal hook, in one place.
+
+- Wake (starts a run after the 60-second debounce): `alarm` (a new generation),
+  `round_cap`, `merge_held`, `close_failed`, `launch_failed`, `recut`,
+  `ci_main` (a failure), `human_signal`, `timer_due` (the fallback).
+- Batch only (waits for the next run, and the fallback bounds the wait to 2
+  hours): `gate_queued`, `gate_verdict`, `pr_merged`, `pr_opened`,
+  `pr_new_head`, `pr_review`, `ci_main` (a success).
+
+This is variant B in section 2. Moving a kind between tiers is one line, and the
+replay prices the change. Coder asked for PR opened, merged and review to be
+wake sources. They are inbox rows and appear in every batch, but at the volume
+measured in section 2 they cannot each start a run and meet a wake target.
+That is open question 2. `pr_review` and `human_signal` are placed from reasoning
+and not from data, and the shadow week confirms or changes the tiers.
 
 ### 3.4 Row lifecycle
 
@@ -387,27 +478,36 @@ Invariants:
 6. A model that is unavailable (balance, provider outage) puts rows back to
    pending without counting an attempt, and the worker backs off exponentially.
    Today's 402 failure must not burn attempts or drain rows into `failed`.
-7. If the oldest pending row is older than 30 minutes, the worker raises one
-   alarm (through the existing alarms module, one per head, not per pass).
-   Alarms the inbox raises about itself (`inbox_*`) are never inbox kinds, so a
-   failing source cannot wake a run whose only output is another alarm.
-12. A watchdog independent of the worker reads `inbox.worker.heartbeat`, which
-    the worker touches at the start and end of each pass. The hourly selftest
-    (`EXPECTED` in `coordinator/bin/hourly_selftest.py`) alarms when the
-    heartbeat is older than 10 minutes, and the worker sets a 15-minute
-    `SIGALRM` for the whole pass, so a wedged pass cannot hold the lock.
+7. If the oldest wake-tier pending row is older than 45 minutes, the worker
+   raises one alarm (through the existing alarms module, one per head, not per
+   pass). Alarms the inbox raises about itself (`inbox_*`) are never inbox
+   kinds, so a failing source cannot wake a run whose only output is another
+   alarm.
 8. A lease is reaped only when its `claimed_pid` is gone (`kill -0`) or the
    lease is more than one hour past due. A laptop that slept through a lease
    does not return rows from a run that was only frozen.
 9. Timers are wall-clock. After sleep, a due timer fires once and the missed
    periods collapse into that one row.
-10. A run budget caps cost: the worker waits 60 seconds after the first pending
-    row so a burst joins one batch, starts at most 6 runs an hour, and leaves
-    the rest pending. The `inbox_batch` line records the delay, so the latency
-    target and the cap are measured against each other.
+10. A run budget caps cost: the worker waits 60 seconds after the first wake-tier
+    row so a burst joins one batch and starts a run no sooner than 30 minutes
+    after the previous run ended. The rest stays pending. The `inbox_batch` line
+    records the delay, so the latency targets and the cap are measured against
+    each other (section 2 prices the 30-minute choice).
 11. The database carries `PRAGMA user_version` for schema changes. Done rows and
-    sent outbox rows are purged after 30 days, and the worker runs
-    `wal_checkpoint(TRUNCATE)` once a day.
+    sent outbox rows have their payload purged after 30 days (keys stay in
+    `seen`), and the worker runs `wal_checkpoint(TRUNCATE)` once a day.
+12. Liveness has two bounds. The worker touches `inbox.worker.heartbeat` every 30
+    seconds from a timer thread for as long as a pass runs, and at pass end. A
+    model run is killed at 600 seconds (`coord-tick:46`), so a healthy pass ends
+    within about 11 minutes. The worker sets a 20-minute `SIGALRM` on the whole
+    pass so a wedged pass cannot hold the lock. The watchdog is
+    `lane_driver.py`, which already raises `factory-watchdog` and runs every 180
+    seconds (`dev.coordinator.lanes.plist`, `StartInterval` 180). It alarms when
+    the worker lock is held and the heartbeat is more than 4 minutes old, or when
+    no pass has finished in 5 minutes (the job runs every 60 seconds). Worst case
+    detection is 4 minutes plus one 180-second watchdog cycle, about 7 minutes.
+    The hourly selftest is not used for this, because its cadence cannot give a
+    minutes-level alarm.
 
 ### 3.5 Claim, batch and run
 
@@ -433,45 +533,47 @@ One worker pass:
 6. In one transaction: insert the outbox rows, mark the batch rows `done`,
    journal an `inbox_batch` event.
 
-Batching is per session. Rows for `coordinator` batch together. An
-`approval_answer` row gets its own fresh run, carrying only that grant.
+Batching is per session. All rows are for the `coordinator` session today, and
+the `session` column is kept so a second consumer can be added without a schema
+change.
 
-### 3.6 Approval round trip
+### 3.6 Approvals: the inbox never carries a grant
 
-The guard today is deny-only: nothing asks, because nobody watches the tab
-(`coordinator.ts:1-4,288`). The new behavior for the small set of calls that
-need Shyam (for example `gh pr merge`):
+The first draft had the inbox issue a single-use grant that the guard would
+consume to allow a blocked call. The review found that unsafe, and it is removed.
 
-1. The guard blocks the call and records an `approval_request` (kind added to
-   the outbox kinds) with an approval id. The grant row stores the approval id,
-   the exact action (command hash), the repo and the PR head. The guard creates
-   a card on the decisions board and tells the run to stop. The run ends.
-2. Shyam answers: resolving the card, or sending `approve <id>` or `deny <id>`
-   to t56. The worker observes card answers on its poll pass.
-3. That answer becomes an inbox row `approval_answer:<id>`, and the grant row
-   flips to `granted` or `denied`. A grant is single use.
-4. The worker starts a fresh run for that row. The run repeats the call, and the
-   guard consumes the grant only if the command hash, repo and head match
-   exactly. A different action, or a head that moved, finds no grant and asks
-   again, so a retry cannot loop on an old yes and cannot approve something
-   else.
-5. An approval with no answer in 24 hours becomes an `approval_expired` timer
-   row (kind added to the inbox kinds) and the grant is marked expired.
+- Any agent can run `hc send t56 "approve <id>"`, and the pi input hook sees it
+  as text from a person. `decisions.json` has several agent writers, so a card
+  resolution proves no person either. A grant created from either channel would
+  let an agent approve its own `gh pr merge`.
+- GitHub actions by agents run under Shyam's account, so a label or review by
+  that login is not proof of a person.
+- A grant that unlocks a guarded call widens the permissions of a deny-only
+  guard. The standing rule is no widened permissions, and relayed approvals must
+  be verified.
 
-Only the first answer counts: a second answer for the same approval hits the
-unique `approval_answer:<id>` key and is ignored. Each row records the channel
-it came from (card, t56 input, phone relay) so an approval can be traced to a
-person's action.
+What the design does instead:
 
-Open point: how the extension ends a run from inside a `tool_call` handler is
-not confirmed. The first fallback is the prompt contract (`NEEDS_APPROVAL <id>`
-as the final line). The guard file needs Shyam's OK to change
-(`coordinator.ts:4`), so the guard change is a separate ticket.
+1. The guard stays deny-only and does not change (`coordinator.ts` is not
+   touched). A blocked call returns its reason, as today (`coordinator.ts:288`).
+2. The run ends its reply with a request line. The dispatcher writes a
+   `request_notice` outbox row, which goes to Shyam through the existing card
+   path the Coordinator already uses to park a decision. The row names the PR,
+   the head and the action wanted, and carries no authority.
+3. Shyam performs the guarded action himself (for example merges the PR).
+4. The inbox sees the result as a normal fact: `pr_merged`, a new head, a closed
+   issue. That row closes the request notice and wakes a run only if its kind is
+   a wake kind.
+5. A request with no result in 24 hours becomes a `timer_due` row and the notice
+   is raised again once.
 
-Saved-session resume (`pi --session <file>`, which `pi --help` lists) is not
-needed for this design. A fresh run plus a grant avoids replay ambiguity and
-stale sessions, so sessions stay `--no-session` as today. Resume is a later
-option if a run's context ever proves too costly to rebuild from the board.
+The inbox may carry the request and the notice of an outcome. It never carries
+anything the guard accepts as permission. The Coder's original wish, that an
+approval-needed call ends the run and comes back as an event, holds in this
+form: the run ends and the outcome returns as an event. No session is saved, no
+resume exists, and sessions stay `--no-session`.
+
+Open question 1 (for Shyam) offers an authenticated channel, in section 9.
 
 ### 3.7 Outbox
 
@@ -482,7 +584,7 @@ Table `outbox`:
 - `run_id`
   - Meaning: the run that wrote it
 - `kind`
-  - Meaning: `hc_send`, `coordq_send`, `none`
+  - Meaning: `hc_send`, `coordq_send`, `request_notice`, `none`
 - `target`
   - Meaning: a terminal for `hc_send` (resolved as `coord-tick` does today); the
     same arguments `coordq create` takes for `coordq_send`
@@ -531,7 +633,7 @@ so a model that forgets to answer cannot silently drop events.
 
 ## 4. Fallback tick
 
-The inbox starts with a periodic timer row every 7,200 seconds named `fallback`.
+The inbox has a timer named `fallback` that is enqueued only when no run has happened for 7,200 seconds, so it never adds a run on a busy day.
 When it fires the worker runs the full board tick (today's prompt) as one batch.
 It stays until the measurement below passes for 14 days, then drops to daily,
 then goes away. Any fallback run that finds work the inbox did not announce is
@@ -547,29 +649,59 @@ One script, `scripts/coord_wake_metrics.py`, reads `tick.log`, `loop/ticks.log`,
 the journal and `inbox.db` and prints the table below for any window. Before
 numbers are in section 2 and reproduced by the script on 16 to 22 Nov.
 
-- Wake count
-  - Before (measured): 41 model runs a day (88 in 52 h)
+- Event volume (new)
+  - Before (measured): 404, 707 and 342 raw wake-kind lines on 21, 22 and 23 Nov
+    (73, 137 and 61 ten-minute windows); 1,404 distinct facts after alarm
+    generations
+  - Definition after: inbox rows enqueued per day, by kind and tier, plus
+    ignored duplicates
+  - Pass criterion: reported only. It is the input that the wake and latency
+    targets are set from, and the shadow week re-prices them.
+- Wake count (runs a day)
+  - Before (measured): 41 model runs a day on the clock (88 in 52 h; 48 nominal)
   - Definition after: `inbox_batch` journal lines with a started run, plus
-    fallback runs
-  - Pass criterion (7 consecutive days after cutover): at most 15 a day
-- Empty-run share
-  - Before (measured): 85% of launcher runs sent nothing; 53% of summaries acted
-    on nothing
-  - Definition after: runs whose outbox is only `none` rows or that failed,
-    excluding the fallback
-  - Pass criterion (7 consecutive days after cutover): at most 10%
+    fallback runs. Runs that failed on the model (a 402, a timeout) are listed
+    separately and never counted as saved wakes.
+  - Replay prediction (section 2, variant B, 30-minute gap): 80 runs in 53.6
+    hours, about 36 a day (22, 40 and 18 on the three partial days).
+  - Pass criterion (7 consecutive days after cutover): mean at most 36 a day,
+    no day above 48, and at least 25% fewer runs than the clock would have made
+    in the same window.
+- Run outcome split (replaces the single empty-run share). Every run falls in
+  exactly one bucket.
+  - Bucket 1, no events: a fallback run whose batch holds only the timer row.
+    Before (measured): not separable. Pass criterion: at most 2 a day.
+  - Bucket 2, events and no action needed: a run with real rows whose outbox is
+    `none` with a reason. This is a correct and useful outcome, for example a
+    merge that needs nothing. It is reported with its reasons and has no target,
+    except that a rising share points at rows that should be batch-only.
+  - Bucket 3, failed: model unavailable (a 402), timeout, no decision. Before
+    (measured): 34 of 88 launcher runs (39%) on 21 to 23 Nov. Pass criterion:
+    zero runs lost silently, meaning every failed run has an alarm and its rows
+    are still pending.
+  - Bucket 4, events and action: the rest. Reported.
+  - Baseline comparison: the clock's 85% silent launcher runs and 53% empty
+    summaries both mix buckets 1, 2 and 3, so the after numbers are compared
+    bucket by bucket, not as one share.
 - Event to action latency
   - Before (measured): PR opened to first tick that names it: median 26.3 min
-  - Definition after: inbox row `ts` to its outbox row `sent_ts`
-  - Pass criterion (7 consecutive days after cutover): median at most 3 min and
-    p90 at most 10 min for `pr_opened`, `pr_new_head`, `gate_verdict`,
-    `pr_merged`
+  - Definition after: row `ts` (the source event time, such as the PR
+    `createdAt`, not the row creation time) to its outbox row `sent_ts`
+  - Replay prediction (variant B, 30-minute gap): wake rows median 14.1 min, p90
+    26.6; rows after a quiet 30 minutes about 1 min; batch-only rows median
+    15.7, p90 29.8.
+  - Pass criterion (7 consecutive days after cutover): wake rows median at most
+    15 min and p90 at most 30 min; rows after a quiet 30 minutes p90 at most 2
+    min; batch-only rows p90 at most 60 min. Each is within 20% of the replay and
+    below the clock's 26.3 min median.
 - Lost events
   - Before (measured): not measurable
-  - Definition after: rows not `done` or `failed` more than 2 hours after `ts`,
-    plus `fallback_acted` events
-  - Pass criterion (7 consecutive days after cutover): zero stuck rows; at most
-    1 `fallback_acted` a week
+  - Definition after: rows not `done` more than 2 hours after `ts` (`failed`
+    rows count as lost), plus `fallback_acted` events, plus a weekly
+    reconciliation of GitHub's PR list against `pr_opened` rows to find facts
+    that were never enqueued
+  - Pass criterion (7 consecutive days after cutover): zero stuck or failed
+    rows, zero never-enqueued PRs, at most 1 `fallback_acted` a week
 - Duplicate rate
   - Before (measured): not measurable
   - Definition after: ignored inserts over total inserts
@@ -588,7 +720,7 @@ are counted too, so the shadow week also predicts the new wake count.
    script). Nothing is loaded. Proofs run with a temporary `COORD_INBOX_DIR` and
    `COORD_JOURNAL_DIR`.
 2. **Build every producer.** The poll pass (reviews, Shyam labels, CI on main),
-   timers and the approval-request writer are built before shadow starts, so the
+   timers and the request-notice writer are built before shadow starts, so the
    shadow week covers every source that will go live.
 3. **Shadow.** Enable the journal hook and load the worker job in `--shadow`: it
    claims nothing, makes no model call and sends nothing. It writes an
@@ -598,9 +730,9 @@ are counted too, so the shadow week also predicts the new wake count.
 4. **Switch.** Unload the old tick, turn the worker's shadow flag off and set
    `COORD_WAKE=0` for the in-session timer. This step needs Shyam's go. The
    change is a plist and env edit, listed in the cutover ticket.
-5. **Approvals.** Ship the first version with grants and no session resume (see
-   section 3.6). Add resume only after the spike. The guard file needs Shyam's
-   OK.
+5. **Request notices.** The run ends a blocked call with a request line, and
+   the dispatcher writes a `request_notice`. The guard and its file do not
+   change. No grant exists in any step.
 6. **Retire `coord-watch`.** After 14 days on the inbox, remove the file, its
    fast-check entry and the README activation steps, each with Shyam's yes for
    the delete.
@@ -611,8 +743,8 @@ At any step: unload `dev.coordinator.inbox`, load `dev.coordinator.tick` with
 its 1800-second interval, and set `COORD_WAKE` back on for the in-session timer.
 The journal is untouched by the inbox (the hook only adds rows) and the hook can
 be turned off with one environment variable. `inbox.db` can stay on disk. It
-holds state the journal does not have (poll rows, timers, approvals, outbox
-rows), but nothing outside the inbox reads it, and the 30-minute tick finds the
+holds state the journal does not have (poll rows, timers, request notices,
+outbox rows), but nothing outside the inbox reads it, and the 30-minute tick finds the
 same work from the board.
 
 ## 7. Risks and how the design answers them
@@ -630,7 +762,11 @@ same work from the board.
 - **Lock contention.** The inbox has its own file and its own worker lock,
   separate from `queue.lock`.
 - **GitHub budget.** One ETag poll pass replaces `coord-watch`'s worst case of
-  2,880 requests an hour, and conditional requests that return 304 are cheap.
+  2,880 requests an hour. At 12 repos and a 2-minute cycle the list calls are
+  about 360 an hour, most of them 304s, plus reads for PRs whose entry changed.
+- **Forged signals.** Any agent can message t56 and act as Shyam's GitHub login.
+  The inbox treats those as unverified hints and issues no authority (section
+  3.6).
 - **Formal check.** The state machine is small enough for a crash-injection
   proof in the existing selftest. TLA+ is not worth it unless the outbox grows
   more states.
@@ -660,12 +796,66 @@ same work from the board.
   claim to satisfy it. Coder should point to the text so the design can be
   checked against it.
 
-## 9. Critiques
+## 9. Open questions for Shyam
+
+1. **Authenticated approval channel.** This design carries no approval. If Shyam
+   wants one, it needs a channel an agent cannot use: for example a local
+   command that asks for a Touch ID or password prompt in a terminal a person
+   holds and writes a signed, single-use, action-bound grant that the guard
+   verifies, or a hardware-key signature. That widens the guard's permissions,
+   so it is a separate decision with its own review, and it is not part of any
+   ticket here.
+2. **Which kinds wake.** Variant B (section 3.3a) lets only judgment events wake
+   a run and batches PR opened, merged, gate verdicts and reviews. Variant C adds
+   merges and verdicts outside SRW for about 5% more runs. Coder asked for PR
+   events as wake sources, and at SRW volume all of them cannot wake and meet a
+   wake target.
+3. **Minimum gap between runs.** 10 minutes gives a median wake latency of 1
+   minute and 134 runs over the replay window, more than the clock. 30 minutes
+   gives 14 minutes and 80 runs. 60 minutes gives 28 minutes and 49 runs. The
+   design uses 30.
+
+## 10. Critiques
 
 Two reviewers outside the Anthropic family read this document: DeepSeek V4.1
 Flash (`morph-dsv41flash`) and Kimi K3.1 (`morph-kimik31`), both through Morph
 and `pi -p`, asked for omissions, failure modes and simpler alternatives. Each
-point is answered below. Section numbers refer to the reviewed draft.
+point is answered below. Section numbers refer to the reviewed draft. Replies
+that mention a grant, `approve` text or session resume are superseded by
+revision 2 (the Coordinator's review, below): the inbox carries no grant.
+
+### Coordinator review of PR #897 (23 Nov), revision 2
+
+1. **Critical: approvals can be forged (3.6).** **Accepted.** Any agent can
+   `hc send t56 "approve <id>"`, `decisions.json` has several agent writers, and
+   GitHub actions by agents run under Shyam's login, so none of those proves a
+   person. Redesigned: no grant, no `approve` parsing, guard unchanged. The inbox
+   carries a request notice and sees the outcome (a merge). An authenticated
+   channel is open question 1. T10 and T11 are rewritten.
+2. **Major: targets conflict with volume.** **Accepted, and the counts were
+   verified.** 73, 137 and 61 ten-minute windows match in Eastern days. The
+   replay prices three variants and three gaps (section 2). Kinds are split into
+   wake and batch-only (3.3a), and the targets are set from the replay (section
+   5): at most 15 a day and 3 minutes are dropped as unattainable.
+3. **Major: first replay floods.** **Accepted.** An activation watermark sends
+   older facts to `seen`, a per-file offset cursor crosses the month boundary,
+   and replay runs at startup and hourly from the offset (section 1). Without
+   the watermark the replay would enqueue 1,404 pending rows.
+4. **Major: `pr_opened` is not PR opened.** **Accepted.** `gate_queued` is now a
+   batch kind. `pr_opened` and `pr_new_head` come from the poll pass over the
+   open PR list (section 3.3), with a stated detection lag of up to 2 minutes.
+5. **Major: heartbeat numbers.** **Accepted.** Heartbeat every 30 seconds during
+   a pass, a 20-minute pass alarm, a 4-minute stale limit, and the check lives in
+   `lane_driver.py` (every 180 seconds), not in the hourly selftest. Worst case
+   detection is about 7 minutes (invariant 12).
+6. **Major: empty-run metric.** **Accepted.** Four buckets replace one share:
+   no events, events and no action needed (useful), failed (the 402 runs), and
+   events and action (section 5).
+7. **Minor: invariant order and T12.** **Accepted.** Invariants are numbered in
+   order, and T12 references the new targets.
+
+The review also asked to keep "not found" for manifesto P13. Section 8 still says
+so.
 
 ### DeepSeek V4.1 Flash
 
@@ -673,8 +863,8 @@ Omissions
 
 1. Baseline measured on a broken system (39% of launcher runs failed on 402). **Accepted.** Section 2 now says the latency and empty-summary numbers come from the healthy window and the launcher counts show failed runs separately.
 2. Where the journal replay cursor lives. **Accepted.** Replay is idempotent through dedupe keys, so it needs no cursor and starts from the first line of the month (section 1).
-3. Approvals have no attribution. **Accepted.** Each answer row records its channel, and only the first answer counts (section 3.6).
-4. The run-ending mechanism in the guard is unproven. **Accepted as emphasis.** The first version ships without resume, and a spike comes first in T11 (section 3.6).
+3. Approvals have no attribution. **Accepted.** Each answer row records its channel, and only the first answer counts (section 3.6). **Superseded in revision 2: no grant exists, and sessions stay ephemeral.**
+4. The run-ending mechanism in the guard is unproven. **Accepted as emphasis.** The first version ships without resume, and a spike comes first in T11 (section 3.6). **Superseded in revision 2: no grant exists, and sessions stay ephemeral.**
 5. No throughput or cost cap. **Accepted.** Invariant 10 adds a 60-second burst window and at most 6 runs an hour.
 6. No schema version, retention or WAL growth rule. **Accepted.** Invariant 11 adds `user_version`, a 30-day purge for done and sent rows, and a daily checkpoint.
 
@@ -684,7 +874,7 @@ Failure modes
 2. A hook write that fails leaves the row behind the producer. **Accepted.** The worker's idempotent journal replay on every wake repairs it (section 1).
 3. At-least-once `hc send` can be acted on twice. **Accepted for `hc_send`.** It becomes at-most-once with an alarm for an unknown state; `coordq_send` stays at-least-once because `coordq create` refuses a repeated request id (section 3.7).
 4. A force-push back to an older head is dropped by the dedupe key. **Accepted as a known limit.** The gate pins heads, so it is rare, and the fallback tick catches it. It is not worth a counter in the key.
-5. Two answers to one approval resume one session twice. **Rejected as stated, clarified.** The unique `approval_answer:<id>` key already makes the second answer a no-op (section 3.6).
+5. Two answers to one approval resume one session twice. **Rejected as stated, clarified.** The unique `approval_answer:<id>` key already makes the second answer a no-op (section 3.6). **Superseded in revision 2: no grant exists, and sessions stay ephemeral.**
 6. Sleeping laptop breaks timers and leases. **Accepted.** Invariants 8 and 9 (pid check, collapsed missed timers).
 
 Simpler alternatives
@@ -692,18 +882,18 @@ Simpler alternatives
 1. A precheck in front of the existing tick. **Accepted as T0 and rejected as a replacement.** It removes empty wakes cheaply but keeps the 30-minute latency, which is the second goal.
 2. Fix `coord-watch` instead. **Rejected.** It polls on a 30-second cycle with a budget of 2,880 GitHub requests an hour, has no acknowledge or lease, repeats events when its state is lost (its own doc says so), and its wake path needs a monitor started in an authorized session plus a watch renewed every 24 hours. Its detectors are kept as journal and alarm mappings.
 3. A spool directory with rename-to-claim. **Rejected.** It works for one consumer, but dedupe across done rows, batch queries, lease reaping and counters become directory scans. SQLite in the standard library has all of them. This stays the fallback if SQLite causes trouble.
-4. Drop session resume. **Accepted as the first version** (section 3.6).
+4. Drop session resume. **Accepted as the first version** (section 3.6). **Superseded in revision 2: no grant exists, and sessions stay ephemeral.**
 5. Send inline and journal afterwards (no outbox). **Rejected, partly adopted.** The outbox is what makes send-nothing and `no_decision` visible, which Coder asked for. The at-most-once rule for `hc_send` takes the useful part of the idea.
 
 ### Kimi K3.1
 
 Omissions
 
-1. Approval grant is not bound to the action, and `approval_request` and `approval_expired` are not declared kinds. **Accepted.** Section 3.6 now has a single-use grant bound to command hash, repo and head, with both kinds named. Resume is dropped from the first design (see alternative 3 below), which also removes the approve-forever loop.
+1. Approval grant is not bound to the action, and `approval_request` and `approval_expired` are not declared kinds. **Accepted.** Section 3.6 now has a single-use grant bound to command hash, repo and head, with both kinds named. Resume is dropped from the first design (see alternative 3 below), which also removes the approve-forever loop. **Superseded in revision 2: no grant exists, and sessions stay ephemeral.**
 2. Recovery is asserted, and the rollback line that "the journal holds all inbox state" is false for polls, timers, approvals and the outbox. **Partly accepted.** The rollback wording is corrected (section 6). The replay needs no cursor because dedupe keys make it idempotent, and the worker runs it on every wake. Poll watermarks now live in a `meta` table and the permanent `seen` table covers the rest.
 3. The outbox dispatcher has no launch path, retry policy or drain procedure. **Accepted.** Section 3.7 now runs it at the end of each worker pass, three tries with growing delay, then `failed` plus one alarm, and `outbox --drain` by hand.
 4. Metrics cannot show zero lost events, and latency is measured from row creation, which hides a late producer. **Accepted.** `ts` is the source event time (PR `createdAt`, journal time), and the metrics script compares GitHub's PR list with inbox rows each week to count events never enqueued. Failed rows count as lost.
-5. Shadow ends before reviews, labels, CI and timers exist, and approvals ship after cutover. **Accepted.** Migration step 2 now builds every producer before the shadow week. Approvals ship as a grant without resume.
+5. Shadow ends before reviews, labels, CI and timers exist, and approvals ship after cutover. **Accepted.** Migration step 2 now builds every producer before the shadow week. Approvals are no longer a producer (revision 2).
 
 Failure modes
 
@@ -719,10 +909,10 @@ Simpler alternatives
 
 1. Keep the journal as the store, advance a byte offset after a successful tick, trigger with `WatchPaths`. **Rejected, partly adopted as T0.** It has no home for poll events, timers or grants, no per-session batching and no outbox. Offset-after-success also cannot express a failed batch separately from a pending one without rebuilding the row states.
 2. Use only `pending` and `done` under the whole-pass lock. **Rejected, with a note.** Coder's request names claim, lease and crash return. A `claimed` state is about 15 lines and gives metrics an in-flight count and the dispatcher something to reap. If T1 shows it is more than that, drop it.
-3. Replace saved-session resume with a fresh run and a one-time grant. **Accepted.** It is now the design (section 3.6). It matches DeepSeek's alternative 4.
+3. Replace saved-session resume with a fresh run and a one-time grant. **Accepted.** It is now the design (section 3.6). It matches DeepSeek's alternative 4. **Superseded in revision 2: no grant exists, and sessions stay ephemeral.**
 
 
-## 10. Ticket cut
+## 11. Ticket cut
 
 Each ticket stays within 150 code lines and 3 code files. Tests extend
 `coordinator/overnight/selftest.py` or `EXPECTED` in
@@ -738,13 +928,15 @@ PR.
     Claim, kill the claimer, advance the clock, reap (row is `pending`, attempts
     1). Third lease expiry gives `failed`.
 - T2
-  - Ticket: Journal hook: event-to-kind map, `inbox.enqueue` after the journal
-    write, off switch
-  - Files: `coordinator/bin/journal.py`, `coordinator/overnight/selftest.py`
+  - Ticket: Journal hook: event-to-kind and tier map, `inbox.enqueue` after the
+    journal write, off switch; activation watermark and per-file offset replay
+    across month files
+  - Files: `coordinator/bin/journal.py`, `coordinator/bin/inbox.py`
   - Blocked by: T1
-  - Proof idea: Temp dirs. `journal.emit("gate_verdict", ...)` twice gives one
-    row. With the switch off, zero rows and the same journal bytes. An
-    unwritable inbox still writes the journal line.
+  - Proof idea: Temp dirs with a two-month journal fixture. First enable: old
+    lines go to `seen`, zero pending rows. New `gate_verdict` twice gives one
+    row. A late line appended to the old month after the cursor moved is still
+    read. With the switch off, zero rows and the same journal bytes.
 - T3
   - Ticket: Outbox table and dispatcher (`hc_send`, `coordq_send`, `none`,
     `no_decision`)
@@ -762,12 +954,14 @@ PR.
     batch of 5 lines and sends nothing. Load the plist only in a throwaway
     `launchctl` domain, or lint it with `plutil`.
 - T5
-  - Ticket: Metrics script: wake count, empty share, latency, lost events,
-    duplicate rate
+  - Ticket: Metrics script: event volume, runs a day, the four outcome buckets,
+    latency from source event time, lost events including the weekly GitHub
+    reconciliation, duplicate rate
   - Files: `scripts/coord_wake_metrics.py`
   - Blocked by: none
-  - Proof idea: Run on 16 to 22 Nov and reproduce 53% and the 26.3 minute median
-    in this doc.
+  - Proof idea: Run on 16 to 22 Nov and reproduce 53%, the 26.3 minute median and
+    the volume counts in this doc, and compare `replay_wakes.out` with the
+    script's own replay of the same journal.
 - T6
   - Ticket: Timers table and the 2-hour `fallback` timer; timers only enqueue
   - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/selftest.py`
@@ -775,12 +969,14 @@ PR.
   - Proof idea: A timer due now gives one `timer_due` row once. A second pass
     gives no new row. Advance by the period and get a new row.
 - T7
-  - Ticket: Poll pass: `pr_review` and Shyam label events via `gh_gateway` ETag
+  - Ticket: Poll pass: `pr_opened`, `pr_new_head`, `pr_review` and unverified
+    `human_signal` rows from the open PR list via `gh_gateway` ETag
   - Files: `coordinator/bin/inbox.py`, `coordinator/bin/gh_gateway.py`
   - Blocked by: T2
-  - Proof idea: Fake gh fixture: a review appears once, a repeat poll returns
-    304 and adds no row. Request count per pass logged and at most one per open
-    PR.
+  - Proof idea: Fake gh fixture with a held draft PR and an ungated PR: both give
+    `pr_opened` (which `gate_queued` would miss). A repeat poll returns 304 and
+    adds no row. A label by the `shyamsivakumar` login gives a `human_signal`
+    row with `verified=false`.
 - T8
   - Ticket: Poll pass: `ci_main` from Mac-published statuses only
   - Files: `coordinator/bin/inbox.py`
@@ -798,31 +994,35 @@ PR.
     each reply shape (send, nothing, garbage, 402). Rows end done, done, pending
     (failed run counted), pending (not counted).
 - T10
-  - Ticket: Grant table and approval answer events: `approval_request`,
-    `approval_answer`, `approval_expired`, single-use grant bound to command
-    hash, repo and head; card answers read on the poll pass
+  - Ticket: Request notice: the run's request line becomes a `request_notice`
+    outbox row through the existing card path; a `pr_merged` or new-head row
+    closes it; an unanswered notice is raised again once after 24 hours. No grant
+    table, no `approve` parsing, no guard change.
   - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/selftest.py`
   - Blocked by: T9
-  - Proof idea: Create a grant, answer it twice (second ignored), consume it
-    with a matching hash (ok), again (refused), with another head (refused), and
-    after 24 simulated hours (expired).
+  - Proof idea: Fake run replies with a request line. One notice row is written.
+    A later `pr_merged` row for the same PR and head closes it. A forged
+    `approve <id>` message or card change leaves it open and creates no row of
+    any kind.
 - T11
-  - Ticket: Guard deferral: spike that a `tool_call` handler can end the run (or
-    use the `NEEDS_APPROVAL` line), write the request and card, consume a grant.
-    Needs Shyam's OK for the guard file.
-  - Files: `coordinator/pi/extensions/coordinator.ts`,
-    `coordinator/bin/inbox.py`
-  - Blocked by: T10
-  - Proof idea: Call `checkBash` with `gh pr merge`: result is a deferral with
-    an id and one request row. After a fake `approve <id>` input the same call
-    passes once and is blocked the second time.
+  - Ticket: Worker liveness: heartbeat every 30 seconds, 20-minute pass alarm,
+    and the `lane_driver.py` check that raises `factory-watchdog` when the lock is
+    held and the heartbeat is more than 4 minutes old or no pass finished in 5
+    minutes
+  - Files: `coordinator/bin/inbox.py`, `coordinator/overnight/lane_driver.py`
+  - Blocked by: T4
+  - Proof idea: Temp state dir with a stale heartbeat file and a held lock: one
+    alarm, once per episode. A fresh heartbeat: none. A pass that sleeps past the
+    alarm is killed and the lock released.
 - T12
   - Ticket: Cutover config: unload the old tick, `COORD_WAKE=0` for the
-    in-session timer, worker out of shadow. Needs Shyam's go.
+    in-session timer, worker out of shadow. Needs Shyam's go. Pass criteria are
+    the section 5 targets: at most 36 runs a day mean, wake-row median 15 min
+    and p90 30 min, no stuck rows.
   - Files: `coordinator/launchd/dev.coordinator.tick.plist`,
     `coordinator/launchd/dev.coordinator.inbox.plist`,
     `docs/coordinator-event-inbox-design.md`
-  - Blocked by: T5 to T10, and 7 shadow days (run with every producer on) meeting the shadow criterion
+  - Blocked by: T5 to T11, and 7 shadow days (run with every producer on) meeting the shadow criterion and re-pricing the tiers
   - Proof idea: `plutil -lint`; metrics script after 7 days against the pass
     table.
 - T13
@@ -844,4 +1044,5 @@ one small helper. Blocked by: none. Proof: run with a temp journal holding no
 new event (exit before `pi`) and one `gate_verdict` (reaches `pi`).
 
 Order of work: T1, then T2, T3, T5, T6 in parallel, then T4, T7, then T8, T9,
-then T10, T11, then T12 after the shadow week, then T13.
+then T10, T11, then T12 after the shadow week, then T13. No ticket changes
+`coordinator/pi/extensions/coordinator.ts`.
