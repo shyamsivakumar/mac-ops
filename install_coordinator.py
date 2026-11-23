@@ -127,6 +127,7 @@ TURN_CAP_JOB = "dev.coordinator.turncap"
 # dev.coordinator.lanes; the lanes job is kept because the lane watchdog and
 # the tick check its label and lanes.log.
 RETIRED_JOBS: tuple[str, ...] = ("dev.coordinator.overnight",)
+RETIRED_FILES = (("loop", "turn_cap.py"),)
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
 # queue here: the board is the list.
@@ -508,6 +509,11 @@ def retired_plists(home: Path) -> list[Path]:
     One helper builds the list, so the dry run, the status and the
     retirement itself all name the same paths the same way."""
     paths = [retired_plist(label, home) for label in RETIRED_JOBS]
+    return [path for path in paths if path.is_file()]
+
+
+def retired_files(coordinator: Path) -> list[Path]:
+    paths = [coordinator.joinpath(*parts) for parts in RETIRED_FILES]
     return [path for path in paths if path.is_file()]
 
 
@@ -1095,7 +1101,9 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
     pending = changes(checkout, home, coordinator)
     _, kept = split_local_mods(pending, home, recorded_mod_hashes(home))
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
-    retired = [str(path) for path in retired_plists(home)]
+    retired = [str(path) for path in retired_plists(home)] + [
+        str(path) for path in retired_files(coordinator)
+    ]
     checks = smoke_checks(home) if smoke else []
     print(
         json.dumps(
