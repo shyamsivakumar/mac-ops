@@ -17,7 +17,7 @@ Environment knobs, all optional:
   COORD_TICK_LOG              log file (default ~/Library/Logs/coordinator/tick.log)
   COORD_TICK_LOCK             lock file (default ~/.local/state/mac-ops/coord-tick.lock)
   COORD_TICK_TIMEOUT          seconds before a run is killed (default 600)
-  COORD_TICK_MODEL            model id (default deepseek/deepseek-flash)
+  COORD_TICK_MODEL            model id (default morph/morph-dsv41flash)
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ SANDBOX_PROFILE = PI_DIR / "coordinator.sb"
 LOG_PATH = Path(
     os.environ.get("COORD_TICK_LOG", HOME / "Library/Logs/coordinator/tick.log")
 )
-MODEL = os.environ.get("COORD_TICK_MODEL", "deepseek/deepseek-flash")
+MODEL = os.environ.get("COORD_TICK_MODEL", "morph/morph-dsv41flash")
 TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
 # The model check is an external call of its own. It gets a bound and a
 # process group, so a check that hangs is killed and named in the tick log

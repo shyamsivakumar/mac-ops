@@ -5,8 +5,8 @@
      drift; the shift and `coordq`'s refill own board intake, so the tick
      never starts tickets.
 
-     The model is pinned here so the job runs on DeepSeek
-     (deepseek/deepseek-flash) and not on the Claude plan. No RunAtLoad: a
+     The model is pinned here so the job runs on Morph DeepSeek
+     (morph/morph-dsv41flash) and not on the Claude plan. No RunAtLoad: a
      tick costs a model call, so the first one lands one interval after the
      job loads, not at every boot. The launcher takes its own lock, so two
      ticks never overlap. -->
@@ -25,7 +25,7 @@
         <key>COORDINATOR_GH_CACHE</key>
         <string>on</string>
         <key>COORD_TICK_MODEL</key>
-        <string>deepseek/deepseek-flash</string>
+        <string>morph/morph-dsv41flash</string>
         <key>PATH</key>
         <string>@HOME@/.local/bin:@HOME@/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>
