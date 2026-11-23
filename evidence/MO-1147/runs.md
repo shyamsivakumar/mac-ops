@@ -53,3 +53,12 @@ Scoring rules after review: a case is outcome-scorable only when Shyam's recorde
 | first-option | random | 73 | 2.47 | 19/21 (90.5%) | 10/21 (47.6%) | 5 of 73 |
 
 All four checks found zero bad outcomes on the real labels (no `true` in any check), so the column cannot yet separate arms by correctness: an arm that approves is always "correct", and the 100% versus 47.6% gap only reflects how often each arm picks approve on these 5 cases. The final split was not run.
+
+## Fix round: failed GitHub history read (gate finding on 3dee557e)
+
+`revert_check` turned a failed `gh api` commits read into an empty list and cached it, so every merged label for that repo got `reverted=false`. It now returns unknown (null) on a failed read and caches only successful reads.
+
+Case `tests.test_ladder_outcomes.FetchChecks.test_failed_history_read_is_unknown_not_false`:
+
+- origin code (before): `FAILED (failures=1)`
+- fixed code (after): `tests.test_ladder_outcomes`, 13 tests, `OK`

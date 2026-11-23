@@ -62,6 +62,11 @@ class FetchChecks(OutcomeFixture):
         self.assertIs(row["reverted"], True)
         self.assertEqual(row["pr"], 7)
 
+    def test_failed_history_read_is_unknown_not_false(self):
+        base = fake_gh()
+        row = self.fetch(lambda args: None if "--slurp" in args else base(args))
+        self.assertIsNone(row["reverted"])
+
     def test_main_broke_uses_only_mac_statuses(self):
         row = self.fetch(fake_gh(statuses=[("srw/agent-check", "failure"), ("Vercel", "success")]))
         self.assertIs(row["main_broke"], True)
