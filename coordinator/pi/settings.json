@@ -2,6 +2,7 @@
   "defaultProvider": "pi-claude-cli",
   "defaultModel": "claude-opus-5-5",
   "defaultThinkingLevel": "medium",
+  "defaultTools": ["+codemode"],
   "enabledModels": [
     "pi-claude-cli/claude-opus-5-5",
     "openai/gpt-6.1-sol",
