@@ -24,3 +24,7 @@ Ran 3 tests in 0.001s
 OK
 exit 0
 ```
+
+## Fast-check isolation row (M1, remote run at d65bcead)
+
+test isolation: no live gh call or log row | passed | no call the fake `gh` refused (no `pr view 169` refusal); 700 tests ran. Full row in check-proof.md.
