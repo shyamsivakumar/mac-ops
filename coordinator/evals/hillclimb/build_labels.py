@@ -641,14 +641,23 @@ def prior_rows(path):
     if not os.path.exists(path):
         return out
     with open(path) as fh:
-        for ln in fh:
+        for n, ln in enumerate(fh, 1):
+            if not ln.strip():
+                continue
             try:
                 row = json.loads(ln)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict) and row.get("id"):
-                out[row["id"]] = row
+            except json.JSONDecodeError as e:
+                raise ValueError(f"{path}:{n}: unparsable line: {e}")
+            if not isinstance(row, dict) or not row.get("id"):
+                raise ValueError(f"{path}:{n}: row has no id")
+            if row["id"] in out:
+                raise ValueError(f"{path}:{n}: duplicate id {row['id']}")
+            out[row["id"]] = row
     return out
+
+
+def recorded(row):
+    return str(row.get("source", "")).startswith("daily3 record")
 
 
 def main():
@@ -741,7 +750,9 @@ def main():
 
     labels_path = f"{OUT}/labels.jsonl"
     prior = prior_rows(labels_path)
-    kept = [r for i, r in prior.items() if i not in labels]
+    kept = [r for i, r in prior.items() if i not in labels or recorded(r)]
+    for iid in [i for i in labels if i in prior and recorded(prior[i])]:
+        del labels[iid]
     for iid, lab in labels.items():
         old = prior.get(iid, {})
         for k in ("reason", "recommended_option"):

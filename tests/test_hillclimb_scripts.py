@@ -1,8 +1,8 @@
 import argparse
+import importlib.util
 import json
 import shutil
 import sys
-import importlib.util
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -171,6 +171,33 @@ class BurstMining(unittest.TestCase):
 
 
 class RebuildKeepsRecords(unittest.TestCase):
+    def rebuild(self, out, base, board=()):
+        (base / "hc").mkdir(exist_ok=True)
+        with mock.patch.object(build_labels, "load_messages", return_value=[]), \
+                mock.patch.object(build_labels, "load_panel", return_value={}), \
+                mock.patch.object(build_labels, "load_board", return_value=list(board)), \
+                mock.patch.object(build_labels, "load_typed", return_value=[]), \
+                mock.patch.object(build_labels, "OUT", str(out)), \
+                mock.patch.object(build_labels, "TMP", str(base)), \
+                redirect_stdout(StringIO()):
+            build_labels.main()
+
+    def test_malformed_line_raises_and_files_are_unchanged(self):
+        good = json.dumps({"id": "x1", "ts": "2026-01-01T00:00:00Z"})
+        for bad in ("{not json", json.dumps({"kind": "merge"}), good):
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp).resolve()
+                out = base / "out"
+                out.mkdir()
+                (out / "labels.jsonl").write_text(good + "\n" + bad + "\n")
+                (out / "split.json").write_text("{}")
+                before = (out / "labels.jsonl").read_bytes()
+                with self.assertRaises(ValueError) as caught:
+                    self.rebuild(out, base)
+                self.assertIn("labels.jsonl:2", str(caught.exception))
+                self.assertEqual((out / "labels.jsonl").read_bytes(), before)
+                self.assertEqual((out / "split.json").read_text(), "{}")
+
     def test_rebuild_keeps_daily3_row_and_writes_scorer_split(self):
         spec = importlib.util.spec_from_file_location("score", ROOT / "evals/ladder/score.py")
         score = importlib.util.module_from_spec(spec)
@@ -199,6 +226,30 @@ class RebuildKeepsRecords(unittest.TestCase):
             key = build_labels.split_of("x1").lower()
             cases, _ = score.read_cases(out, key)
             self.assertEqual([c["id"] for c in cases], ["x1"])
+
+
+    def test_recorded_row_survives_whole_when_logs_reproduce_its_id(self):
+        board = [{
+            "id": "recut-901", "title": "Re-cut PR 901?", "answer": "Take it over",
+            "ts": "2026-02-02T00:00:00Z", "f": "s.jsonl", "i": 1,
+        }]
+        row = {
+            "id": "recut-901", "kind": "recut", "item_text": "Re-cut PR 901?",
+            "options": ["Re-cut it into smaller pull requests", "Take it over"],
+            "answer": "Re-cut it into smaller pull requests",
+            "recommended": "Re-cut it into smaller pull requests",
+            "recommended_option": "Re-cut it into smaller pull requests", "agree": True,
+            "ts": "2026-01-01T00:00:00Z",
+            "source": "daily3 record <- decisions.json (live inbox) (guess: x)", "reason": "ok",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            out = base / "out"
+            out.mkdir()
+            (out / "labels.jsonl").write_text(json.dumps(row) + "\n")
+            self.rebuild(out, base, board=board)
+            rows = [json.loads(l) for l in (out / "labels.jsonl").read_text().splitlines()]
+            self.assertEqual(rows, [row])
 
 
 class InstallPlan(unittest.TestCase):
