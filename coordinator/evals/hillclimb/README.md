@@ -195,7 +195,10 @@ cd ~/Code/coordinator/evals/hillclimb && python3 build_labels.py
 ```
 
 A rebuild keeps every row already in `labels.jsonl` that the logs do not
-reproduce (Daily 3 and burst records, with their `reason`), keeps `reason` and
+reproduce, and keeps every row recorded by `daily3.py` (source starting
+`daily3 record`) whole even when the logs produce the same id. It raises
+`ValueError` with `path:line` on an unparsable line, a row without an id or a
+duplicate id, before writing anything. For other rebuilt ids it keeps `reason` and
 `recommended_option` on rebuilt ids, fills `recommended_option` on new rows, and
 writes `split.json` with the flat `final` / `dev` / `heldout` keys that `score.py`
 reads. Both files are written to a temp file and renamed. Re-run `score.py lock`

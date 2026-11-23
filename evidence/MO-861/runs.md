@@ -100,8 +100,18 @@ This branch (`python3 -m unittest tests.test_hillclimb_scripts`): `Ran 6 tests .
 The scripts now differ from live. sha256 change (live to mac-ops source); `daily3.py`, `burst.py` and `plain_agent.py` still match live:
 
 ```text
-build_labels.py  946c7582a862a0f612032c2bbd89a1612fd61d6f06cae0ac9a2e80bb2daeb500 -> 48fe5dffd0c0ed839dd59b5c32d04535d748b0dabdb917ec610f37c64d892207
+build_labels.py  946c7582a862a0f612032c2bbd89a1612fd61d6f06cae0ac9a2e80bb2daeb500 -> cc253d80fdaf9fd649e0734ff17b66138c6947240f8cedcfd9359a46c4718971
 README.md        2f5237bfcfa215f91bf9d446fdfcc2905b8c18df31a61b97079a7c8bf0ea460b -> 888937c93f99687baef5c57fbd94a4d93c2c25e882a3c5303f0cc2f68b949c2f
 ```
 
 `build_labels.py` and `README.md` now differ from the live copies until the installer runs.
+
+## Fix round 3: no silent data loss in the rebuild
+
+`prior_rows` now raises `ValueError` (`path:line`) on an unparsable line, a row without an id, or a duplicate id, before any write. Rows whose source starts `daily3 record` (the only source `daily3.py` writes to `labels.jsonl`; `burst.py` writes `burst_queue.jsonl` rows that only reach labels through `daily3.py record`) are kept whole even when the logs reproduce the id.
+
+Cases added to `RebuildKeepsRecords` (malformed line leaves both files unchanged; a recorded row survives as an equal dict). On 64b6237c: `FAILED (failures=1, errors=1)`. On this branch: `Ran 8 tests ... OK`.
+
+Live `labels.jsonl` load check (read only, counts only): 147 non-blank lines, 0 unparsable, 0 missing id, 0 duplicate ids.
+
+build_labels.py sha256 is now cc253d80fdaf9fd649e0734ff17b66138c6947240f8cedcfd9359a46c4718971.
