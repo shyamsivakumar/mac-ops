@@ -15,7 +15,7 @@ EXPECTED = frozenset("send-integrity root-workspace worktree-base-ref consolidat
                      "no-parking turncap watchdog "
                      "zero-merge board-integrity api-budget ff-drift cycle-health "
                      "stall alarm-mute router-build router-blocked key-mint credit-block close-evidence build-here "
-                     "provider-until refill-busy journal-migration builder-receipt".split())
+                     "provider-until refill-busy journal-migration builder-receipt closed-ticket-merge".split())
 
 
 def save(path, value):
