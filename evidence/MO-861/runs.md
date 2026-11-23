@@ -82,3 +82,26 @@ OK
 ```
 
 `cmp` of the five scripts against `~/Code/coordinator/evals/hillclimb`: identical.
+
+## Fix round 2: rebuild keeps recorded rows and writes the scorer's split format
+
+Gate finding: `build_labels.py` replaced `labels.jsonl` (dropping Daily 3 records and their reasons) and wrote a `split.json` without the flat keys `score.py` reads.
+
+New case `RebuildKeepsRecords` (temp dirs only, sources mocked, `score.read_cases` loads the split).
+
+Old head 670feb7c `build_labels.py`:
+
+```text
+FAILED (failures=1)
+```
+
+This branch (`python3 -m unittest tests.test_hillclimb_scripts`): `Ran 6 tests ... OK`.
+
+The scripts now differ from live. sha256 change (live to mac-ops source); `daily3.py`, `burst.py` and `plain_agent.py` still match live:
+
+```text
+build_labels.py  946c7582a862a0f612032c2bbd89a1612fd61d6f06cae0ac9a2e80bb2daeb500 -> 48fe5dffd0c0ed839dd59b5c32d04535d748b0dabdb917ec610f37c64d892207
+README.md        2f5237bfcfa215f91bf9d446fdfcc2905b8c18df31a61b97079a7c8bf0ea460b -> 888937c93f99687baef5c57fbd94a4d93c2c25e882a3c5303f0cc2f68b949c2f
+```
+
+The installer will overwrite the live copies of these two files.

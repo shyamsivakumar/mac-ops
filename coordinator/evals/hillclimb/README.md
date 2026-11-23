@@ -148,7 +148,7 @@ should shrink as new asks are classified more precisely.
    board items and `typed-<slug of the question>` for typed asks. Never reuse an id
    for a different decision.
 2. Run `python3 build_labels.py` only if you are rebuilding from the logs. It
-   rewrites `split.json` from the same hash rule, so existing ids keep their split.
+   rewrites `split.json` from the same hash rule, so existing ids keep their split and recorded rows are preserved.
 3. If you add labels by hand, compute the split with the same rule:
    `h = int(sha256(id).hexdigest(), 16)`; `FINAL` if `h % 100 < 15`, else `DEV` if
    `(h // 100) % 100 < 80`, else `HELDOUT`. Add the id to the matching list in
@@ -194,12 +194,9 @@ hidden. An item with no recorded answer stays in the queue until Shyam answers i
 cd ~/Code/coordinator/evals/hillclimb && python3 build_labels.py
 ```
 
-The build is deterministic: the same logs produce the same `labels.jsonl` and
-`split.json`.
-
-**Warning.** `build_labels.py` does not emit `recommended_option` and does not
-write the flat `final` / `dev` / `heldout` keys that `score.py` reads. A plain
-rebuild therefore breaks the `recorded` arm and the scorer. After a rebuild,
-re-apply the `recommended_option` mapping (see
-`reports/2026-11-22-c-first-comparison.md`) and re-add the flat keys, then re-run
-`score.py lock`.
+A rebuild keeps every row already in `labels.jsonl` that the logs do not
+reproduce (Daily 3 and burst records, with their `reason`), keeps `reason` and
+`recommended_option` on rebuilt ids, fills `recommended_option` on new rows, and
+writes `split.json` with the flat `final` / `dev` / `heldout` keys that `score.py`
+reads. Both files are written to a temp file and renamed. Re-run `score.py lock`
+after a rebuild, because the file hashes change.
