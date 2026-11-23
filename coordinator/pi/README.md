@@ -70,7 +70,7 @@ board/PR evidence, not a worker message or a green widget.
 For an authorized bounded coordinator subtask, use `/agents types` to inspect
 the selected role. Repository role files under
 `~/.pi/agent-coordinator/subagent-manager/agents/` list
-`deepseek/deepseek-flash`; settings use `modelSelection: pick-first-scoped` and
+`morph/morph-dsv41flash`; settings use `modelSelection: pick-first-scoped` and
 `toolFiltering: allowed`. Confirm the resolved model before dispatch, give an
 explicit read-only task and stop boundary, and do not silently substitute a
 model. DeepSeek is for coordinator work, not the Astra gate or a critique.
