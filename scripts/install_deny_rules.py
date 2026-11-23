@@ -94,6 +94,9 @@ def claude_rules(spec: dict, root: Path) -> dict[str, list[str]]:
         add(f"Bash(git push {flag}:*)", None)
     for branch in spec["push_protected"]:
         add(f"Bash(git push origin {branch}:*)", "push_protected")
+    for family, commands in spec["claude_ask_commands"].items():
+        for command in commands:
+            add(f"Bash({command}:*)", family)
     return {mode: list(dict.fromkeys(entries)) for mode, entries in rules.items()}
 
 

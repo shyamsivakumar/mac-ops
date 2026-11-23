@@ -255,6 +255,8 @@ class ListTest(unittest.TestCase):
         self.assertIn("Edit(//Users/t/.ssh/**)", rules["deny"])
         self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", rules["retired"])
         self.assertIn("Bash(git push --force-if-includes:*)", rules["deny"])
+        self.assertIn("Bash(gh pr merge:*)", rules["ask"])
+        self.assertIn("Bash(git push:*)", rules["ask"])
 
     def test_hook_constants_match_the_list(self):
         self.assertEqual(hook_module.PROTECTED, set(SPEC["push_protected"]))
