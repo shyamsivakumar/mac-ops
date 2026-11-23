@@ -296,11 +296,11 @@ class TestTickJob(unittest.TestCase):
             ["/Users/example/.local/bin/coord-tick"],
         )
 
-    def test_the_tick_job_runs_on_deepseek(self):
+    def test_the_tick_job_runs_on_morph(self):
         parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
         self.assertEqual(
             parsed["EnvironmentVariables"]["COORD_TICK_MODEL"],
-            "deepseek/deepseek-flash",
+            "morph/morph-dsv41flash",
         )
 
     def test_the_lanes_job_is_the_only_job_that_runs_the_shift(self):
