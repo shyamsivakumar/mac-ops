@@ -989,6 +989,9 @@ def turncap(early_interrupt=False):
             lines = [entry.args[0] for entry in logs().write.call_args_list]
             expected_lines = [] if waiting or seconds <= 600 else [
                 f"- cap mis-sized 2026-11-15T00:00Z | t3 | {thread['title']} | run | {seconds / 60:.1f} min\n"] * 2
+            if seconds > 1200 and not waiting:
+                expected_lines += [
+                    f"- cap hit 2026-11-15T00:00Z | t3 | {thread['title']} | run | {seconds / 60:.1f} min\n"] * 2
             exact(lines, expected_lines)
             exact(state.get("parked", []), ["fixture"] if seconds > 1200 and not waiting else [])
             exact(state.get("attempts", 0), 0)
@@ -1022,8 +1025,12 @@ def turncap(early_interrupt=False):
             exact(actions, [] if seconds <= 3000 else [
                 ("t3mcp", "t3_thread_interrupt", {"threadId": "paused", "runId": "paused-run"})])
             exact(state.get("parked", []), [] if seconds <= 3000 else ["paused"])
-            exact([c.args[0] for c in logs().write.call_args_list], [] if seconds <= 2400 else [
-                "- cap mis-sized 2026-11-15T00:40Z | t3 | ticket:fixture/repo#2:a1 | paused-run | 10.0 min\n"] * 2)
+            expected_lines = [] if seconds <= 2400 else [
+                "- cap mis-sized 2026-11-15T00:40Z | t3 | ticket:fixture/repo#2:a1 | paused-run | 10.0 min\n"] * 2
+            if seconds > 3000:
+                expected_lines += [
+                    "- cap hit 2026-11-15T00:50Z | t3 | ticket:fixture/repo#2:a1 | paused-run | 20.0 min\n"] * 2
+            exact([c.args[0] for c in logs().write.call_args_list], expected_lines)
     if failures:
         raise AssertionError("; ".join(failures))
 

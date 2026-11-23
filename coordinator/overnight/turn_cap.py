@@ -6,10 +6,13 @@ import sys
 import time
 from datetime import datetime, timezone
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-STATE = os.path.join(HERE, ".turn_cap.json")
-TICKS = os.path.join(HERE, "ticks.log")
-NOTES = os.path.join(HERE, "caps.log")
+COORDINATOR_DIR = os.path.expanduser(
+    os.environ.get("MAC_OPS_COORDINATOR_DIR") or "~/Code/coordinator"
+)
+LOOP_DIR = os.path.join(COORDINATOR_DIR, "loop")
+STATE = os.path.join(LOOP_DIR, ".turn_cap.json")
+TICKS = os.path.join(LOOP_DIR, "ticks.log")
+NOTES = os.path.join(LOOP_DIR, "caps.log")
 CAP_SECONDS = 1200
 WARN_SECONDS = 600
 RESUME_GAP_SECONDS = 60
@@ -120,6 +123,7 @@ def log_hit(harness, thread, run_id, minutes, dry_run, kind="hit"):
     for path in (NOTES, TICKS):
         with open(path, "a") as f:
             f.write(line + "\n")
+    print(line)
 
 
 def handle_thread(harness, thread, state, dry_run):
@@ -156,6 +160,7 @@ def handle_thread(harness, thread, state, dry_run):
             print(f"DRY-RUN would interrupt and park: {harness} {tid} {run_id}")
             return
         call("t3mcp", "t3_thread_interrupt", {"threadId": tid, "runId": run_id})
+        log_hit(harness, thread, run_id, age / 60, dry_run)
         state["handled"].append(run_id)
         if tid not in state.setdefault("parked", []):
             state["parked"].append(tid)
