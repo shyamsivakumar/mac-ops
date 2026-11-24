@@ -11,7 +11,6 @@
     "claude-team/claude-sonnet-5-5",
     "claude-team/claude-haiku-5-5",
     "claude-team/claude-fable-5-2",
-    "deepseek/deepseek-flash",
     "morph/morph-dsv41flash",
     "morph/morph-kimik31"
   ],
@@ -36,9 +35,6 @@
         "reserveTokens": 32000
       },
       "minimax/MiniMax-M2.7": {
-        "reserveTokens": 32000
-      },
-      "deepseek/deepseek-flash": {
         "reserveTokens": 32000
       },
       "morph/morph-dsv41flash": {
