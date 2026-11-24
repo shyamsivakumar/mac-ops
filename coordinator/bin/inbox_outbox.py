@@ -15,15 +15,19 @@ def shadow_on():
     return os.environ.get("COORD_INBOX_SHADOW") != "0"
 
 
-def add(run_id, index, kind, target, body, *, reason=None, now):
+def _insert(conn, run_id, index, kind, target, body, reason, now):
     if kind not in KINDS or run_id.startswith(NOTICE_PREFIX) or (kind == "none" and not (reason or "").strip()):
         raise ValueError(kind)
+    return conn.execute(
+        "INSERT OR IGNORE INTO outbox"
+        " (ts, run_id, kind, target, body, reason, dedupe_key) VALUES (?,?,?,?,?,?,?)",
+        (now, run_id, kind, target, body, reason, f"{run_id}:{index}"),
+    ).rowcount == 1
+
+
+def add(run_id, index, kind, target, body, *, reason=None, now):
     with inbox.txn() as conn:
-        return conn.execute(
-            "INSERT OR IGNORE INTO outbox"
-            " (ts, run_id, kind, target, body, reason, dedupe_key) VALUES (?,?,?,?,?,?,?)",
-            (now, run_id, kind, target, body, reason, f"{run_id}:{index}"),
-        ).rowcount == 1
+        return _insert(conn, run_id, index, kind, target, body, reason, now)
 
 
 def _claim(skip, clock, lease):

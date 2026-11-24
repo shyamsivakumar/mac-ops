@@ -5309,6 +5309,44 @@ def worker_cases():
         exact([r[:2] for r in outbox()], [("hc_send", "t56;rm"), ("none", None)])
         exact(out.drain(None, now=100.0, shadow=True), {"would_send": 1})
 
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-")}):
+        seed(1)
+        for n, bad in enumerate(("SEND t56 text\nNOTHING: ok", "NOTHING:\nNOTHING: ok", None, b"NOTHING: x", {"a": 1})):
+            exact(w.shadow_pass(now=100.0 + 10000 * n, runner=lambda lines, bad=bad: bad)["batches"], 0)
+            exact((set(rows()), outbox()), ({("pending", 1)}, []))
+            store.connect().execute("UPDATE inbox SET attempts=0")
+        claimed = store.claim("coordinator", worker="y", now=0.0)
+        real, calls = out._insert, []
+
+        def second_fails(*args):
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError("second insert")
+            return real(*args)
+
+        with patch.object(out, "_insert", second_fails):
+            try:
+                w.finish(claimed, "NOTHING: a\nNOTHING: b", now=5.0)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("second insert error swallowed")
+        exact((set(r[0] for r in rows()), outbox()), ({"claimed"}, []))
+        errors = []
+
+        def other():
+            try:
+                with store.txn(time.monotonic() + 0.3):
+                    pass
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+
+        with store.txn():
+            thread = threading.Thread(target=other)
+            thread.start()
+            thread.join()
+        exact(len(errors), 1)
+
     with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-"),
                                  "COORD_INBOX_DEBOUNCE": "soon", "COORD_INBOX_MIN_GAP": "nan"}):
         seed(1)

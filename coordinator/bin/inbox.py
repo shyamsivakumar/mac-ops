@@ -114,18 +114,10 @@ def connect(deadline=None):
     return conn
 
 
-_current = None
-
-
 @contextlib.contextmanager
 def txn(deadline=None):
-    global _current
-    if _current is not None:
-        yield _current
-        return
     conn = connect(deadline)
     _begin(conn, deadline)
-    _current = conn
     try:
         yield conn
         conn.execute("COMMIT")
@@ -133,7 +125,6 @@ def txn(deadline=None):
         conn.execute("ROLLBACK")
         raise
     finally:
-        _current = None
         conn.close()
 
 
@@ -340,20 +331,30 @@ def claim(session, *, worker, now, lease=900, limit=50, pid=None):
     return [dict(row, payload=_payload(row["payload"])) for row in rows]
 
 
+def _apply(conn, rows, sql, extra=()):
+    return sum(
+        conn.execute(sql, tuple(extra) + (row["id"], row["run_id"])).rowcount for row in rows
+    )
+
+
 def _update(rows, sql, extra=()):
     with txn() as conn:
-        return sum(
-            conn.execute(sql, tuple(extra) + (row["id"], row["run_id"])).rowcount for row in rows
-        )
+        return _apply(conn, rows, sql, extra)
 
 
-def ack(rows, *, now):
-    return _update(
+def _ack(conn, rows, now):
+    return _apply(
+        conn,
         rows,
         "UPDATE inbox SET status='done', done_ts=?, lease_until=NULL"
         " WHERE id=? AND run_id=? AND status='claimed'",
         (now,),
     )
+
+
+def ack(rows, *, now):
+    with txn() as conn:
+        return _ack(conn, rows, now)
 
 
 def release(rows, *, count_attempt):

@@ -47,16 +47,17 @@ def coalesce(rows):
 
 
 def parse_reply(text):
-    text = text.encode("utf-8", "replace").decode()
+    if not isinstance(text, str):
+        return []
     decisions = []
-    for line in text.splitlines():
-        send = SEND.match(line)
+    for line in text.encode("utf-8", "replace").decode().splitlines():
+        send, nothing = SEND.match(line), NOTHING.match(line)
         if send:
             decisions.append(("hc_send", send.group(1), send.group(2)[:MAX_BODY]))
-            continue
-        nothing = NOTHING.match(line)
-        if nothing:
+        elif nothing:
             decisions.append(("none", None, nothing.group(1)[:MAX_BODY]))
+        elif line.startswith(("SEND", "NOTHING")):
+            return []
     return decisions
 
 
@@ -66,13 +67,13 @@ def finish(rows, reply, *, now):
         inbox.release(rows, count_attempt=True)
         return 0
     token = rows[0]["run_id"]
-    with inbox.txn():
-        acked = inbox.ack(rows, now=now)
+    with inbox.txn() as conn:
+        acked = inbox._ack(conn, rows, now)
         if not acked:
             return 0
         for index, (kind, target, body) in enumerate(decisions):
-            outbox.add(token, index, kind, target, body if kind != "none" else "",
-                       reason=body if kind == "none" else None, now=now)
+            outbox._insert(conn, token, index, kind, target, "" if kind == "none" else body,
+                           body if kind == "none" else None, now)
     return acked
 
 
