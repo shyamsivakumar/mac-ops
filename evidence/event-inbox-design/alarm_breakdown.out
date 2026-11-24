@@ -1,0 +1,31 @@
+wake rows in variant B: 330  alarm_raised 165, close_failed 70, recut 62, round_cap 19, merge_held 13, launch_failed 1
+alarm rows are 50% of wake rows; with the close_failed and recut events that repeat alarm families, 90%
+
+family                                           raise lines generations  names
+lane-gate-rounds-SRW-N                                   130          20     20
+factory-watchdog                                          73           2      1
+recut-SRW-N                                               60          44     44
+lane-close-failed-SRW-N                                   54          54     54
+lane-close-failed-MO-N                                    14          14     14
+herdr-build-MO-N                                          12           6      6
+prompt-merge-MO-N                                         10          10     10
+factory-zero-merge                                         9           5      1
+factory-overnight-stall                                    3           1      1
+lane-close-failed-FFBT-N                                   2           2      2
+lane-merged-unreviewed-SRW-N                               2           2      2
+prompt-merge-LMW-N                                         2           1      1
+recut-MO-N                                                 2           2      2
+lane-close-failed-LMW-N                                    1           1      1
+closed-not-planned-SRW-N                                   1           1      1
+
+Top 10 single alarm names by raise lines (generations in brackets):
+   73 (2) factory-watchdog
+   31 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-1867
+   17 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-2230
+   11 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-2234
+    9 (5) factory-zero-merge
+    9 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-1709
+    8 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-2240
+    7 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-1863
+    6 (1) lane-gate-rounds-shyamsivakumar-strategy-replay-workbench-2227
+    5 (1) recut-SRW-1941

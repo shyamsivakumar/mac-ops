@@ -1,0 +1,5 @@
+window 54.5 h; nominal clock 109 ticks (48.0 a day); measured launcher runs 88 in about 52 h (41 a day)
+T0 with urgent kinds (variant B list): 78 of 109 clock ticks run in 54.5 h (34.3 a day); by day {'11-21': 20, '11-22': 38, '11-23': 20}; skipped 31 (28%)
+  new wake-class row to the tick that handles it (min): median 16.2, p90 26.6 (327 rows)
+T0 with all five kinds: 95 of 109 clock ticks run in 54.5 h (41.8 a day); by day {'11-21': 25, '11-22': 46, '11-23': 24}; skipped 14 (13%)
+  new wake-class row to the tick that handles it (min): median 16.2, p90 27.2 (1291 rows)

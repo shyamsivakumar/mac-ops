@@ -1,0 +1,62 @@
+journal wake-kind lines 1748, distinct facts after alarm generations 1461
+first replay from month start would enqueue 1461 pending rows; by day: {'11-21': 425, '11-22': 699, '11-23': 337}
+
+=== minimum gap between runs 10 min ===
+
+A all five kinds wake
+  wake rows 1296; runs by day {'11-21': 74, '11-22': 134, '11-23': 59}; total 267
+  wake row to run start (min): median 4.7, p90 8.9
+  same, only rows with no run in the previous gap (69 rows): median 0.5, p90 1.0
+  batch-only row to next run (min): median 4.5, p90 8.9
+
+B urgent kinds wake, others batch
+  wake rows 330; runs by day {'11-21': 41, '11-22': 65, '11-23': 32}; total 138
+  wake row to run start (min): median 1.1, p90 7.5
+  same, only rows with no run in the previous gap (135 rows): median 1.0, p90 1.0
+  batch-only row to next run (min): median 6.5, p90 34.0
+
+C urgent plus non-SRW merged/gate_verdict wake
+  wake rows 463; runs by day {'11-21': 55, '11-22': 70, '11-23': 33}; total 158
+  wake row to run start (min): median 1.5, p90 7.5
+  same, only rows with no run in the previous gap (169 rows): median 1.0, p90 1.0
+  batch-only row to next run (min): median 6.3, p90 27.3
+
+=== minimum gap between runs 30 min ===
+
+A all five kinds wake
+  wake rows 1296; runs by day {'11-21': 26, '11-22': 48, '11-23': 25}; total 99
+  wake row to run start (min): median 15.1, p90 27.0
+  same, only rows with no run in the previous gap (42 rows): median 0.5, p90 1.0
+  batch-only row to next run (min): median 16.4, p90 26.9
+
+B urgent kinds wake, others batch
+  wake rows 330; runs by day {'11-21': 22, '11-22': 40, '11-23': 20}; total 82
+  wake row to run start (min): median 14.1, p90 25.9
+  same, only rows with no run in the previous gap (40 rows): median 1.0, p90 1.0
+  batch-only row to next run (min): median 15.5, p90 29.6
+
+C urgent plus non-SRW merged/gate_verdict wake
+  wake rows 463; runs by day {'11-21': 26, '11-22': 40, '11-23': 20}; total 86
+  wake row to run start (min): median 15.1, p90 26.9
+  same, only rows with no run in the previous gap (49 rows): median 0.5, p90 1.0
+  batch-only row to next run (min): median 15.2, p90 28.4
+
+=== minimum gap between runs 60 min ===
+
+A all five kinds wake
+  wake rows 1296; runs by day {'11-21': 13, '11-22': 24, '11-23': 16}; total 53
+  wake row to run start (min): median 27.4, p90 53.1
+  same, only rows with no run in the previous gap (38 rows): median 0.5, p90 0.5
+  batch-only row to next run (min): median 26.9, p90 50.3
+
+B urgent kinds wake, others batch
+  wake rows 330; runs by day {'11-21': 13, '11-22': 23, '11-23': 14}; total 50
+  wake row to run start (min): median 29.3, p90 53.0
+  same, only rows with no run in the previous gap (13 rows): median 1.0, p90 1.0
+  batch-only row to next run (min): median 28.9, p90 54.2
+
+C urgent plus non-SRW merged/gate_verdict wake
+  wake rows 463; runs by day {'11-21': 13, '11-22': 23, '11-23': 14}; total 50
+  wake row to run start (min): median 27.9, p90 53.0
+  same, only rows with no run in the previous gap (34 rows): median 0.5, p90 1.0
+  batch-only row to next run (min): median 29.3, p90 53.8
