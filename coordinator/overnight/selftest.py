@@ -4632,6 +4632,10 @@ def close_evidence():
     import hashlib
     import proof_run
     real_run = subprocess.run
+    real_proof = proof_run.run
+    git_spec = importlib.util.spec_from_file_location("real_subprocess", subprocess.__file__)
+    real_sub = importlib.util.module_from_spec(git_spec)
+    git_spec.loader.exec_module(real_sub)
     scope_text = "In: `coordinator/bin/coordq`, `coordinator/overnight/selftest.py`"
 
     def proof_body(cmd, scope=scope_text):
@@ -4646,7 +4650,8 @@ def close_evidence():
                           "user": {"login": "me"}, "body": f"Refs #{n + 944}\nBuilder check: PASS {h}\n",
                           "base": {"ref": "main"}} for n, h in pulls],
                  "issues": {n + 944: {"body": proof_body("true"), "user": {"login": "me"}} for n, _ in pulls},
-                 "result": "green", "git": 0, "removal": "wrote", "ran": [], "cards": [], "rows": []}
+                 "result": "green", "git": 0, "moved": None, "realgit": False, "pull": 0,
+                 "removal": "wrote", "ran": [], "cards": [], "rows": []}
 
         def run(argv, **kwargs):
             if argv[:3] == ["gh", "api", "user"]:
@@ -4663,9 +4668,17 @@ def close_evidence():
                 return real_run(argv, **kwargs)
             if world["git"]:
                 raise subprocess.CalledProcessError(1, argv)
+            if "fetch" in argv:
+                world["pull"] = int(argv[-1].split("/")[2])
+            elif argv[-1] == "FETCH_HEAD":
+                return Reply(world["moved"] or next(p["head"]["sha"] for p in world["prs"] if p["number"] == world["pull"]))
+            elif world["realgit"]:
+                return real_sub.run(argv, **kwargs)
             return Reply()
 
         def proved(mode, repo_dir, head, cmd, signature, record):
+            if world["realgit"]:
+                return real_proof(mode, repo_dir, head, cmd, signature, record)
             world["ran"].append((head, cmd))
             Path(record).write_text(f"ran {cmd}")
             return {"state": world["result"]}
@@ -4827,6 +4840,28 @@ def close_evidence():
             queue["gatedHeads"] = {f"gate:{mac_ops}#7:{head_a}": {}}
             coordq.save(queue)
         exact((w["gatekeep"](), w["ran"]), ((0, 0), []))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["moved"] = head_b
+        exact(([w["gatekeep"]() for _ in range(3)], w["ran"], w["cards"]), ([(0, 0)] * 3, [], [("proof-MO-7", "raise")]))
+        exact(coordq.load()["proofHeads"]["gate:" + mac_ops + "#7:" + head_a]["tail"], f"the pull request head moved to {head_b[:8]}")
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["realgit"] = True
+        for argv in (["init", "-q"], ["-c", "user.name=x", "-c", "user.email=x@x", "commit", "-q", "--allow-empty", "-m", "x"]):
+            real_sub.run(["git", "-C", w["dir"]] + argv, check=True, capture_output=True)
+        exact(([w["gatekeep"]() for _ in range(3)], w["cards"]), ([(0, 0)] * 3, [("proof-MO-7", "raise")]))
+        exact(coordq.load()["proofHeads"]["gate:" + mac_ops + "#7:" + head_a]["tail"], f"the head {head_a[:8]} is not in the checkout")
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["gatekeep"]()
+        key = f"gate:{mac_ops}#7:{head_a}"
+        event = {"pr": f"{mac_ops}#7", "head": head_a, "scopeIssue": "951", "login": "me", "prAuthor": "me"}
+        gated = coordq.proof_gate({"key": "MO", "proofRequired": True}, mac_ops, "7", event, key, False, set())
+        exact((gated, w["ran"], w["cards"]), ("\n\nProof run by Gatekeep on this head (green):\nran true\n", [(head_a, "true")], []))
 
 
 def provider_until():

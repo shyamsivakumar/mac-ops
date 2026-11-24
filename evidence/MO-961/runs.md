@@ -36,4 +36,19 @@ Run alone through the selftest's own wrappers (live subprocess and process forbi
 | #944 | #948 | a6eecb81b4 | `HOME=$(mktemp -d) python3 -c "import importlib.machinery as ...` | green (exit 0) | 1.1 |
 | #943 | #947 | 898b247b85 | `HOME=$(mktemp -d) python3 -c "import importlib.machinery as ...` | green (exit 0) | 0.5 |
 
-All 8 are green. #945 takes 68.3 s (cause not investigated); that is inside the 120 s limit but over half of it. Nothing was hidden or retried.
+All 8 are green. #945 takes 68.3 s because its proof runs the installed selftest twice. A proof run by gatekeep is outside `heavy`, capped at 120 s by `proof_run`, and one per gatekeep run, so a slow proof like this holds one run for at most 120 s and every other head waits for the next run.
+
+## Review round: head moved, missing sha, gated head text
+
+- `run_head_proof` now reads FETCH_HEAD after the fetch; a head that is not the candidate's head is `fetch_failed` ("the pull request head moved to <sha>"), never that head's result. A `SystemExit` from `proof_run._resolve` (sha not in the checkout) is `fetch_failed` too, caught around that one call.
+- close-evidence evals added: moved head (nothing run, one card after 3 tries); missing sha using the real `proof_run` code and a real temp git repo (a fresh copy of the `subprocess` module, since the selftest forbids live git); a gated head with a kept green proof returns the kept tail, with no run and no card.
+- close-evidence: RESULT PASS on the branch.
+
+## Live read-only run of proof_gate on PR #963 (head d27b5c53)
+
+Real GitHub reads, real `proof_run`, temp COORDQ_DIR and COORD_JOURNAL_DIR (the one real `ticket_opened` row for #961 copied into the temp journal; it has no proofSha because it was opened before this change), `alarms.route_update` and `write_replay` stubbed. The live queue, board and journal were not touched.
+
+| scopeIssue | State | Seconds |
+| --- | --- | --- |
+| 961 (the real ticket) | green (the ticket proof ran on the PR head) | 2.8 |
+| 960 (a wrong ticket, no journal row) | legacy (nothing run, passes) | 0.5 |
