@@ -22,6 +22,7 @@ import sys
 import time
 
 VERSION = 1
+INBOX_WAIT = 2
 LEGACY_DIR = "~/Library/Logs/coordinator"
 DEFAULT_DIR = "~/.local/state/coordinator/journal"
 _MIGRATED = set()
@@ -128,6 +129,17 @@ def emit(event, actor, **fields):
             os.close(fd)
     except OSError as exc:
         print(f"journal: {event} not written: {exc}", file=sys.stderr)
+    else:
+        if os.environ.get("COORD_INBOX_HOOK") == "on":
+            _record_inbox(row)
+
+
+def _record_inbox(row):
+    try:
+        import inbox
+        inbox.record_journal(row, wait=INBOX_WAIT)
+    except Exception as exc:
+        print(f"journal: {row['event']} not queued: {exc}", file=sys.stderr)
 
 
 def parse_request_id(cid):
