@@ -344,8 +344,8 @@ ephemeral headless pi (`pi --no-session`, so it never becomes the newest
 session that `coord-ask`, the phone relay or the Herdr panel read), it takes
 a lock at `~/.local/state/mac-ops/coord-tick.lock` so two ticks never
 overlap, and a run over ten minutes is killed. The job's plist pins the
-model with `COORD_TICK_MODEL=deepseek/deepseek-flash`, so a tick costs
-DeepSeek credits and not Claude plan credits; the launcher's default model
+model with `COORD_TICK_MODEL=morph/morph-dsv41flash`, so a tick costs
+Morph credits and not Claude plan credits; the launcher's default model
 is the same one, and `COORD_TICK_MODEL` overrides it for a manual run.
 Only the `ALERT:` lines of a
 tick reply are sent to the live pi coordinator terminal; a `NOOP` reply sends

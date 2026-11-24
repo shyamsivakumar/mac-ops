@@ -11,8 +11,8 @@ There is no coordinator playbook, no AGENTS.md, no skills, no tools and no
 system rules beyond "answer one multiple-choice question". This is the
 no-rules baseline the harness arm is compared against.
 
-Model route: the cheapest working route on this Mac is the DeepSeek Flash
-subscription through the pi CLI. Override with PLAIN_AGENT_MODEL.
+Model route: the cheapest working route on this Mac is Morph DeepSeek V4.1
+Flash route through the pi CLI. Override with PLAIN_AGENT_MODEL.
 """
 
 import json
@@ -21,7 +21,7 @@ import re
 import subprocess
 import sys
 
-MODEL = os.environ.get("PLAIN_AGENT_MODEL", "deepseek/deepseek-flash")
+MODEL = os.environ.get("PLAIN_AGENT_MODEL", "morph/morph-dsv41flash")
 SYSTEM = (
     "You answer a single multiple-choice question. "
     "Reply with exactly one option, copied verbatim from the list. "
