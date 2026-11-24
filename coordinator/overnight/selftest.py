@@ -4494,8 +4494,8 @@ def inbox():
         script = ("import json,sys;sys.path.insert(0,sys.argv[1]);import inbox;"
                   "open(sys.argv[3],'w').write(json.dumps([r['id'] for r in inbox.claim('coordinator',worker=sys.argv[2],now=50.0,limit=6)]))")
         outputs = [os.path.join(os.environ["COORD_INBOX_DIR"], name + ".json") for name in ("w1", "w2")]
-        children = [os.spawnv(os.P_NOWAIT, sys.executable, [sys.executable, "-c", script, str(ROOT.parent / "bin"), name, out])
-                    for name, out in zip(("w1", "w2"), outputs)]
+        children = [os.spawnv(os.P_NOWAIT, sys.executable, [sys.executable, "-c", script, str(ROOT.parent / "bin"), f"w{n + 1}", outputs[n]])
+                    for n in range(2)]
         for child in children:
             exact(os.waitpid(child, 0)[1], 0)
         picked = [row_id for out in outputs for row_id in json.load(open(out))]
