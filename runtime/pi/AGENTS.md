@@ -63,6 +63,7 @@ Denied even with approval:
 
 - Force-push in any form.
 - Remote and cloud deletes: `gcloud ... delete`, `bq rm`, `heroku ... destroy`, `gh repo delete`, `gh release delete`, `git push --delete`.
+- `git stash` in any form except `list` and `show`: the stash list is shared by every worktree of a repository.
 - Removing secret files or anything under `~/Code/slash-eureka`.
 <!-- mac-ops deny-rules END -->
 

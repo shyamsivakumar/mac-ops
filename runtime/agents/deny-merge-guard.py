@@ -22,8 +22,9 @@ whether the family asks the owner or is denied outright:
   answer is deny. An internal error on a command that names a guarded tool is
   a deny ("guard error").
 - deny, even with approval: force-push in any form, remote and cloud deletes
-  (including `gh api`, `curl` and `http` DELETE requests),
-  and removal commands aimed at secret files or the Ascend tree.
+  (including `gh api`, `curl` and `http` DELETE requests), removal commands
+  aimed at secret files or the Ascend tree, and `git stash` in any form
+  except `list` and `show`.
 
 A session whose project dir (CLAUDE_PROJECT_DIR) is inside the Ascend tree gets
 no Ascend check. Every ask and deny is appended to the audit log.
@@ -48,6 +49,8 @@ NO_DESTINATION_REASON = (
     "this push names no explicit destination branch; name the branch, "
     "for example `git push -u origin <task-branch>`"
 )
+STASH_REASON = "git stash shares one stash list across every worktree of a repository, so concurrent sessions pop each other's edits; use a throwaway worktree or a commit on your task branch instead"
+STASH_READ_ONLY = {"list", "show"}
 PROTECTED = {"main", "master"}
 BULK_FLAGS = {"--all", "--branches", "--mirror"}
 GIT_VALUE_OPTIONS = {
@@ -86,7 +89,7 @@ MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
 SECRET_DIRS = ["~/.ssh"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
-FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny"}
+FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
 SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval"
 CLOUD_REASON = "printing secret values with gcloud or heroku needs the owner's approval"
@@ -357,6 +360,12 @@ def push_arguments(words):
     return args if subcommand == "push" else None
 
 
+def stash_findings(args):
+    if args and args[0] in STASH_READ_ONLY:
+        return []
+    return [("stash", STASH_REASON)]
+
+
 def destination(token):
     ref = token.lstrip("+")
     ref = ref.split(":", 1)[1] if ":" in ref else ref
@@ -553,6 +562,8 @@ def command_findings(commands, cwd, ascend_session):
                 found += push_findings(args)
             elif subcommand == "rm":
                 found += path_findings(["rm", *args], here, ascend_session)
+            elif subcommand == "stash":
+                found += stash_findings(args)
         targets = operands(words)
         if name in DIRECTORY_CHANGERS and targets:
             here = resolve(targets[0], here)
