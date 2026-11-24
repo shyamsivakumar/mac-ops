@@ -402,6 +402,18 @@ ALLOWED_COMMANDS = [
     "gh pr view 1 -R x/y",
     "gh --repo x/y pr list",
 ]
+STASH_DENIED = [
+    "git stash", "git stash -q", "git stash -u", "git stash push -m x", "git stash save",
+    "git stash pop", "git stash apply stash@{1}", "git stash drop", "git stash clear",
+    "git stash branch b", "git stash store", "git stash create", "git -C dir stash",
+    "git -c a=b stash pop", "FOO=1 git stash", "/usr/bin/git stash",
+    "cd x && git stash; make; git stash pop", "bash -c 'git stash'", "heavy git stash pop",
+]
+STASH_ALLOWED = [
+    "git stash list", "git stash show -p", "git -C dir stash list",
+    "git commit -m 'avoid git stash here'", "echo git stash", "git log --grep stash",
+    "git status",
+]
 MERGES = [
     "gh pr merge 531",
     "gh pr merge 531 -R x/y --squash --delete-branch",
@@ -475,6 +487,14 @@ class HookTest(unittest.TestCase):
         for command in ASK_PUSHES:
             self.assertEqual(self.decided(command)["permissionDecision"], "ask", command)
         for command in ALLOWED_COMMANDS:
+            self.assertIsNone(self.decided(command), command)
+
+    def test_git_stash_is_denied_except_list_and_show(self):
+        for command in STASH_DENIED:
+            decision = self.decided(command)
+            self.assertEqual((decision or {}).get("permissionDecision"), "deny", command)
+            self.assertIn("worktree", decision["permissionDecisionReason"], command)
+        for command in STASH_ALLOWED:
             self.assertIsNone(self.decided(command), command)
 
     def test_a_push_without_a_destination_says_to_name_the_branch(self):
