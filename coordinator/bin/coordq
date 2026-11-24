@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, shutil, signal, subprocess, sys, time
+import argparse, fcntl, hashlib, json, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 # The modules below live next to this script. A caller that loads this file
@@ -14,6 +14,7 @@ if _OVERNIGHT_DIR not in sys.path:
 
 from gate_bar import GATE_BAR
 from gate_policy import parse_verdict, verdict
+import close_check
 import lane_briefs
 from pr_refs import pr_ticket_refs
 import prompt_paths
@@ -2299,6 +2300,106 @@ def proof_gate(settings, repo, number, event, key, dry_run):
     return None
 
 
+SCOPE_ITEMS = ("scope", "proof file")
+
+
+def scope_refusal(items):
+    return [i for i in items if i["item"] in SCOPE_ITEMS and i["status"] == close_check.FAIL
+            and not i.get("unknown")]
+
+
+def read_or_failure(call, *args):
+    try:
+        return call(*args), ""
+    except gh_gateway.ApiBudgetExhausted:
+        raise
+    except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as exc:
+        return None, str(exc)
+
+
+def drop_scope_card(card_id, carded, dry_run):
+    if not carded or dry_run:
+        return True
+    if alarms.route_update(DECISIONS_PATH, card_id, "remove") != "wrote":
+        return False
+    with Lock(True):
+        queue = load()
+        for name in carded:
+            queue["scopeHeads"][name]["carded"] = False
+        save(queue)
+    return True
+
+
+def scope_gate(settings, repo, number, event, key, dry_run):
+    """True when this head may go on to its gate, False when it gets none this run."""
+    queue = load()
+    if not proof_required(settings) or key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
+        return True
+    heads = queue.get("scopeHeads", {})
+    kept = heads.get(key)
+    card_id = f"proof-{settings['key']}-{number}"
+    carded = [name for name, row in heads.items() if row.get("carded") and row["pr"] == event["pr"]]
+    if kept and not kept["refused"]:
+        return drop_scope_card(card_id, carded, dry_run)
+    if not kept and queue.get("scopeFetch", {}).get(key, {}).get("attempts", 0) >= PROOF_FETCH_ATTEMPTS:
+        return True
+    ticket, failure = read_or_failure(gh_json, f"repos/{repo}/issues/{event['issue']}")
+    digest = hashlib.sha256(((ticket or {}).get("body") or "").encode()).hexdigest()[:16]
+    result = None
+    if not failure and not (kept and kept["body"] == digest):
+        if dry_run:
+            print(stamped(f"would check the scope of {event['pr']}"), flush=True)
+            return True
+        result, failure = read_or_failure(close_check.run_check, repo, int(number), event["issue"])
+    if result and result["merge"] != event["head"]:
+        return False
+    if result:
+        refusals = scope_refusal(result["items"])
+        if not refusals and any(i.get("unknown") for i in result["items"]):
+            failure = "the scope could not be judged"
+        else:
+            kept = {"pr": event["pr"], "body": digest, "files": result["files"],
+                    "carded": bool(kept and kept.get("carded")) and not refusals,
+                    "refused": [{"item": i["item"], "detail": i["detail"]} for i in refusals]}
+            with Lock(True):
+                queue = load()
+                queue.setdefault("scopeHeads", {})[key] = kept
+                save(queue)
+            journal.emit("scope_checked", "gatekeep", refused=len(refusals), **journal.parse_request_id(key))
+            if not refusals:
+                return drop_scope_card(card_id, carded, dry_run)
+    if failure and not (kept and kept["refused"]):
+        if dry_run:
+            print(stamped(f"would retry the scope read of {event['pr']}"), flush=True)
+            return True
+        with Lock(True):
+            queue = load()
+            tries = queue.setdefault("scopeFetch", {}).get(key, {}).get("attempts", 0) + 1
+            queue["scopeFetch"][key] = {"attempts": tries, "error": failure, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+            save(queue)
+        journal.emit("scope_read_failed", "gatekeep", attempts=tries, **journal.parse_request_id(key))
+        if tries >= PROOF_FETCH_ATTEMPTS:
+            print(stamped(f"scope of {event['pr']} unread after {tries} tries, gate goes ahead"), file=sys.stderr)
+        return tries >= PROOF_FETCH_ATTEMPTS
+    print(stamped(f"no scope pass for {event['pr']}"), flush=True)
+    if not kept["carded"] and not dry_run:
+        cause = "\n".join(f"{row['item']}: {row['detail']}" for row in kept["refused"])
+        item = {"id": card_id, "group": "Coordinator", "kind": "ask",
+                "title": f"{repo}#{number} head {event['head'][:8]}: the pull request is outside its ticket",
+                "cause": (cause + "\nfiles: " + ", ".join(kept["files"]))[-600:],
+                "why": "Gatekeep queued no gate for this head.",
+                "options": [{"label": "Edit the ticket's Scope", "detail": "Name these files in the ticket's Scope; the same head is checked again.", "recommended": True},
+                            {"label": "Drop the file", "detail": "Remove the file from the pull request and push.", "recommended": False}]}
+        if alarms.route_update(DECISIONS_PATH, card_id, "raise", item) == "wrote":
+            with Lock(True):
+                queue = load()
+                queue["scopeHeads"][key]["carded"] = True
+                save(queue)
+        else:
+            print(stamped(f"scope {event['pr']}: the card could not be published"), flush=True)
+    return False
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -2520,6 +2621,8 @@ def cmd_gatekeep(a):
                 continue
             repo_name, pr_number = event["pr"].rsplit("#", 1)
             settings = config.get("repos", {}).get(repo_name, {})
+            if event.get("issue") and not scope_gate(settings, repo_name, pr_number, event, key, a.dry_run):
+                continue
             if settings.get("proofOnOpen") and event.get("issue"):
                 proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run)
                 if proof is None:
