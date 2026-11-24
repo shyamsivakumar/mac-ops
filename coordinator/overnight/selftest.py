@@ -4490,6 +4490,77 @@ def closed_ticket_merge():
     exact((merges, items), ([], []))
 
 
+def outbox_cases():
+    import inbox as store
+    import inbox_outbox as out
+
+    def statuses():
+        with store.txn() as conn:
+            return [
+                tuple(r)
+                for r in conn.execute("SELECT status, attempts FROM outbox ORDER BY id")
+            ]
+
+    with patch.dict(
+        os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-outbox-")}
+    ):
+        for value, expected in ((None, True), ("", True), ("1", True), ("0", False)):
+            with patch.dict(
+                os.environ, {} if value is None else {"COORD_INBOX_SHADOW": value}
+            ):
+                exact(out.shadow_on(), expected)
+        for kind, reason in (("bogus", None), ("none", None)):
+            try:
+                out.add("v", 0, kind, None, "", reason=reason, now=1.0)
+            except ValueError:
+                continue
+            raise AssertionError(kind)
+        out.add("s", 0, "hc_send", "t56", "hi", now=1.0)
+        calls = []
+        exact(out.drain(calls.append, now=2.0), {"would_send": 1})
+        exact((calls, statuses()), ([], [("pending", 0)]))
+        exact(out.drain(calls.append, now=3.0, shadow=False), {"sent": 1, "errors": 0})
+        exact(out.drain(calls.append, now=4.0, shadow=False), {"sent": 0, "errors": 0})
+        exact((len(calls), statuses()), (1, [("sent", 1)]))
+
+    def late(kind, expected):
+        with patch.dict(
+            os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-outbox-")}
+        ):
+            calls = []
+            out.add("l", 0, kind, "t56", "x", now=1.0)
+
+            def sender(row):
+                calls.append(row["attempts"])
+                if len(calls) == 1:
+                    out.reap(now=2000.0)
+                    out.drain(sender, now=2001.0, shadow=False)
+
+            exact(out.drain(sender, now=2.0, shadow=False)["sent"], 0)
+            exact((calls, statuses()), expected)
+
+    late("hc_send", ([1], [("unknown", 1)]))
+    late("coordq_send", ([1, 2], [("sent", 2)]))
+    with patch.dict(
+        os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-outbox-")}
+    ):
+        out.add("q", 0, "coordq_send", "x", "y", now=1.0)
+        for round_no in range(3):
+            exact(
+                out.drain(lambda row: 1 / 0, now=10.0 * round_no, shadow=False)[
+                    "errors"
+                ],
+                1,
+            )
+            exact(
+                out.reap(now=10.0 * round_no + 700.0),
+                {"unknown": 0, "requeued": 1}
+                if round_no < 2
+                else {"unknown": 0, "failed": 1},
+            )
+        exact(statuses(), [("failed", 3)])
+
+
 def inbox():
     import functools
     import inbox as store
@@ -4617,6 +4688,7 @@ def inbox():
         lines, err = run_hook(held, emits[:1], wait=0.3)
         lock.close()
         exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
+    outbox_cases()
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
