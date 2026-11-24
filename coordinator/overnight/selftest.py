@@ -4626,8 +4626,207 @@ def close_evidence():
 
     for receipt in (False, True):
         exact(drive("Refs #951", scope_out, receipt), (0, [("proof-MO-7", "raise")], 1, {"checks": 1, "proof": 0}))
-        exact(drive("Refs #951", scope_in, receipt), (1, [], 1, {"checks": 1, "proof": int(receipt)}))
+        exact(drive("Refs #951", scope_in, receipt), (1, [], 1, {"checks": 1, "proof": 1}))
     exact(drive("no ticket named", scope_out), (1, [], 0, {"checks": 0, "proof": 0}))
+
+    import hashlib
+    import proof_run
+    real_run = subprocess.run
+    scope_text = "In: `coordinator/bin/coordq`, `coordinator/overnight/selftest.py`"
+
+    def proof_body(cmd, scope=scope_text):
+        return f"{scope}\nProof command:\n{cmd}\n"
+
+    def sha_of(cmd):
+        return hashlib.sha256(cmd.encode()).hexdigest()
+
+    @contextlib.contextmanager
+    def arena(*pulls):
+        world = {"prs": [{"draft": False, "number": n, "head": {"sha": h}, "title": "x", "changed_files": 2,
+                          "user": {"login": "me"}, "body": f"Refs #{n + 944}\nBuilder check: PASS {h}\n",
+                          "base": {"ref": "main"}} for n, h in pulls],
+                 "issues": {n + 944: {"body": proof_body("true"), "user": {"login": "me"}} for n, _ in pulls},
+                 "result": "green", "git": 0, "removal": "wrote", "ran": [], "cards": [], "rows": []}
+
+        def run(argv, **kwargs):
+            if argv[:3] == ["gh", "api", "user"]:
+                return Reply("me\n")
+            endpoint = argv[-1]
+            if endpoint == f"repos/{mac_ops}/pulls?state=open&per_page=100":
+                return Reply(json.dumps([world["prs"]]))
+            if endpoint.endswith("/comments?per_page=100") or endpoint.endswith("/files?per_page=100") or "/statuses?" in endpoint:
+                return Reply("[[]]")
+            return Reply(json.dumps(world["issues"][int(endpoint.rsplit("/", 1)[-1])]))
+
+        def fake_git(argv, **kwargs):
+            if argv[0] != "git":
+                return real_run(argv, **kwargs)
+            if world["git"]:
+                raise subprocess.CalledProcessError(1, argv)
+            return Reply()
+
+        def proved(mode, repo_dir, head, cmd, signature, record):
+            world["ran"].append((head, cmd))
+            Path(record).write_text(f"ran {cmd}")
+            return {"state": world["result"]}
+
+        def checked(repo, number, issue):
+            files = ["coordinator/bin/coordq", "coordinator/overnight/selftest.py"]
+            return {"merge": next(p["head"]["sha"] for p in world["prs"] if p["number"] == number),
+                    "files": files, "items": [check.item_scope(world["issues"][int(issue)]["body"], files, "evidence/MO-951")]}
+
+        def route_update(board_path, card, action, item=None):
+            world["cards"].append((card, action))
+            return world["removal"] if action == "remove" else "wrote"
+
+        def opened(issue, cmd, red=True, hashed=True):
+            row = {"event": "ticket_opened", "repo": mac_ops, "ticket": issue,
+                   "data": {"proof": "red" if red else "prose", **({"proofSha": sha_of(cmd)} if hashed else {})}}
+            with open(Path(world["dir"], "events-2026-11.jsonl"), "a") as handle:
+                handle.write("not json\n" + json.dumps(row) + "\n")
+
+        def gatekeep(dry=False):
+            before = len(world["ran"])
+            coordq.cmd_gatekeep(argparse.Namespace(config=world["config"], dry_run=dry))
+            return len(coordq.load().get("items", [])), len(world["ran"]) - before
+
+        with tempfile.TemporaryDirectory() as scratch, contextlib.ExitStack() as stack:
+            world.update(dir=scratch, opened=opened, gatekeep=gatekeep, config=str(Path(scratch) / "gatekeep-config.json"))
+            Path(world["config"]).write_text(json.dumps({"repos": {mac_ops: {
+                "key": "MO", "projectId": "fixture", "proofRequired": True, "proofOnOpen": True, "checkout": scratch}}}))
+            for patcher in (
+                    patch.object(coordq, "DIR", scratch),
+                    patch.object(coordq, "REPLAY_DIR", str(Path(scratch) / "replay")),
+                    patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}),
+                    patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")),
+                    patch.object(coordq, "load_receipts", lambda: {}),
+                    patch.object(coordq.gh_gateway, "run", run),
+                    patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None),
+                    patch.object(coordq.subprocess, "run", fake_git),
+                    patch.object(proof_run, "run", proved),
+                    patch.object(coordq, "builder_thread_for_issue", return_value=None),
+                    patch.object(coordq, "read_builder_thread", return_value=({"providerInstanceId": "fixture", "model": "m"}, [])),
+                    patch.object(coordq, "router_chain", return_value=[]),
+                    patch.object(coordq, "gate_proof", return_value=("none", "", "path")),
+                    patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR),
+                    patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}),
+                    patch.object(coordq, "gate_args", lambda *a, **k: {"modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t", "message": "m"}),
+                    patch.object(coordq.model_list, "is_blocked", return_value=False),
+                    patch.object(coordq.close_check, "run_check", checked),
+                    patch.object(coordq.journal, "emit", lambda name, *rest, **fields: world["rows"].append(name)),
+                    patch.object(coordq.alarms, "route_update", route_update),
+                    contextlib.redirect_stderr(io.StringIO()),
+                    contextlib.redirect_stdout(io.StringIO())):
+                stack.enter_context(patcher)
+            yield world
+
+    def edit(world, issue=951, cmd="true", scope=scope_text, author=None):
+        ticket = world["issues"][issue]
+        ticket["body"] = proof_body(cmd, scope)
+        ticket["user"] = {"login": author or ticket["user"]["login"]}
+
+    def move(world, head):
+        world["prs"][0]["head"]["sha"] = head
+        world["prs"][0]["body"] = f"Refs #951\nBuilder check: PASS {head}\n"
+
+    def flags(*groups):
+        return sorted(r["carded"] for g in groups for r in coordq.load().get(g, {}).values())
+
+    head_a, head_b = "a" * 40, "b" * 40
+    narrow = "In: `coordinator/bin/coordq`"
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        exact((w["gatekeep"](), w["gatekeep"](), w["ran"], w["cards"]), ((1, 1), (1, 0), [(head_a, "true")], []))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["result"] = "unresolved"
+        exact((w["gatekeep"](), w["gatekeep"](), w["cards"]), ((0, 1), (0, 0), [("proof-MO-7", "raise")]))
+        move(w, head_b)
+        w["result"] = "green"
+        exact((w["gatekeep"](), w["cards"][-1], flags("proofHeads")), ((1, 1), ("proof-MO-7", "remove"), [False, False]))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        edit(w, scope=narrow)
+        exact((w["gatekeep"](), w["cards"]), ((0, 0), [("proof-MO-7", "raise")]))
+        edit(w)
+        exact((w["gatekeep"](), w["cards"]), ((1, 1), [("proof-MO-7", "raise"), ("proof-MO-7", "remove")]))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["result"] = "unresolved"
+        w["gatekeep"]()
+        move(w, head_b)
+        edit(w, scope=narrow)
+        exact((w["gatekeep"](), w["cards"][-1], flags("scopeHeads", "proofHeads")), ((0, 0), ("proof-MO-7", "raise"), [False, False, True]))
+        edit(w)
+        exact((w["gatekeep"](), w["cards"][-1], flags("proofHeads")), ((0, 1), ("proof-MO-7", "raise"), [False, True]))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["result"] = "unresolved"
+        w["gatekeep"]()
+        w["result"], w["removal"] = "green", "failed"
+        move(w, head_b)
+        exact((w["gatekeep"](), w["gatekeep"](), w["cards"][-2:], flags("proofHeads")), ((0, 1), (0, 0), [("proof-MO-7", "remove")] * 2, [False, True]))
+        w["removal"] = "wrote"
+        exact((w["gatekeep"](), w["gatekeep"](), flags("proofHeads")), ((1, 0), (1, 0), [False, False]))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        edit(w, author="other")
+        exact((w["gatekeep"](), w["gatekeep"](), w["cards"]), ((0, 0), (0, 0), [("proof-MO-7", "raise")]))
+        edit(w, author="me")
+        exact((w["gatekeep"](), w["cards"][-1]), ((1, 1), ("proof-MO-7", "remove")))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        edit(w, cmd="false")
+        exact((w["gatekeep"](), w["gatekeep"](), w["cards"]), ((0, 0), (0, 0), [("proof-MO-7", "raise")]))
+        edit(w)
+        exact((w["gatekeep"](), w["cards"][-1]), ((1, 1), ("proof-MO-7", "remove")))
+
+    with arena((7, head_a)) as w:
+        exact((w["gatekeep"](), w["ran"]), ((1, 0), []))
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true", hashed=False)
+        edit(w, cmd="other")
+        exact((w["gatekeep"](), w["ran"]), ((1, 1), [(head_a, "other")]))
+    with arena((7, head_a)) as w:
+        w["opened"](951, "none (prose)", hashed=False)
+        edit(w, cmd="none (prose)")
+        exact((w["gatekeep"](), w["ran"]), ((1, 0), []))
+    with arena((7, head_a)) as w:
+        w["opened"](951, "false")
+        w["opened"](951, "true")
+        exact((w["gatekeep"](), w["ran"]), ((1, 1), [(head_a, "true")]))
+    with arena((7, head_a)) as w:
+        Path(w["dir"], "events-2026-10.jsonl").mkdir()
+        exact(([w["gatekeep"]() for _ in range(3)], w["ran"], w["cards"]), ([(0, 0)] * 3, [], [("proof-MO-7", "raise")]))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["git"] = 1
+        exact(([w["gatekeep"]() for _ in range(3)], w["cards"]), ([(0, 0)] * 3, [("proof-MO-7", "raise")]))
+        w["git"] = 0
+        with patch.object(coordq, "PROOF_RETRY_SECONDS", -1):
+            exact((w["gatekeep"](), w["cards"][-1], w["ran"]), ((1, 1), ("proof-MO-7", "remove"), [(head_a, "true")]))
+
+    with arena((7, head_a), (8, head_b)) as w:
+        w["opened"](951, "true")
+        w["opened"](952, "true")
+        exact((w["gatekeep"](), w["gatekeep"](), [h for h, _ in w["ran"]]), ((1, 1), (2, 1), [head_a, head_b]))
+
+    with arena((7, head_a)) as w:
+        w["opened"](951, "true")
+        w["gatekeep"](True)
+        exact((coordq.load().get("proofHeads"), w["cards"], w["ran"], w["rows"]), (None, [], [], []))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["gatedHeads"] = {f"gate:{mac_ops}#7:{head_a}": {}}
+            coordq.save(queue)
+        exact((w["gatekeep"](), w["ran"]), ((0, 0), []))
 
 
 def provider_until():
