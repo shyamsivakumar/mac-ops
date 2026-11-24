@@ -104,19 +104,18 @@ def main(argv=None):
     journal_per_day = round(len(wake) * 86400.0 / max(high - low, 3600.0), 1) if wake else 0
     waits = [(min(c for c in run_ts if c > stamp) - stamp) / 60.0 for stamp in wake_ts if any(c > stamp for c in run_ts)]
 
-    volume_inbox, latency_inbox, opened, windowed, inbox_ts = {}, {}, set(), [], []
+    volume_inbox, latency_inbox, opened, windowed = {}, {}, set(), []
     database = os.path.join(state, "inbox.db")
     if not os.path.exists(database):
         missing.append("inbox-dir")
     else:
         connection = sqlite3.connect("file:%s?mode=ro" % database, uri=True)
-        rows = connection.execute("SELECT id, ts, kind, tier, pr, status, repo FROM inbox").fetchall()
+        rows = connection.execute("SELECT id, ts, kind, tier, pr, status, repo, done_ts FROM inbox").fetchall()
         joins = connection.execute("SELECT inbox.tier, inbox.ts, outbox.sent_ts FROM inbox JOIN outbox ON outbox.run_id = inbox.run_id WHERE outbox.sent_ts IS NOT NULL").fetchall()
         connection.close()
-        inbox_ts = [row[1] for row in rows]
         opened = {(row[6], row[4]) for row in rows if row[2] == "pr_opened"}
         kept = [row for row in rows if inside(row[1], since, until)]
-        windowed = [(row[1], row[5]) for row in kept]
+        windowed = [(row[1], row[5], row[7]) for row in kept]
         volume_inbox = dict(collections.Counter("%s/%s" % (row[2], row[3]) for row in kept))
         for tier, ts, sent in [row for row in joins if inside(row[1], since, until)]:
             latency_inbox.setdefault(str(tier), []).append((sent - ts) / 60.0)
@@ -125,8 +124,15 @@ def main(argv=None):
     for ts, rest in stamp_lines(read_lines(ticks), TICK_RE, since, until):
         head = re.split(r";|\. Board| Board \d| Jobs alive", rest, maxsplit=1)[0]
         tick_rows.append((ts, head, bool(POS_RE.search(head)) or bool(ACTED_RE.search(head))))
-    now = max(run_ts + [row["ts"] for row in events] + inbox_ts + [row[0] for row in tick_rows] or [0.0])
-    stuck = sum(1 for ts, status in windowed if (status != "done" and now - ts > 7200) or status == "failed")
+    clock = until if until is not None else datetime.datetime.now(datetime.timezone.utc).timestamp()
+
+    def stuck_at(ts, status, done_ts):
+        if status == "failed" and (done_ts is None or done_ts <= clock):
+            return True
+        ended = status == "done" and (done_ts is None or done_ts <= clock)
+        return not ended and clock - ts > 7200
+
+    stuck = sum(1 for ts, status, done_ts in windowed if stuck_at(ts, status, done_ts))
     counted = [row for row in tick_rows if COUNT_RE.match(row[1]) or ZERO_RE.search(row[1])]
     idle = sum(1 for row in counted if not row[2])
 
