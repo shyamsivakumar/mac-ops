@@ -54,7 +54,7 @@ python3 scripts/coord_wake_metrics.py --since 2026-11-16 --until 2026-11-23 --js
 | count-format summaries, 16 to 22 Nov | 106 | 106 |
 | of those, acted on nothing | 56 (52.8%) | 56 (0.528) |
 
-Buckets for the 88 runs: failed 34, no_events 5, no_action 37, action 12, skipped 0. The real tick.log has no `skip:` line yet (precheck is off), so the skipped bucket is exercised by the fixture only (1 skip line there).
+Buckets for the 88 runs: failed 34, no_events 5, no_action 37, action 12, skipped 0, lock_skipped 0. The real tick.log has no `skip:` line yet (precheck is off), so the skipped bucket is exercised by the fixture only (1 skip line there).
 
 Window 21 Nov to now (95 runs, the log has grown): failed 38, noop 43, alerts 14, 40.4 runs a day. Journal wake-class events 594, 0.397 duplicate rate on the (event, repo, pr, head, alarm) key. Wait from a wake-class journal row to the next launcher run: n 602, median 16.9 min, p90 27.6 (the doc's clock figure is 16.2 and 26.6 over a slightly different window and with alarm generations deduped). Lost events: 0 stuck, 0 fallback_acted, never_enqueued null (no GitHub list given and no inbox). No network call was made.
 
