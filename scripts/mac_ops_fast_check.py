@@ -355,6 +355,42 @@ def check_isolation(run, isolation, env):
             f"{suite.returncode}, selftest exited {selftest.returncode})")
 
 
+def installed_selftest(root):
+    tmp = Path(tempfile.mkdtemp(prefix="installed-selftest-"))
+    home = tmp / "home"
+    code = ("import json, sys\nfrom pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\nimport install_coordinator\n"
+            "print(json.dumps([[str(s), str(d), m] for s, d, m in "
+            "install_coordinator.plan(Path(sys.argv[1]), Path(sys.argv[2]))]))\n")
+    base_env = {"PATH": os.environ["PATH"], "PYTHONDONTWRITEBYTECODE": "1"}
+    built = subprocess.run([sys.executable, "-B", "-c", code, str(root), str(home)],
+                           cwd=root, env=base_env, capture_output=True, text=True, timeout=60)
+    if built.returncode != 0:
+        first = built.stderr.strip().splitlines()
+        return False, "plan could not be built: " + (first[0] if first else "no output")
+    for src, dst, mode in json.loads(built.stdout):
+        if Path(src).is_file():
+            Path(dst).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src, dst)
+    isolation = load_isolation()
+    env = isolation.environment({**base_env, "HOME": str(home),
+                                 "COORD_INBOX_DIR": str(tmp / "inbox"),
+                                 isolation.ROOT_VAR: str(tmp / "isolation")})
+    try:
+        result = subprocess.run([sys.executable, "selftest.py"], cwd=home / ".local/bin",
+                                env=env, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return False, "installed selftest timed out"
+    lines = (result.stdout + result.stderr).splitlines()
+    failed = [line for line in lines if line.startswith("FAIL")]
+    passed = len([line for line in lines if line.startswith("PASS")])
+    ok = result.returncode == 0 and not failed
+    detail = failed[0] if failed else f"exit {result.returncode}, {passed} PASS"
+    shutil.rmtree(tmp, ignore_errors=True)
+    return ok, detail
+
+
 def imports(path):
     tree = ast.parse(path.read_bytes(), filename=str(path))
     names = set()
@@ -653,6 +689,14 @@ def main():
     proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
     selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
     proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
+
+    def installed():
+        ok, detail = installed_selftest(ROOT)
+        if not ok:
+            raise AssertionError(detail)
+        return detail
+
+    proof.check("installed selftest", "installed_selftest(ROOT)", installed)
     proof.check("test isolation: no live gh call or log row",
                 "python3 -m unittest; " + shlex.join(selftest),
                 lambda: check_isolation(run, isolation, entry_env))
