@@ -4555,6 +4555,30 @@ def inbox():
             else:
                 raise AssertionError("a locked begin did not raise")
         holder.close()
+        metrics = tempfile.mkdtemp(prefix="selftest-metrics-")
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": metrics}):
+            store.enqueue("pr_opened", "pr_opened:a#5", pr=5, **base)
+            store.enqueue("recut", "recut:5", pr=5, **base)
+            rows = store.claim("coordinator", worker="m", now=2.0, pid=os.getpid())
+            store.ack(rows[:1], now=3.0)
+            conn = store.connect()
+            conn.execute("INSERT INTO outbox(ts, run_id, kind, sent_ts) VALUES (1.0, ?, 'send', 601.0)", (rows[0]["run_id"],))
+            conn.close()
+        github = os.path.join(metrics, "prs.json")
+        json.dump([{"number": 5, "createdAt": "2026-11-23T15:00:00Z"}, {"number": 6, "createdAt": "2026-11-23T15:00:00Z"}], open(github, "w"))
+        fixtures = ROOT.parent.parent / "evidence/event-inbox-design/tickets/fixtures"
+        spec = importlib.util.spec_from_file_location("coord_wake_metrics", ROOT.parent.parent / "scripts/coord_wake_metrics.py")
+        wake_metrics = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake_metrics)
+        out = io.StringIO()
+        with patch.dict(os.environ, {"HOME": "/nonexistent"}), contextlib.redirect_stdout(out):
+            wake_metrics.main(["--json", "--inbox-dir", metrics, "--github-prs", github,
+                               "--journal", str(fixtures / "journal-sample.jsonl"), "--launcher-log", str(fixtures / "launcher-sample.log")])
+        report = json.loads(out.getvalue())
+        exact((report["runs"], report["buckets"]["skipped"], report["duplicate_rate"]["journal"]), (6, 1, 0.333))
+        exact((report["volume"]["inbox"], report["latency"]["inbox_min"]["batch"]["median"]), ({"pr_opened/batch": 1, "recut/wake": 1}, 10.0))
+        exact((report["lost"]["stuck"], report["lost"]["never_enqueued"]), (1, [6]))
+        exact(sqlite3.connect(os.path.join(metrics, "inbox.db")).execute("SELECT COUNT(*) FROM inbox").fetchone()[0], 2)
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
