@@ -359,6 +359,8 @@ def write_mark(started: float) -> None:
 def events_quiet(started: float, now: float) -> bool:
     override = os.environ.get("COORD_JOURNAL_DIR")
     directory = Path(override) if override else HOME / ".local/state/coordinator/journal"
+    if not directory.is_dir():
+        return False
     last = time.gmtime(now)
     year, month = time.gmtime(started)[:2]
     while (year, month) <= (last.tm_year, last.tm_mon):
@@ -372,6 +374,8 @@ def events_quiet(started: float, now: float) -> bool:
         except FileNotFoundError:
             continue
         except OSError:
+            return False
+        if tail and not tail.endswith(b"\n"):
             return False
         lines = tail.split(b"\n")[:-1]
         truncated = size > WAKE_TAIL_BYTES
@@ -439,8 +443,11 @@ def main() -> int:
             log(f"WAITING: {MODEL} is not available on the provider")
             return 75
         code = run_tick(env, lock_fd)
-        if code == 0:
-            write_mark(started)
+        if code == 0 and os.environ.get("COORD_TICK_PRECHECK") == "on":
+            try:
+                write_mark(started)
+            except OSError as exc:
+                log(f"cannot write the tick mark: {exc}")
         return code
     except OSError as exc:
         log(f"tick failed: {exc}")

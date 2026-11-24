@@ -410,20 +410,20 @@ class TestTickLauncher(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("skipped: another tick holds the lock", log_path.read_text())
 
-    def precheck(self, mark=None, month_files=None, now=None, unreadable=False):
+    def precheck(self, mark=None, month_files=None, now=None, unreadable=False, trailing=True, gone=False):
         module = self.launcher()
         with tempfile.TemporaryDirectory(prefix="coord-tick-test-") as tmp:
             tmp = Path(tmp)
             if mark is not None:
                 (tmp / "mark").write_text(mark)
             for name, lines in (month_files or {}).items():
-                (tmp / name).write_text("\n".join(lines) + "\n")
+                (tmp / name).write_text("\n".join(lines) + ("\n" if trailing else ""))
             if unreadable:
                 (tmp / "events-2023-11.jsonl").mkdir()
             overrides = {
                 "COORD_TICK_PRECHECK": "on",
                 "COORD_TICK_MARK": str(tmp / "mark"),
-                "COORD_JOURNAL_DIR": str(tmp),
+                "COORD_JOURNAL_DIR": str(tmp / "gone" if gone else tmp),
             }
             with mock.patch.dict(os.environ, overrides):
                 return module.skip_reason(now)
@@ -466,6 +466,33 @@ class TestTickLauncher(unittest.TestCase):
         self.assertIsNone(self.precheck("junk", month, started + 60))
         self.assertIsNone(self.precheck(None, month, started + 60))
         self.assertIsNone(self.precheck(mark, None, started + 60, unreadable=True))
+        self.assertIsNone(self.precheck(mark, month, started + 60, gone=True))
+        unterminated = {"events-2023-11.jsonl": [old, self.row(started + 5)]}
+        self.assertIsNone(self.precheck(mark, unterminated, started + 60, trailing=False))
+
+    def test_the_mark_is_written_only_when_the_precheck_is_on_and_a_failed_write_keeps_the_exit(self):
+        module = self.launcher()
+        with tempfile.TemporaryDirectory(prefix="coord-tick-test-") as tmp:
+            tmp = Path(tmp)
+            overrides = {
+                "COORD_TICK_MARK": str(tmp / "no-dir" / "mark"),
+                "COORD_TICK_LOCK": str(tmp / "lock"),
+                "COORD_JOURNAL_DIR": str(tmp),
+            }
+            with mock.patch.dict(os.environ, overrides), mock.patch.multiple(
+                module,
+                tick_alarm=lambda: "",
+                tick_selftest=lambda: "PASS",
+                model_available=lambda env: True,
+                run_tick=lambda env, fd: 0,
+                LOG_PATH=tmp / "tick.log",
+            ):
+                self.assertEqual(module.main(), 0)
+                self.assertFalse((tmp / "no-dir").exists())
+                with mock.patch.dict(os.environ, {"COORD_TICK_PRECHECK": "on"}):
+                    with mock.patch.object(module, "write_mark", side_effect=OSError("full")):
+                        self.assertEqual(module.main(), 0)
+                self.assertIn("cannot write the tick mark", (tmp / "tick.log").read_text())
 
     def test_the_lock_path_is_the_same_for_every_caller(self):
         module = self.launcher()
