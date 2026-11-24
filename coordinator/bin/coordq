@@ -1579,7 +1579,7 @@ def cmd_status(a):
             queue = load()
         report = {"cap": cap(), "live": threads, "reserved": queue.get("reserved", {}),
                   "queued": len(queue["items"]), "failed": queue.get("failed", []),
-                  "stuck": stuck, "tickAlarm": tick_alarm()}
+                  "stuck": stuck, "tickAlarm": tick_alarm(), "roundCap": round_cap_report()}
     print(json.dumps(report))
 
 
@@ -2000,6 +2000,32 @@ def lane_ledger():
     except (OSError, ValueError):
         return {}
     return ledger if isinstance(ledger, dict) else {}
+
+
+ROUND_CAP_FIELDS = ("repo", "pr", "head", "rounds", "at")
+
+
+def round_caps(ledger):
+    caps = []
+    for key, value in ledger.items():
+        if not key.startswith("roundcap:"):
+            continue
+        if not isinstance(value, dict) or any(field not in value for field in ROUND_CAP_FIELDS):
+            print(f"round caps: {key} is not a round cap entry, skipped", file=sys.stderr)
+            continue
+        caps.append(value)
+    return sorted(caps, key=lambda cap: (cap["repo"], cap["pr"]))
+
+
+def round_cap_report():
+    try:
+        with open(LANE_LEDGER) as handle:
+            ledger = json.load(handle)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        return None
+    return round_caps(ledger) if isinstance(ledger, dict) else None
 
 
 def gate_rounds_used(repo, number, ledger):
