@@ -4710,7 +4710,7 @@ def inbox_poll_cases():
     big = [pr(2 ** 70), pr(True), pr({}), pr(3, headRefOid={}), pr(4, reviews=[{"id": {}, "state": "APPROVED", "submittedAt": "x"}]), pr(5)]
     for bad in (None, {"a": 1}, "x"):
         with scratch():
-            exact(poll.poll_prs(["bad/x", "o/r"], lambda repo: bad if repo == "bad/x" else big, now=1.0), 2)
+            exact(poll.poll_prs(["bad/x", "o/r"], lambda repo, bad=bad: bad if repo == "bad/x" else big, now=1.0), 2)
     body = "SECRET-REVIEW-BODY"
     leaky = [pr(1, reviews=[{"id": "R1", "state": "APPROVED", "submittedAt": "nope", "body": body}]), pr(None, body=body)]
     with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
