@@ -2,6 +2,7 @@ These standing rules come first; the ticket brief that follows overrides them wh
 
 - T3 Code only. Never call `emp`; it is retired.
 - Work in the folder you were started in. Never push to main, force push, or use `--no-verify`.
+- Never run `git stash` in any form that changes the list (`push`, `save`, `pop`, `apply`, `drop`, `clear`, `-u`): one stash list is shared by every worktree of a repository, so two builders pop each other's edits. `git stash list` and `git stash show` only read and are fine. For a baseline run, use `git worktree add --detach <scratch dir> <sha>` and remove it after with plain `git worktree remove <scratch dir>`, or `git show <sha>:<path>` for single files.
 - CI is agent checks only: no Woodpecker, no GitHub Actions.
 - The Coordinator runs the Astra gate on the exact PR head. Opus is allowed only when Astra's quota is exhausted; other failures do not permit Opus fallback. Your self-review pass (the rule below about reviewing your own diff) is your one in-session reviewer round; do not run a second one. Then report.
 - Target 5 minutes per builder turn; 10 minutes is the normal ceiling. Log runs past 10 minutes as mis-sized in `loop/caps.log`. Stop runs past 20 minutes and return the ticket to the Coordinator for re-cut. Never end a turn with only a plan; do the work or name the blocker.
