@@ -4576,6 +4576,47 @@ def inbox():
             else:
                 raise AssertionError("a locked begin did not raise")
         holder.close()
+        import journal
+        clean = tempfile.mkdtemp(prefix="selftest-hook-off-")
+        env = {"COORD_JOURNAL_DIR": clean, "COORD_INBOX_DIR": clean}
+        with patch.dict(os.environ, env), patch.dict(sys.modules):
+            os.environ.pop("COORD_INBOX_HOOK", None)
+            sys.modules.pop("inbox")
+            journal.emit("gate_verdict", "lane", repo="o/r", pr=7, head="a" * 40)
+            exact(("inbox" in sys.modules, sorted(os.listdir(clean))[0].startswith("events-"), len(os.listdir(clean))), (False, True, 1))
+
+        def run_hook(inbox_dir, emits, wait=None):
+            journal_dir = tempfile.mkdtemp(prefix="selftest-hook-journal-")
+            env = {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": inbox_dir, "COORD_INBOX_HOOK": "on"}
+            err = io.StringIO()
+            with patch.dict(os.environ, env), patch.object(journal, "INBOX_WAIT", wait or journal.INBOX_WAIT), contextlib.redirect_stderr(err):
+                for args in emits:
+                    journal.emit(*args[:2], **args[2])
+            lines = sum(len(open(os.path.join(journal_dir, f)).readlines()) for f in os.listdir(journal_dir))
+            return lines, err.getvalue()
+
+        pr = dict(repo="o/r", pr=7, head="a" * 40)
+        fresh = tempfile.mkdtemp(prefix="selftest-hook-inbox-")
+        emits = [("gate_verdict", "lane", pr), ("gate_verdict", "lane", pr), ("alarm_raised", "alarms", dict(alarm="x-1")),
+                 ("alarm_withdrawn", "alarms", dict(alarm="x-1")), ("alarm_raised", "alarms", dict(alarm="x-1")),
+                 ("alarm_raised", "alarms", dict(alarm="x-1")), ("gate_started", "lane", pr)]
+        exact(run_hook(fresh, emits), (7, ""))
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": fresh}):
+            rows = [r[0] for r in store.connect().execute("SELECT dedupe_key FROM inbox ORDER BY id")]
+        exact(rows, ["gate_verdict:o/r#7:" + "a" * 40, "alarm:x-1:0", "alarm:x-1:1"])
+        blocked = tempfile.mkdtemp(prefix="selftest-hook-blocked-")
+        open(os.path.join(blocked, "file"), "w").close()
+        lines, err = run_hook(os.path.join(blocked, "file", "sub"), emits[:1])
+        exact((lines, err.count("\n"), "not queued" in err), (1, 1, True))
+        held = tempfile.mkdtemp(prefix="selftest-hook-held-")
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": held}):
+            store.counts()
+        lock = sqlite3.connect(os.path.join(held, "inbox.db"), isolation_level=None)
+        lock.execute("BEGIN IMMEDIATE")
+        began = time.monotonic()
+        lines, err = run_hook(held, emits[:1], wait=0.3)
+        lock.close()
+        exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
