@@ -122,7 +122,7 @@ def main(argv=None):
 
     tick_rows = []
     for ts, rest in stamp_lines(read_lines(ticks), TICK_RE, since, until):
-        head = re.split(r";|\. Board| Board \d| Jobs alive", rest, 1)[0]
+        head = re.split(r";|\. Board| Board \d| Jobs alive", rest, maxsplit=1)[0]
         tick_rows.append((ts, head, bool(POS_RE.search(head)) or bool(ACTED_RE.search(head))))
     now = max(run_ts + [row["ts"] for row in events] + inbox_ts + [row[0] for row in tick_rows] or [0.0])
     stuck = sum(1 for ts, status in windowed if (status != "done" and now - ts > 7200) or status == "failed")
