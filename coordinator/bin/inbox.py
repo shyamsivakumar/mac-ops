@@ -7,27 +7,10 @@ import time
 import uuid
 
 KINDS = frozenset(
-    [
-        "pr_opened",
-        "pr_new_head",
-        "pr_merged",
-        "pr_review",
-        "gate_verdict",
-        "gate_queued",
-        "ci_main",
-        "human_signal",
-        "timer_due",
-        "alarm",
-        "round_cap",
-        "merge_held",
-        "close_failed",
-        "launch_failed",
-        "recut",
-    ]
+    "pr_opened pr_new_head pr_merged pr_review gate_verdict gate_queued ci_main human_signal "
+    "timer_due alarm round_cap merge_held close_failed launch_failed recut".split()
 )
-WAKE = (
-    "alarm,round_cap,merge_held,close_failed,launch_failed,recut,human_signal,timer_due"
-)
+WAKE = "alarm,round_cap,merge_held,close_failed,launch_failed,recut,human_signal,timer_due"
 STATUSES = ("pending", "claimed", "done", "failed")
 CLEAR = "run_id=NULL, claimed_by=NULL, claimed_pid=NULL, lease_until=NULL"
 SCHEMA = (
@@ -64,9 +47,7 @@ JOURNAL_KINDS = {
 
 
 def _db_path():
-    path = os.environ.get("COORD_INBOX_DIR") or os.path.expanduser(
-        "~/.local/state/coordinator"
-    )
+    path = os.environ.get("COORD_INBOX_DIR") or os.path.expanduser("~/.local/state/coordinator")
     os.makedirs(path, exist_ok=True)
     return os.path.join(path, DB_NAME)
 
@@ -76,15 +57,7 @@ def _read_version(conn):
 
 
 def _remaining_ms(deadline):
-    if deadline is None:
-        return None
     return max(0, int((deadline - time.monotonic()) * 1000))
-
-
-def _timeout(deadline):
-    if deadline is None:
-        return 30
-    return max(0, deadline - time.monotonic())
 
 
 def _lock_wait(lock, deadline):
@@ -98,11 +71,14 @@ def _lock_wait(lock, deadline):
             time.sleep(0.01)
 
 
-def _init(conn, deadline=None):
-    ms = _remaining_ms(deadline)
-    if ms is not None:
-        conn.execute(f"PRAGMA busy_timeout = {ms}")
+def _begin(conn, deadline):
+    if deadline is not None:
+        conn.execute("PRAGMA busy_timeout = %d" % _remaining_ms(deadline))
     conn.execute("BEGIN IMMEDIATE")
+
+
+def _init(conn, deadline=None):
+    _begin(conn, deadline)
     try:
         if _read_version(conn) == 0:
             for statement in SCHEMA:
@@ -116,7 +92,8 @@ def _init(conn, deadline=None):
 
 def connect(deadline=None):
     path = _db_path()
-    conn = sqlite3.connect(path, isolation_level=None, timeout=_timeout(deadline))
+    timeout = 30 if deadline is None else _remaining_ms(deadline) / 1000
+    conn = sqlite3.connect(path, isolation_level=None, timeout=timeout)
     conn.row_factory = sqlite3.Row
     try:
         if _read_version(conn) == 0:
@@ -129,7 +106,7 @@ def connect(deadline=None):
                 _init(conn, deadline)
         version = _read_version(conn)
         if version != 1:
-            raise RuntimeError("unsupported inbox user_version: {!r}".format(version))
+            raise RuntimeError("unsupported inbox user_version: %r" % (version,))
     except BaseException:
         conn.close()
         raise
@@ -139,10 +116,7 @@ def connect(deadline=None):
 @contextlib.contextmanager
 def txn(deadline=None):
     conn = connect(deadline)
-    ms = _remaining_ms(deadline)
-    if ms is not None:
-        conn.execute(f"PRAGMA busy_timeout = {ms}")
-    conn.execute("BEGIN IMMEDIATE")
+    _begin(conn, deadline)
     try:
         yield conn
         conn.execute("COMMIT")
@@ -153,49 +127,15 @@ def txn(deadline=None):
         conn.close()
 
 
-def enqueue(
-    kind,
-    key,
-    *,
-    source,
-    ts,
-    session="coordinator",
-    repo=None,
-    pr=None,
-    head=None,
-    payload=None,
-    tier=None,
-):
+def enqueue(kind, key, *, source, ts, session="coordinator", repo=None, pr=None, head=None,
+            payload=None, tier=None):
     with txn() as conn:
-        return _insert(
-            conn,
-            kind,
-            key,
-            source=source,
-            ts=ts,
-            session=session,
-            repo=repo,
-            pr=pr,
-            head=head,
-            payload=payload,
-            tier=tier,
-        )
+        return _insert(conn, kind, key, source=source, ts=ts, session=session, repo=repo, pr=pr,
+                       head=head, payload=payload, tier=tier)
 
 
-def _insert(
-    conn,
-    kind,
-    key,
-    *,
-    source,
-    ts,
-    session="coordinator",
-    repo=None,
-    pr=None,
-    head=None,
-    payload=None,
-    tier=None,
-):
+def _insert(conn, kind, key, *, source, ts, session="coordinator", repo=None, pr=None, head=None,
+            payload=None, tier=None):
     if kind not in KINDS:
         raise ValueError(kind)
     wake = frozenset((os.environ.get("COORD_INBOX_WAKE_KINDS") or WAKE).split(","))
@@ -206,49 +146,30 @@ def _insert(
     conn.execute(
         "INSERT INTO inbox (ts, source, kind, dedupe_key, session, repo, pr, head, payload, tier)"
         " VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (
-            ts,
-            source,
-            kind,
-            key,
-            session,
-            repo,
-            pr,
-            head,
-            None if payload is None else json.dumps(payload),
-            tier,
-        ),
+        (ts, source, kind, key, session, repo, pr, head,
+         None if payload is None else json.dumps(payload), tier),
     )
     return True
 
 
 def _alarm_gen(conn, name):
-    row = conn.execute(
-        "SELECT v FROM meta WHERE k=?", ("alarm_gen:" + str(name),)
-    ).fetchone()
+    row = conn.execute("SELECT v FROM meta WHERE k=?", ("alarm_gen:" + str(name),)).fetchone()
     return 0 if row is None else int(row[0])
-
-
-def _bump_alarm_gen(conn, name):
-    gen = _alarm_gen(conn, name) + 1
-    conn.execute(
-        "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
-        ("alarm_gen:" + str(name), str(gen)),
-    )
-    return gen
 
 
 def from_journal(conn, row):
     data = row.get("data") or {}
     event = row["event"]
     if event == "alarm_withdrawn":
-        _bump_alarm_gen(conn, data.get("alarm"))
+        conn.execute(
+            "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            ("alarm_gen:" + str(data.get("alarm")), str(_alarm_gen(conn, data.get("alarm")) + 1)),
+        )
         return None
     kind = JOURNAL_KINDS.get(event)
     if kind is None:
         return None
-    pr = row.get("pr")
-    ticket = row.get("ticket")
+    pr, ticket = row.get("pr"), row.get("ticket")
     num = pr if pr is not None else ticket if ticket is not None else ""
     payload = None
     if kind == "alarm":
@@ -258,16 +179,16 @@ def from_journal(conn, row):
         payload = {"alarm": name, "generation": gen}
     else:
         key = f"{kind}:{row.get('repo') or ''}#{num}:{row.get('head') or ''}"
-    return {
-        "kind": kind,
-        "key": key,
-        "source": "journal",
-        "ts": row["ts"],
-        "repo": row.get("repo"),
-        "pr": pr if pr is not None else ticket,
-        "head": row.get("head"),
-        "payload": payload or None,
-    }
+    return dict(
+        kind=kind,
+        key=key,
+        source="journal",
+        ts=row["ts"],
+        repo=row.get("repo"),
+        pr=pr if pr is not None else ticket,
+        head=row.get("head"),
+        payload=payload,
+    )
 
 
 def record_journal(row, *, wait):
@@ -294,13 +215,9 @@ def claim(session, *, worker, now, lease=900, limit=50, pid=None):
                 " attempts=attempts+1, run_id=? WHERE id=? AND status='pending'",
                 (worker, pid, now + lease, token, row_id),
             )
-        rows = conn.execute(
-            "SELECT * FROM inbox WHERE run_id=? ORDER BY id", (token,)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM inbox WHERE run_id=? ORDER BY id", (token,)).fetchall()
     return [
-        dict(
-            row, payload=None if row["payload"] is None else json.loads(row["payload"])
-        )
+        dict(row, payload=None if row["payload"] is None else json.loads(row["payload"]))
         for row in rows
     ]
 
@@ -308,8 +225,7 @@ def claim(session, *, worker, now, lease=900, limit=50, pid=None):
 def _update(rows, sql, extra=()):
     with txn() as conn:
         return sum(
-            conn.execute(sql, tuple(extra) + (row["id"], row["run_id"])).rowcount
-            for row in rows
+            conn.execute(sql, tuple(extra) + (row["id"], row["run_id"])).rowcount for row in rows
         )
 
 
@@ -353,8 +269,7 @@ def reap(*, now):
                 continue
             if row["attempts"] >= 3:
                 conn.execute(
-                    "UPDATE inbox SET status='failed', error='attempts', done_ts=?, "
-                    + CLEAR
+                    "UPDATE inbox SET status='failed', error='attempts', done_ts=?, " + CLEAR
                     + " WHERE id=?",
                     (now, row["id"]),
                 )
@@ -369,7 +284,5 @@ def reap(*, now):
 
 def counts():
     with contextlib.closing(connect()) as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) FROM inbox GROUP BY status"
-        ).fetchall()
+        rows = conn.execute("SELECT status, COUNT(*) FROM inbox GROUP BY status").fetchall()
     return {**dict.fromkeys(STATUSES, 0), **dict(rows)}
