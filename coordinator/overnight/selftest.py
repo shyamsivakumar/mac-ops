@@ -4362,7 +4362,8 @@ def close_evidence():
         return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", False)
 
     with tempfile.TemporaryDirectory() as scratch, \
-         patch.dict(os.environ, {"COORDQ_DIR": scratch, "COORD_JOURNAL_DIR": scratch}), \
+         patch.object(coordq, "DIR", scratch), \
+         patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
          patch.object(coordq, "gh_json", lambda endpoint: {"body": state["scope"]}), \
          patch.object(coordq.close_check, "run_check", run_check), \
          patch.object(coordq.alarms, "route_update", lambda board_path, card, action, item=None: board.append((card, action)) or "wrote"):
