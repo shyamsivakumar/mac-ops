@@ -64,6 +64,7 @@ class DecisionsBoardTests(unittest.TestCase):
             board = Path(scratch) / "decisions.json"
             board.write_text(json.dumps({"items": []}))
             with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                    patch.object(lane, "CFG", {"fixture/repo": {"build": "here"}}), \
                     patch.object(lane.alarms, "board_update", record):
                 lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
             items = json.loads(board.read_text())["items"]
