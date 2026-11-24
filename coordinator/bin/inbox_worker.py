@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import sys
+import tempfile
 import threading
 import time
 
@@ -111,8 +112,8 @@ def _due(now):
 
 
 def _write(path, value):
-    tmp = path + f".{os.getpid()}.tmp"
-    with open(tmp, "w") as handle:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    with os.fdopen(fd, "w") as handle:
         handle.write(repr(float(value)))
     os.replace(tmp, path)
 
@@ -126,7 +127,10 @@ def heartbeat(*, now, ended=False):
 
 def _beat(stop, interval, clock):
     while not stop.wait(interval):
-        heartbeat(now=clock())
+        try:
+            heartbeat(now=clock())
+        except OSError as exc:
+            print(f"inbox heartbeat write failed: {exc}", file=sys.stderr)
 
 
 def _take(lock, retry_delay):
@@ -141,12 +145,17 @@ def _take(lock, retry_delay):
     return False
 
 
+_pass_active = False
+
+
 def _on_alarm(signum, frame):
-    raise PassTimeout()
+    if _pass_active:
+        raise PassTimeout()
 
 
 @contextlib.contextmanager
 def _running(lock_path, *, now, retry_delay, alarm_seconds, beat_seconds, clock):
+    global _pass_active
     with open(lock_path, "w") as lock:
         if not _take(lock, retry_delay):
             yield False
@@ -160,18 +169,20 @@ def _running(lock_path, *, now, retry_delay, alarm_seconds, beat_seconds, clock)
             old_handler = signal.signal(signal.SIGALRM, _on_alarm)
             old_timer = signal.setitimer(signal.ITIMER_REAL, alarm_seconds)
             started = time.monotonic()
+        _pass_active = True
         try:
             yield True
         except PassTimeout:
             journal.emit("inbox_run_failed", "inbox_worker", reason="pass timeout")
         finally:
+            _pass_active = False
             stop.set()
             if armed:
                 signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, old_handler)
                 if old_timer is not None:
                     signal.setitimer(signal.ITIMER_REAL,
                                      max(0.0, old_timer[0] - (time.monotonic() - started)), old_timer[1])
-                signal.signal(signal.SIGALRM, old_handler)
             heartbeat(now=clock(), ended=True)
 
 
@@ -214,7 +225,12 @@ def shadow_pass(*, now, runner=shadow_runner, retry_delay=0.2, alarm_seconds=PAS
                          rows=len(rows))
             inbox.set_last_run(now=now)
             return dict(ZEROS)
-        acked = finish(rows, reply, now=now)
+        try:
+            acked = finish(rows, reply, now=now)
+        except PassTimeout:
+            inbox.release(rows, count_attempt=True)
+            inbox.set_last_run(now=now)
+            raise
         inbox.set_last_run(now=now)
         if acked:
             journal.emit("inbox_would_wake", "inbox_worker", rows=len(rows), lines=len(lines),
@@ -258,7 +274,7 @@ def _stamp(name):
 def _lock_held(path):
     try:
         handle = open(path)
-    except OSError:
+    except FileNotFoundError:
         return False
     with handle:
         try:
