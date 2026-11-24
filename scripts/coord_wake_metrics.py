@@ -58,7 +58,7 @@ def stamp_lines(lines, pattern, since, until):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    for name in ("journal", "launcher-log", "ticks-log", "inbox-dir", "since", "until", "github-prs", "reconcile-github", "json"):
+    for name in ("journal", "launcher-log", "ticks-log", "inbox-dir", "since", "until", "github-prs", "repo", "reconcile-github", "json"):
         parser.add_argument("--" + name, action="store_true" if name in ("reconcile-github", "json") else "store")
     args = parser.parse_args(argv)
     since, until = bound(args.since), bound(args.until)
@@ -78,18 +78,19 @@ def main(argv=None):
     wake = [row for row in events if row.get("event") in WAKE]
     wake_ts = sorted(row["ts"] for row in wake)
 
-    runs, failed, alerts, skipped = [], 0, 0, 0
+    runs, failed, alerts, skipped, locked = [], 0, 0, 0, 0
     for ts, message in stamp_lines(read_lines(launcher), LAUNCH_RE, since, until):
         run = RUN_RE.match(message)
         failed += 1 if message.startswith("pi exited") and ALARM_402.search(message) else 0
         alerts += 1 if message.startswith("alert sent to") else 0
-        skipped += 1 if message.startswith(("skip:", "skipped:")) else 0
+        skipped += 1 if message.startswith("skip:") else 0
+        locked += 1 if message.startswith("skipped:") else 0
         if run:
             runs.append((ts, int(run.group(1)), run.group(2)))
     runs.sort()
     run_ts = [run[0] for run in runs]
     noop = sum(1 for run in runs if run[1] == 0 and run[2].startswith("NOOP"))
-    buckets = {"failed": 0, "no_events": 0, "no_action": 0, "action": 0, "skipped": skipped}
+    buckets = {"failed": 0, "no_events": 0, "no_action": 0, "action": 0, "skipped": skipped, "lock_skipped": locked}
     for index, (ts, code, reply) in enumerate(runs):
         lower = runs[index - 1][0] if index else ts - 1800
         hit = "failed" if code else ("no_events" if not any(lower < stamp <= ts for stamp in wake_ts) else ("no_action" if reply.startswith("NOOP") else "action"))
@@ -109,11 +110,11 @@ def main(argv=None):
         missing.append("inbox-dir")
     else:
         connection = sqlite3.connect("file:%s?mode=ro" % database, uri=True)
-        rows = connection.execute("SELECT id, ts, kind, tier, pr, status FROM inbox").fetchall()
+        rows = connection.execute("SELECT id, ts, kind, tier, pr, status, repo FROM inbox").fetchall()
         joins = connection.execute("SELECT inbox.tier, inbox.ts, outbox.sent_ts FROM inbox JOIN outbox ON outbox.run_id = inbox.run_id WHERE outbox.sent_ts IS NOT NULL").fetchall()
         connection.close()
         inbox_ts = [row[1] for row in rows]
-        opened = {row[4] for row in rows if row[2] == "pr_opened"}
+        opened = {(row[6], row[4]) for row in rows if row[2] == "pr_opened"}
         kept = [row for row in rows if inside(row[1], since, until)]
         windowed = [(row[1], row[5]) for row in kept]
         volume_inbox = dict(collections.Counter("%s/%s" % (row[2], row[3]) for row in kept))
@@ -130,20 +131,22 @@ def main(argv=None):
     idle = sum(1 for row in counted if not row[2])
 
     prs = None
+    repo = args.repo or "shyamsivakumar/mac-ops"
     if args.reconcile_github:
-        prs = json.loads(subprocess.check_output(["gh", "pr", "list", "-R", "shyamsivakumar/mac-ops", "--state", "all", "--limit", "100", "--json", "number,createdAt"], text=True))
+        prs = json.loads(subprocess.check_output(["gh", "pr", "list", "-R", repo, "--state", "all", "--limit", "1000", "--json", "number,createdAt"], text=True))
     elif args.github_prs:
         prs = json.loads("".join(read_lines(args.github_prs)) or "[]") if os.path.exists(args.github_prs) else None
         if prs is None:
             missing.append("github-prs")
-    never = None if prs is None else sorted(pr["number"] for pr in prs if inside(bound(pr["createdAt"]), since, until) and pr["number"] not in opened)
+    truncated = prs is not None and len(prs) >= 1000
+    never = None if prs is None or truncated else sorted(pr["number"] for pr in prs if inside(bound(pr["createdAt"]), since, until) and (repo, pr["number"]) not in opened)
 
     output = {
         "runs": len(runs), "failed": failed, "noop": noop, "alerts": alerts, "runs_per_day": runs_per_day,
         "buckets": buckets,
         "volume": {"journal": dict(collections.Counter(row["event"] for row in wake)), "journal_per_day": journal_per_day, "inbox": volume_inbox},
         "latency": {"clock_wait_min": summary(waits), "inbox_min": {tier: summary(values) for tier, values in latency_inbox.items()}},
-        "lost": {"fallback_acted": sum(1 for row in events if row.get("event") == "fallback_acted"), "stuck": stuck, "never_enqueued": never},
+        "lost": {"fallback_acted": sum(1 for row in events if row.get("event") == "fallback_acted"), "stuck": stuck, "never_enqueued": never, "never_enqueued_truncated": truncated},
         "duplicate_rate": {"journal": duplicate},
         "summaries": {"count_format": len(counted), "no_action": idle, "share": round(idle / len(counted), 3) if counted else None},
         "missing": missing,

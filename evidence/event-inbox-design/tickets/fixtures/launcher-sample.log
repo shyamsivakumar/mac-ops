@@ -16,3 +16,4 @@ ALARM: job dev.coordinator.tick last exit 1
 2026-11-23 13:00 EST | tick | overnight selftest: PASS
 2026-11-23 13:01 EST | tick | alert sent to t56: ALERT: recut for mac-ops#902
 2026-11-23 13:02 EST | tick | exit=0 reply=ALERT: recut for mac-ops#902
+2026-11-23 12:15 EST | tick | skipped: another tick holds the lock
