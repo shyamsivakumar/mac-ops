@@ -2229,49 +2229,67 @@ def scope_refusal(items):
             and not i.get("unknown")]
 
 
+def read_or_failure(call, *args):
+    try:
+        return call(*args), ""
+    except gh_gateway.ApiBudgetExhausted:
+        raise
+    except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as exc:
+        return None, str(exc)
+
+
+def drop_scope_card(card_id, carded, dry_run):
+    if carded and not dry_run and alarms.route_update(DECISIONS_PATH, card_id, "remove") == "wrote":
+        with Lock(True):
+            queue = load()
+            for name in carded:
+                queue["scopeHeads"][name]["carded"] = False
+            save(queue)
+    return True
+
+
 def scope_gate(settings, repo, number, event, key, dry_run):
     """True when this head may go on to its gate, False when it gets none this run."""
-    if not proof_required(settings):
+    queue = load()
+    if not proof_required(settings) or key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
         return True
-    heads = load().get("scopeHeads", {})
+    heads = queue.get("scopeHeads", {})
     kept = heads.get(key)
+    card_id = f"proof-{settings['key']}-{number}"
+    carded = [name for name, row in heads.items() if row.get("carded") and row["pr"] == event["pr"]]
     if kept and not kept["refused"]:
+        return drop_scope_card(card_id, carded, dry_run)
+    if not kept and queue.get("scopeFetch", {}).get(key, {}).get("attempts", 0) >= PROOF_FETCH_ATTEMPTS:
         return True
-    card_id, failure, result = f"proof-{settings['key']}-{number}", "", None
-    try:
-        text = gh_json(f"repos/{repo}/issues/{event['issue']}").get("body") or ""
-    except GhReadError as exc:
-        text, failure = "", str(exc)
-    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+    ticket, failure = read_or_failure(gh_json, f"repos/{repo}/issues/{event['issue']}")
+    digest = hashlib.sha256(((ticket or {}).get("body") or "").encode()).hexdigest()[:16]
+    result = None
     if not failure and not (kept and kept["body"] == digest):
         if dry_run:
             print(stamped(f"would check the scope of {event['pr']}"), flush=True)
             return True
-        try:
-            result = close_check.run_check(repo, int(number), event["issue"])
-        except RuntimeError as exc:
-            failure = str(exc)
+        result, failure = read_or_failure(close_check.run_check, repo, int(number), event["issue"])
+    if result and result["merge"] != event["head"]:
+        return False
     if result:
         refusals = scope_refusal(result["items"])
         if not refusals and any(i.get("unknown") for i in result["items"]):
             failure = "the scope could not be judged"
         else:
-            stale = any(row.get("carded") and row["pr"] == event["pr"] for row in heads.values())
-            kept = {"pr": event["pr"], "body": digest, "files": result["files"], "carded": False,
+            kept = {"pr": event["pr"], "body": digest, "files": result["files"],
+                    "carded": bool(kept and kept.get("carded")) and not refusals,
                     "refused": [{"item": i["item"], "detail": i["detail"]} for i in refusals]}
             with Lock(True):
                 queue = load()
                 queue.setdefault("scopeHeads", {})[key] = kept
                 save(queue)
             journal.emit("scope_checked", "gatekeep", refused=len(refusals), **journal.parse_request_id(key))
-            if not refusals and stale:
-                alarms.route_update(DECISIONS_PATH, card_id, "remove")
-                with Lock(True):
-                    queue = load()
-                    for row in queue["scopeHeads"].values():
-                        row["carded"] = row["carded"] and row["pr"] != event["pr"]
-                    save(queue)
-    if failure:
+            if not refusals:
+                return drop_scope_card(card_id, carded, dry_run)
+    if failure and not (kept and kept["refused"]):
+        if dry_run:
+            print(stamped(f"would retry the scope read of {event['pr']}"), flush=True)
+            return True
         with Lock(True):
             queue = load()
             tries = queue.setdefault("scopeFetch", {}).get(key, {}).get("attempts", 0) + 1
@@ -2281,8 +2299,6 @@ def scope_gate(settings, repo, number, event, key, dry_run):
         if tries >= PROOF_FETCH_ATTEMPTS:
             print(stamped(f"scope of {event['pr']} unread after {tries} tries, gate goes ahead"), file=sys.stderr)
         return tries >= PROOF_FETCH_ATTEMPTS
-    if not kept["refused"]:
-        return True
     print(stamped(f"no scope pass for {event['pr']}"), flush=True)
     if not kept["carded"] and not dry_run:
         cause = "\n".join(f"{row['item']}: {row['detail']}" for row in kept["refused"])

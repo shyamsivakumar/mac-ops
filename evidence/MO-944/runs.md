@@ -24,3 +24,24 @@ exit 0
 close-evidence OK
 exit 0 (prints close-evidence OK)
 ```
+
+## After review fixes (merged origin/main bdf5cf93)
+
+Ticket proof on the branch:
+```
+exit 0
+```
+
+close-evidence eval in place (coordinator/overnight) and from a flat copy: both print OK (in place OK, close-evidence OK).
+
+Read-only run_check on real PRs (no queue, no card):
+```
+PR 941 issue 939 merge 98ce6cfb
+   scope pass  - every changed file is inside the ticket's stated scope
+   proof file pass  - evidence/MO-939/check-proof.md is present
+  scope_refusal items: []
+PR 921 issue 917 merge d5efd3f8
+   scope fail  - outside the ticket's stated scope: coordinator/overnight/selftest.py
+   proof file pass  - evidence/MO-917/check-proof.md is present
+  scope_refusal items: ['scope']
+```

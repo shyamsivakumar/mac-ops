@@ -4347,32 +4347,52 @@ def close_evidence():
         exact((issue, bool(coordq.scope_refusal(items))), (issue, refused))
     exact(coordq.scope_refusal([check.item_scope("In: a.py", ["a.py"], "", "502")]), [])
 
-    state = {"scope": recorded[0][1], "runs": 0, "down": False}
+    state = {"scope": recorded[0][1], "runs": 0, "raises": None, "merge": None, "head": "", "removal": "wrote"}
     board = []
 
     def run_check(repo, pr, issue):
         state["runs"] += 1
-        if state["down"]:
-            raise RuntimeError("gh api failed: HTTP 502")
+        if state["raises"]:
+            raise state["raises"]
         files = list(recorded[0][2])
-        return {"files": files, "items": [check.item_scope(state["scope"], files, "evidence/MO-911")]}
+        return {"merge": state["merge"] or state["head"], "files": files,
+                "items": [check.item_scope(state["scope"], files, "evidence/MO-911")]}
 
-    def gate(head):
+    def route_update(board_path, card, action, item=None):
+        board.append((card, action))
+        return state["removal"] if action == "remove" else "wrote"
+
+    def gate(head, dry=False):
+        state["head"] = head
         event = {"pr": "r/x#7", "issue": 911, "head": head}
-        return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", False)
+        return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", dry)
 
     with tempfile.TemporaryDirectory() as scratch, \
          patch.object(coordq, "DIR", scratch), \
          patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
          patch.object(coordq, "gh_json", lambda endpoint: {"body": state["scope"]}), \
          patch.object(coordq.close_check, "run_check", run_check), \
-         patch.object(coordq.alarms, "route_update", lambda board_path, card, action, item=None: board.append((card, action)) or "wrote"):
+         patch.object(coordq.alarms, "route_update", route_update):
         exact((gate("a" * 8), gate("a" * 8), state["runs"], board), (False, False, 1, [("proof-MO-7", "raise")]))
         state["scope"] = recorded[0][1] + ", `coordinator/overnight/selftest.py`"
+        state["removal"] = "failed"
         exact((gate("a" * 8), state["runs"], board[-1]), (True, 2, ("proof-MO-7", "remove")))
-        state["down"] = True
-        exact([gate("b" * 8) for _ in range(3)], [False, False, True])
-        exact(board[-1], ("proof-MO-7", "remove"))
+        state["removal"] = "wrote"
+        exact((gate("a" * 8), board[-2:]), (True, [("proof-MO-7", "remove")] * 2))
+        board.clear()
+        exact((gate("a" * 8), board), (True, []))
+        for raised in (RuntimeError("gh api failed: HTTP 502"), subprocess.TimeoutExpired("gh", 60), ValueError("bad JSON")):
+            state["raises"], state["runs"] = raised, 0
+            head = type(raised).__name__[:8].ljust(8, "x")
+            exact(([gate(head, True)] + [gate(head) for _ in range(4)], state["runs"]), ([True, False, False, True, True], 3))
+        state["raises"], state["merge"] = None, "d" * 8
+        wrong = "gate:r/x#7:" + "e" * 8
+        exact((gate("e" * 8), wrong in coordq.load().get("scopeHeads", {}), wrong in coordq.load().get("scopeFetch", {})), (False, False, False))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["gatedHeads"] = {"gate:r/x#7:" + "f" * 8: {}}
+            coordq.save(queue)
+        exact(gate("f" * 8), True)
 
 
 def provider_until():
