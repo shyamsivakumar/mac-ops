@@ -2597,10 +2597,10 @@ def send_integrity():
 
     started = [{"id": 9, "title": f"SRW#7 check {old}", "target": "t1"}]
 
-    def older_heads(items, keys, title, target=None, below=None):
-        queue = {"items": list(items), "started": started,
+    def older_heads(items, keys, title, below=None, reserved=None):
+        queue = {"items": list(items), "started": started, "reserved": reserved or {},
                  "actionKeys": {key: {"id": 1, "state": "queued"} for key in keys}}
-        dropped = coordq.drop_older_heads(queue, title, target, below)
+        dropped = coordq.drop_older_heads(queue, title, below)
         exact(queue["started"], started)
         return dropped, [item["id"] for item in queue["items"]], sorted(queue["actionKeys"])
 
@@ -2609,33 +2609,70 @@ def send_integrity():
              queued(5, f"SRW#7 check {old}", thread="t2"), queued(6, f"gate:SRW#7:{old}"),
              queued(7, f"SRW#7 check {old}")]
     exact(older_heads(items, ["k1"], f"SRW#7 continue {new}"), (4, [3, 4, 6], []))
-    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}", "t1", 7), (2, [3, 4, 5, 6, 7], []))
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}", 7), (3, [3, 4, 6, 7], []))
+    exact(older_heads(items, [], f"SRW#7 continue {new}", reserved={"2": 1, "7:send": 1}),
+          (2, [2, 3, 4, 6, 7], []))
     exact(older_heads(items, [], f"SRW#7 continue {old}")[0], 1)
     for other in ("SRW#7 continue", f"SRW#7 retry {new}", f"SRW#7 continue {new[:39]}", f"gate:SRW#7:{new}", ""):
         exact(older_heads(items, [], other)[0], 0)
 
-    def start(fresh, key=None, thread="t1", head=new):
+    repos = {"repos": {"o/one": {"key": "SRW"}, "o/two": {"key": "MO"}, "o/three": {"key": "MO"}}}
+
+    def read_head(config, run):
+        with tempfile.TemporaryDirectory() as scratch:
+            file = Path(scratch, "tickets.json")
+            file.write_text(config if isinstance(config, str) else json.dumps(config))
+            with patch.object(coordq, "TICKETS_CONFIG", str(file)), \
+                 patch.object(coordq.gh_gateway, "run", side_effect=run) as gh:
+                return coordq.current_head(f"SRW#7 check {old}"), gh.call_args_list
+
+    def answer(stdout, code=0):
+        return lambda *args, **kwargs: subprocess.CompletedProcess(args[0], code, stdout, "")
+
+    def raising(error):
+        def run(*args, **kwargs):
+            raise error
+        return run
+
+    failures = (answer("not json"), answer("{}"), answer("", 1), raising(subprocess.TimeoutExpired("gh", 40)),
+                raising(OSError("gh missing")), raising(coordq.gh_gateway.ApiBudgetExhausted("budget")))
+
+    head, calls = read_head(repos, answer(json.dumps({"head": {"sha": new}})))
+    exact(head, new)
+    exact([(c.args, c.kwargs) for c in calls], [((["gh", "api", "repos/o/one/pulls/7"],), {"timeout": 40, "fresh": True})])
+    for bad in failures:
+        exact(read_head(repos, bad)[0], None)
+    exact(read_head("{broken", answer("{}"))[0], None)
+    exact(read_head({"repos": {"o/one": {"key": "X"}}}, answer("{}")), (None, []))
+    exact(read_head({"repos": {"o/one": {"key": "SRW"}, "o/two": {"key": "SRW"}}}, answer("{}")), (None, []))
+
+    def start(runner, key=None, thread="t1", head=new, queued_items=items):
         args = json.dumps({"threadId": thread, "message": "m"})
         with tempfile.TemporaryDirectory() as scratch, \
              patch.dict(os.environ, {"COORDQ_DIR": scratch, "COORD_JOURNAL_DIR": scratch}), \
              patch.object(coordq, "DIR", scratch), patch.object(coordq, "drain"), \
-             patch.object(coordq, "current_head", return_value=fresh), \
+             patch.object(coordq, "TICKETS_CONFIG", str(Path(scratch, "tickets.json"))), \
+             patch.object(coordq.gh_gateway, "run", side_effect=runner) as gh, \
              patch.object(coordq, "flush_provider_blocks"), contextlib.redirect_stdout(io.StringIO()):
-            coordq.save({"next": 8, "items": [dict(item) for item in items],
+            Path(scratch, "tickets.json").write_text(json.dumps(repos))
+            coordq.save({"next": 8, "items": [dict(item) for item in queued_items],
                          "actionKeys": {"k1": {"id": 1, "state": "queued"}}})
             try:
                 coordq.cmd_start(Namespace(args=args, tool="t3_thread_send", title=f"SRW#7 continue {head}",
                                            priority=800, action_key=key))
             except SystemExit:
                 pass
-            return [item["id"] for item in coordq.load()["items"]]
+            return [item["id"] for item in coordq.load()["items"]], gh.call_count
 
-    exact(start(new), [3, 4, 5, 6, 8])
-    exact(start(old), list(range(1, 9)))
-    exact(start(None), list(range(1, 9)))
-    exact(start(new, head=old), list(range(1, 9)))
-    exact(start(new, key="k1"), list(range(1, 8)))
-    exact(start(new, thread="t3"), list(range(1, 9)))
+    current = answer(json.dumps({"head": {"sha": new}}))
+    exact(start(current), ([3, 4, 6, 8], 1))
+    exact(start(current, thread="t3"), ([3, 4, 6, 8], 1))
+    exact(start(current, head=old), (list(range(1, 9)), 1))
+    exact(start(answer(json.dumps({"head": {"sha": old}}))), (list(range(1, 9)), 1))
+    exact(start(current, key="k1"), (list(range(1, 8)), 1))
+    exact(start(current, queued_items=items[2:4]), ([3, 4, 8], 0))
+    for broken in failures:
+        exact(start(broken), (list(range(1, 9)), 1))
 
 
 def build_here():
