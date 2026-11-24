@@ -621,6 +621,10 @@ except (KeyError, OSError):
 class RepoError(Exception):
     """A repository could not be read, so its counts are not known."""
 
+    def __init__(self, message, stdout: str = "") -> None:
+        super().__init__(message)
+        self.stdout = stdout
+
 
 def die(message: str, code: int = 1) -> NoReturn:
     emit(f"overnight: {message}", err=True)
@@ -769,7 +773,8 @@ def run(
     if process.returncode != 0:
         tail = (stderr or stdout or "").strip().splitlines()[-3:]
         raise RepoError(
-            f"{command} failed ({process.returncode}): " + " | ".join(tail)
+            f"{command} failed ({process.returncode}): " + " | ".join(tail),
+            stdout=stdout or "",
         )
     gh_gateway.store(argv, body)
     return body
@@ -3075,26 +3080,63 @@ def issue_title_key(title: str) -> str:
     return f"{found.group(1).upper()}-{found.group(2)}"
 
 
-def read_closed_issues(
-    repos: list[tuple[str, str]], deadline: float
-) -> tuple[dict[str, set[int]], dict[str, set[str]], list[str]]:
-    """Return the closed issue numbers and the closed issue keys of each
-    repository, and the repositories that could not be read.
+def read_blocker_states(
+    repo: str, numbers: set[int], deadline: float
+) -> tuple[set[int], str]:
+    """Return the closed numbers among the blockers a ticket names, and the
+    reason the answer is not known.
 
-    A blocker is met when its issue is closed, so the shift needs the
-    closed issues as much as the open ones. A repository whose closed
-    issues cannot be read leaves its blockers unchecked, and an unchecked
-    blocker is not a met blocker."""
-    closed_numbers: dict[str, set[int]] = {}
-    closed_keys: dict[str, set[str]] = {}
-    unread: list[str] = []
+    Only the blockers are read, a hundred to the query, so the shift no
+    longer walks a repository's whole closed list. The first reason is
+    kept: a blocker whose state is unread is not a met blocker."""
+    owner, name = (repo.split("/") + [""])[:2]
+    closed: set[int] = set()
+    reason = ""
+    ordered = sorted(numbers)
+    for start in range(0, len(ordered), 100):
+        chunk = ordered[start : start + 100]
+        query = (
+            "query BlockerStates { repository(owner: %s, name: %s) { "
+            % (json.dumps(owner), json.dumps(name))
+        ) + " ".join(
+            f"i{n}: issue(number: {n}) {{ number state title }}" for n in chunk
+        ) + " } }"
+        try:
+            raw = run(
+                [GH, "api", "graphql", "-f", f"query={query}"],
+                GH_TIMEOUT,
+                deadline,
+                optional=True,
+            )
+        except RepoError as exc:
+            raw = exc.stdout
+        try:
+            repository = json.loads(raw or "")["data"]["repository"]
+        except (ValueError, KeyError, TypeError):
+            repository = None
+        if not isinstance(repository, dict):
+            if not reason:
+                reason = f"{repo}: the blocker states could not be read"
+            continue
+        for value in repository.values():
+            if not isinstance(value, dict):
+                continue
+            number = value.get("number")
+            if value.get("state") == "CLOSED" and isinstance(number, int):
+                closed.add(number)
+    return closed, reason
 
-    def read_one(repo: str) -> tuple[set[int], set[str], str]:
-        """Return the closed issue numbers and keys of one repository.
 
-        The empty string is the reason they are unknown: a repository
-        whose closed issues cannot be read leaves its blockers unchecked,
-        and an unchecked blocker is not a met blocker."""
+def read_closed_keys(
+    repo: str, keys: set[str], deadline: float
+) -> set[str]:
+    """Return the blocker keys that name a closed issue of the repository.
+
+    A key is not an issue number, so each one is searched in the closed
+    titles. A key whose search fails is not found, and a blocker that is
+    not found closed is not a met blocker."""
+    found: set[str] = set()
+    for key in sorted(keys):
         try:
             raw = run(
                 [
@@ -3105,8 +3147,10 @@ def read_closed_issues(
                     repo,
                     "--state",
                     "closed",
+                    "--search",
+                    f'"{key}" in:title',
                     "--limit",
-                    str(ISSUE_LIMIT),
+                    "20",
                     "--json",
                     "number,title",
                 ],
@@ -3114,50 +3158,67 @@ def read_closed_issues(
                 deadline,
                 optional=True,
             )
-        except (RepoError, ValueError) as exc:
-            emit(f"overnight: {repo}: {exc}", err=True)
-            return set(), set(), str(exc)
+        except RepoError:
+            continue
         if raw is None:
-            return set(), set(), "the closed issue list could not be read"
+            continue
         try:
             rows = json.loads(raw)
-        except ValueError as exc:
-            emit(f"overnight: {repo}: {exc}", err=True)
-            return set(), set(), str(exc)
+        except ValueError:
+            continue
         if not isinstance(rows, list):
-            return set(), set(), "the closed issue list did not return a list"
-        if len(rows) >= ISSUE_LIMIT:
-            emit(
-                f"overnight: {repo}: the closed issue list was cut off at "
-                f"{ISSUE_LIMIT}, so the blockers are not known",
-                err=True,
-            )
-            return set(), set(), "the closed issue list was cut off"
-        numbers: set[int] = set()
-        keys: set[str] = set()
+            continue
         for row in rows:
-            number = row.get("number")
-            if isinstance(number, int):
-                numbers.add(number)
-            key = issue_title_key(row.get("title") or "")
-            if key:
-                keys.add(key)
-        return numbers, keys, ""
+            if issue_title_key(row.get("title") or "") == key:
+                found.add(key)
+                break
+    return found
 
-    # The repositories are read at the same time: one stalled repository
-    # must not cost the tick a timeout for every repository in turn.
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {
-            repo: pool.submit(read_one, repo) for repo, _key in repos
-        }
-        for repo, future in futures.items():
-            numbers, keys, reason = future.result()
-            if reason:
-                unread.append(repo)
-                continue
-            closed_numbers[repo] = numbers
-            closed_keys[repo] = keys
-    return closed_numbers, closed_keys, unread
+
+def named_blockers(
+    body: str,
+    repo: str,
+    key: str,
+    open_here: set[int],
+    board_by_key: dict[str, dict],
+) -> tuple[set[int], set[str]]:
+    """Return the blocker numbers and the blocker keys a ticket names.
+
+    The three reference forms are read the way `blockers_for` reads them,
+    so only what a ticket names is looked up: a blocker the board already
+    shows open needs no read, and a key the board does not show is
+    searched in the closed titles."""
+    text = blocked_by_text(body or "")
+    if not text:
+        return set(), set()
+    first = text.splitlines()[0].strip().lower().rstrip(".:")
+    if first in ("none", "n/a", "nil", "-"):
+        return set(), set()
+    numbers: set[int] = set()
+    keys: set[str] = set()
+    masked = BLOCK_REPO.sub(" ", text)
+    for match in BLOCK_REPO.finditer(text):
+        if match.group(1).lower() != repo.lower():
+            continue
+        number = int(match.group(2))
+        if number not in open_here:
+            numbers.add(number)
+    for match in BLOCK_KEY.finditer(masked):
+        label = f"{match.group(1).upper()}-{match.group(2)}"
+        if not label.startswith((key or " ").upper()):
+            continue
+        ticket = board_by_key.get(label)
+        if ticket is None:
+            keys.add(label)
+            continue
+        number = ticket.get("number")
+        if isinstance(number, int) and number not in open_here:
+            numbers.add(number)
+    for match in BLOCK_BARE.finditer(masked):
+        number = int(match.group(1))
+        if number not in open_here:
+            numbers.add(number)
+    return numbers, keys
 
 
 def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], str]:
@@ -3654,6 +3715,8 @@ def blockers_for(
             blockers.append(f"{label} could not be read")
         elif ticket.get("number") in open_here:
             blockers.append(f"{label} (#{ticket.get('number')}) is still open")
+        elif ticket.get("number") not in closed_here:
+            blockers.append(f"{label} could not be read")
     for match in BLOCK_BARE.finditer(masked):
         number = int(match.group(1))
         if number in open_here:
@@ -3787,9 +3850,6 @@ def collect_items(
         return {"pr_error": pr_error}
 
     board_repos = sorted({issue.get("repo") or "" for issue in issues})
-    closed_numbers, closed_keys, closed_unread = read_closed_issues(
-        [(repo, "") for repo in board_repos], deadline
-    )
     records = build_records(issues, pull_requests)
     dropped = {
         (issue.get("repo") or "", issue.get("number")) for issue, _reason in drops
@@ -3799,6 +3859,47 @@ def collect_items(
         for issue in issues
         if issue.get("key")
     }
+    named_numbers: dict[str, set[int]] = {}
+    named_keys: dict[str, set[str]] = {}
+    for repo in board_repos:
+        numbers = named_numbers.setdefault(repo, set())
+        wanted = named_keys.setdefault(repo, set())
+        for record in records.get(repo, []):
+            if (record.get("repo"), record.get("number")) in dropped:
+                continue
+            if record.get("stage") != READY_STAGE:
+                continue
+            body = bodies.get((repo, record.get("number"))) or ""
+            found, labels = named_blockers(
+                body,
+                repo,
+                keys.get(repo, ""),
+                open_numbers.get(repo, set()),
+                board_by_key,
+            )
+            numbers |= found
+            wanted |= labels
+    closed_numbers: dict[str, set[int]] = {}
+    closed_keys: dict[str, set[str]] = {}
+    closed_unread: list[str] = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        states = {
+            repo: pool.submit(read_blocker_states, repo, numbers, deadline)
+            for repo, numbers in named_numbers.items()
+            if numbers
+        }
+        keyed = {
+            repo: pool.submit(read_closed_keys, repo, labels, deadline)
+            for repo, labels in named_keys.items()
+            if labels
+        }
+        for repo, future in states.items():
+            found, reason = future.result()
+            if reason:
+                closed_unread.append(repo)
+            closed_numbers[repo] = found
+        for repo, future in keyed.items():
+            closed_keys[repo] = future.result()
     queue_state = read_queue_state()
     gated_heads = queue_state["gatedHeads"]
     queued_tickets = queue_state["queuedTickets"]
