@@ -1130,7 +1130,10 @@ def card_candidate(item, lane_by_key, all_by_key, repos_by_dashed, open_prs):
 
     A prompt-merge or gate-rounds card names a pull request, so a pull
     request still in the open list settles the question without a read. A
-    close-failed card names the pull request whose close failed and is
+    re-cut, proof or herdr-build card names its pull request the same way,
+    for any configured repository: a repository outside the snapshot has no
+    open list, so its pull request is never assumed settled and
+    `pull_settled` reads it. A close-failed card names the pull request whose close failed and is
     settled by the ticket its own title records. The close-failed lookup
     covers every configured repository, because the merge pass that raises
     those cards is not limited to the lane's repositories.
@@ -1143,6 +1146,10 @@ def card_candidate(item, lane_by_key, all_by_key, repos_by_dashed, open_prs):
     match = re.fullmatch(r"lane-gate-rounds-(.+)-(\d+)", item_id)
     if match and match.group(1) in repos_by_dashed:
         repo, number = repos_by_dashed[match.group(1)], int(match.group(2))
+        return None if (repo, number) in open_prs else ("pull", repo, number)
+    match = re.fullmatch(r"(?:recut|proof|herdr-build)-([A-Za-z0-9]+)-(\d+)", item_id)
+    if match and match.group(1) in all_by_key:
+        repo, number = all_by_key[match.group(1)], int(match.group(2))
         return None if (repo, number) in open_prs else ("pull", repo, number)
     match = re.fullmatch(r"lane-close-failed-([A-Za-z0-9]+)-(\d+)", item_id)
     if match and match.group(1) in all_by_key:
@@ -1158,9 +1165,10 @@ def card_candidate(item, lane_by_key, all_by_key, repos_by_dashed, open_prs):
 def reconcile_prompt_items(snapshot):
     """Take settled asks off the board.
 
-    This is the one place a card is withdrawn, and it owns four kinds: a
+    This is the one place a card is withdrawn, and it owns these kinds: a
     prompt merge ask whose pull request Shyam merged or closed, a gate-rounds
-    ask whose pull request is settled, and a close-failed or merged-unreviewed
+    ask whose pull request is settled, a re-cut, proof or herdr-build card
+    whose pull request is merged or closed, and a close-failed or merged-unreviewed
     card whose ticket is closed. A pull request Shyam settled between two passes is not in the
     snapshot any more, so no per-pull-request action ever reaches its item:
     the board would keep asking for work that is done. The items are read
