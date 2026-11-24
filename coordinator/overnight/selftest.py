@@ -4509,7 +4509,7 @@ def outbox_cases():
                 os.environ, {} if value is None else {"COORD_INBOX_SHADOW": value}
             ):
                 exact(out.shadow_on(), expected)
-        for kind, reason in (("bogus", None), ("none", None)):
+        for kind, reason in (("bogus", None), ("none", None), ("none", "  ")):
             try:
                 out.add("v", 0, kind, None, "", reason=reason, now=1.0)
             except ValueError:
@@ -4539,6 +4539,22 @@ def outbox_cases():
             exact(out.drain(sender, now=2.0, shadow=False)["sent"], 0)
             exact((calls, statuses()), expected)
 
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-outbox-")}):
+        for index in range(3):
+            out.add("c", index, "hc_send", "t56", str(index), now=1.0)
+        seen = []
+
+        def crashing(row):
+            seen.append(row["body"])
+            raise KeyboardInterrupt
+
+        try:
+            out.drain(crashing, now=2.0, shadow=False)
+        except KeyboardInterrupt:
+            pass
+        exact((seen, statuses()), (["0"], [("sending", 1), ("pending", 0), ("pending", 0)]))
+        exact(out.drain(lambda row: seen.append(row["body"]), now=3.0, shadow=False), {"sent": 2, "errors": 0})
+        exact((seen, out.reap(now=900.0)), (["0", "1", "2"], {"unknown": 1}))
     late("hc_send", ([1], [("unknown", 1)]))
     late("coordq_send", ([1, 2], [("sent", 2)]))
     with patch.dict(
