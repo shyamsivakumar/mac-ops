@@ -20,8 +20,12 @@ def _value(conn, key, default=None):
 JOURNAL_FILE = re.compile(r"events-\d{4}-\d{2}\.jsonl")
 
 
+def _small(value):
+    return not isinstance(value, int) or abs(value) < 2**63
+
+
 def _scalar(value):
-    return value is None or isinstance(value, (str, int)) and not isinstance(value, bool)
+    return value is None or isinstance(value, (str, int)) and not isinstance(value, bool) and _small(value)
 
 
 def _valid(row):
@@ -30,6 +34,7 @@ def _valid(row):
         isinstance(row, dict)
         and isinstance(ts, (int, float))
         and not isinstance(ts, bool)
+        and _small(ts)
         and math.isfinite(ts)
         and isinstance(row.get("event"), str)
         and isinstance(row.get("data"), (dict, type(None)))
@@ -55,6 +60,7 @@ def replay():
             for line in data[:cut].split(b"\n")[:-1]:
                 try:
                     row = json.loads(line)
+                    json.dumps(row, ensure_ascii=False).encode()
                 except ValueError:
                     counts["skipped"] += 1
                     continue

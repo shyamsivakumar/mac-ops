@@ -4572,11 +4572,11 @@ def replay_cases():
         exact(replay.replay(), {"enqueued": 0, "seen_only": 1, "skipped": 0})
         exact(store.counts()["pending"], 3)
         write(jdir, "events-backfill.jsonl", row(8000, "gate_verdict", 9))
-        bad = [{"ts": "x", "event": "merged"}, {"ts": None, "event": "merged"}, {"ts": True, "event": "merged"}, {"ts": 9e9, "event": ["a"]}, {"ts": 9e9, "event": "alarm_raised", "data": [1]}, {"ts": 9e9, "event": "merged", "repo": ["r"]}, {"ts": 9e9, "event": "merged", "pr": {"n": 1}}, {"ts": 9e9, "event": "merged", "head": 1.5}, [1], 7]
+        bad = [{"ts": "x", "event": "merged"}, {"ts": None, "event": "merged"}, {"ts": True, "event": "merged"}, {"ts": 9e9, "event": ["a"]}, {"ts": 9e9, "event": "alarm_raised", "data": [1]}, {"ts": 9e9, "event": "merged", "repo": ["r"]}, {"ts": 9e9, "event": "merged", "pr": {"n": 1}}, {"ts": 9e9, "event": "merged", "head": 1.5}, {"ts": 9e9, "event": "merged", "pr": 99999999999999999999}, {"ts": 9e9, "event": "merged", "repo": "\ud800"}, {"ts": 9e9, "event": "alarm_raised", "data": {"alarm": "\ud800"}}, {"ts": 10**400, "event": "merged"}, [1], 7]
         write(jdir, "events-2026-11.jsonl", *bad, row(9100, "alarm_raised", 0, alarm=["a", {"b": 1}]), row(9101, "alarm_withdrawn", 0, alarm={"k": 1}), row(9200, "gate_verdict", 4))
         with open(os.path.join(jdir, "events-2026-11.jsonl"), "a") as fh:
             fh.write('{"ts":9300,"event":"gate_verdict","pr":5,"note":"a\rb"}\r\n')
-        exact(replay.replay(), {"enqueued": 2, "seen_only": 0, "skipped": 12})
+        exact(replay.replay(), {"enqueued": 2, "seen_only": 0, "skipped": 16})
     with patch.dict(os.environ, {"COORD_JOURNAL_DIR": os.path.join(tempfile.mkdtemp(prefix="selftest-replay-j-"), "missing"), "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-replay-i-")}):
         replay.activate(now=1.0)
         exact(replay.replay(), {"enqueued": 0, "seen_only": 0, "skipped": 0})
@@ -4599,6 +4599,46 @@ def replay_cases():
             exact(alarms(), ["alarm:x-1:0", "alarm:x-1:1"])
             replay.replay()
             exact(alarms(), ["alarm:x-1:0", "alarm:x-1:1"])
+
+
+def timer_cases():
+    import inbox as store
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-timers-")}):
+        def fired():
+            return [r[0] for r in store.connect().execute("SELECT dedupe_key FROM inbox ORDER BY id")]
+
+        store.add_timer("t1", due_ts=100.0, period=50.0)
+        exact([store.enqueue_due_timers(now=120.0), store.enqueue_due_timers(now=121.0)], [1, 0])
+        exact(store.enqueue_due_timers(now=1000.0), 1)
+        exact(fired(), ["timer_due:t1:100.0", "timer_due:t1:150.0"])
+        store.cancel_timer("t1")
+        store.add_timer("once", due_ts=2000.0)
+        exact([store.enqueue_due_timers(now=2001.0), store.enqueue_due_timers(now=9000.0)], [1, 0])
+        for bad in (0, -5):
+            try:
+                store.add_timer("bad", due_ts=1.0, period=bad)
+            except ValueError:
+                continue
+            raise AssertionError("period %r accepted" % bad)
+        for bad in ([1], "x"):
+            try:
+                store.add_timer("p", due_ts=1.0, payload=bad)
+            except TypeError:
+                continue
+            raise AssertionError("payload %r accepted" % (bad,))
+        store.add_timer("named", due_ts=2500.0, payload={"timer": "other", "k": 1})
+        store.enqueue_due_timers(now=2501.0)
+        exact(json.loads(store.connect().execute("SELECT payload FROM inbox ORDER BY id DESC").fetchone()[0]), {"timer": "named", "k": 1})
+        store.set_last_run(now=10000.0)
+        store.ensure_fallback(now=10000.0)
+        exact(store.enqueue_due_timers(now=14000.0), 0)
+        store.set_last_run(now=17000.0)
+        exact([store.enqueue_due_timers(now=17300.0), store.enqueue_due_timers(now=24300.0)], [0, 1])
+        exact(fired()[-1].startswith("timer_due:fallback:"), True)
+        store.set_last_run(now=712790.0)
+        store.enqueue_due_timers(now=719900.0)
+        exact([store.enqueue_due_timers(now=719990.0), store.enqueue_due_timers(now=719990.0 + 7199), store.enqueue_due_timers(now=719990.0 + 7200)], [1, 0, 1])
 
 
 def outbox_cases():
@@ -4817,6 +4857,7 @@ def inbox():
         exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
     replay_cases()
     outbox_cases()
+    timer_cases()
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
