@@ -2003,14 +2003,15 @@ def gate_round_cap():
             ledger[lkey] = "sent"
             return "sent"
 
-        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=()):
+        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=(), board=True, dry=False):
             """Run the lane over one pull request at one head."""
             current[0] = head
             pr = dict(number=number, state="OPEN", headRefOid=head, labels=[{"name": n} for n in labels],
                       body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
             snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
-                 patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                 patch.object(lane, "round_cap_to_board", lambda _: board), \
+                 patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", dry), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "gate_verdict", return_value=verdict), \
                  patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
@@ -2174,6 +2175,59 @@ def gate_round_cap():
             result, _ = at_cap(35, none_line)
         exact(result, "skip #35: gate PASS, prompt change, Shyam merges")
         exact(merged, [(30, heads[2])])
+        # A repository the owner does not build in is not asked on the board:
+        # the lane writes the round cap to its ledger and coordq status lists it.
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("coordq_status", str(Path(__file__).parents[1] / "bin" / "coordq"))
+        coordq = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq_status", loader))
+        loader.exec_module(coordq)
+        cards = len(json.loads(board.read_text())["items"])
+        key = f"roundcap:{repo}#50"
+        two = {f"fix:{repo}#50:{head}": "sent" for head in heads[:2]}
+        result = act(50, heads[2], two, board=False)
+        exact(result.endswith("the round cap is on coordq status"), True)
+        exact(len(json.loads(board.read_text())["items"]), cards)
+        exact(f"rounds-decision:{repo}#50" in two, False)
+        entry = two[key]
+        exact({k: entry[k] for k in ("repo", "pr", "head", "rounds", "gate", "lines")},
+              {"repo": repo, "pr": 50, "head": heads[2], "rounds": 3, "gate": "gate", "lines": None})
+        exact([c["pr"] for c in coordq.round_caps({**two, f"roundcap:{repo}#4": "bad"})], [50])
+        entry["at"] = 1.0
+        act(50, heads[2], two, verdict=("absent", None, ""), board=False)
+        exact((two[key]["at"], two[key]["gate"]), (1.0, "gate"))
+        act(50, heads[3], two, verdict=("absent", None, ""), board=False)
+        exact((two[key]["head"], two[key]["at"] > 1.0), (heads[3], True))
+        act(50, heads[3], two, labels=["gate:keep-fixing"], board=False)
+        exact(key in two, False)
+        act(50, heads[2], two, board=False)
+        lane.clear_gate_round_decision(repo, 50, two)
+        exact(key in two, False)
+        dry = {f"fix:{repo}#50:{head}": "sent" for head in heads[:3]}
+        exact(act(50, heads[2], dry, verdict=("absent", None, ""), board=False, dry=True),
+              "DRY #50: no fix round, the round cap goes to coordq status")
+        exact(key in dry, False)
+        exact(len(json.loads(board.read_text())["items"]), cards)
+        # A card an earlier version raised is taken off the board, and a
+        # removal that fails is retried on the next pass.
+        old = {f"fix:{repo}#51:{head}": "sent" for head in heads[:3]}
+        act(51, heads[2], old)
+        exact(round_item(51), True)
+        with patch.object(lane, "CFG", {repo: {"build": "here"}, "o/r": {}}):
+            exact((lane.round_cap_to_board(repo), lane.round_cap_to_board("o/r")), (True, False))
+        with patch.object(lane.alarms, "board_update", return_value="failed"):
+            result = act(51, heads[2], old, board=False)
+        exact("could not be taken off the board" in result, True)
+        exact((round_item(51), f"rounds-decision:{repo}#51" in old, f"roundcap:{repo}#51" in old), (True, True, True))
+        act(51, heads[2], old, board=False)
+        exact((round_item(51), f"rounds-decision:{repo}#51" in old, f"roundcap:{repo}#51" in old), (False, False, True))
+        # A pass that read a repository's open list drops the keys of pull
+        # requests no longer in it; a full or missing list is not read whole.
+        for prs, left in (({repo: {"prs": [{"number": 1}]}}, [1]),
+                          ({repo: {"prs": [{"number": n} for n in range(100, 100 + lane.OPEN_PR_LIMIT)]}}, [1, 2]),
+                          ({}, [1, 2])):
+            pruned = {f"roundcap:{repo}#{n}": {"repo": repo, "pr": n} for n in (1, 2)}
+            lane.prune_round_caps({"repos": prs}, pruned)
+            exact(sorted(v["pr"] for v in pruned.values()), left)
     gatekeep_round_cap()
 
 
@@ -2416,6 +2470,7 @@ def decisions_board_guard():
         board = Path(scratch) / "decisions.json"
         board.write_text(json.dumps({"items": []}))
         with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                patch.object(lane, "CFG", {"fixture/repo": {"build": "here"}}), \
                 patch.object(lane.alarms, "board_update", record):
             lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
             lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
