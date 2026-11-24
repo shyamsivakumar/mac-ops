@@ -1691,6 +1691,22 @@ def board_integrity():
     clean = {"tickets": [], "repos": {"fixture/repo": {"key": "MO", "issues": [issue(1, "MO-1 healthy", ["started"])], "prs": []}}}
     with patch("sys.stdin", io.StringIO(json.dumps(clean))):
         exact(audit.main(), 0)
+    runner = load_runner()
+    states = {7: "CLOSED", 8: "OPEN"}
+    def answer(command, *args, **kwargs):
+        numbers = re.findall(r"issue\(number: (\d+)\)", " ".join(command))
+        body = json.dumps({"data": {"repository": {f"i{n}": ({"number": int(n), "state": states[int(n)], "title": "t"} if int(n) in states else None) for n in numbers}}})
+        if len(numbers) == len(states):
+            return body
+        raise runner.RepoError("gh api graphql failed (1): could not resolve", stdout=body)
+    with patch.object(runner, "run", answer):
+        exact(runner.read_blocker_states("o/r", {7, 8}, 9e9), ({7}, ""))
+        exact(runner.read_blocker_states("o/r", {7, 8, 9}, 9e9), ({7}, ""))
+    with patch.object(runner, "run", lambda *a, **k: None):
+        exact(runner.read_blocker_states("o/r", {7}, 9e9), (set(), "o/r: the blocker states could not be read"))
+    text = "## Blocked by\n\n#7, #8, #9, MO-3\n"
+    exact(runner.blockers_for(text, "o/r", "MO", {"o/r": {8}}, {"o/r": {7}}, {}, {}),
+          ["MO-3 could not be read", "o/r#8 is still open", "o/r#9 could not be read"])
 
 
 def api_budget():
