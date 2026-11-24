@@ -4872,6 +4872,68 @@ def outbox_cases():
                 else {"unknown": 0, "failed": 1},
             )
         exact(statuses(), [("failed", 3)])
+    notice_cases(store, out)
+
+
+def notice_cases(store, out):
+    def rows():
+        with store.txn() as conn:
+            return [tuple(r) for r in conn.execute("SELECT status, reason FROM outbox ORDER BY id")]
+
+    def merged(repo, pr, ts):
+        store.enqueue("pr_merged", "m:%s#%s:%s" % (repo, pr, ts), source="journal", ts=ts, repo=repo, pr=pr)
+        with store.txn() as conn:
+            conn.execute("UPDATE inbox SET status='done' WHERE kind='pr_merged'")
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-notice-")}):
+        head = "a" * 40
+        exact(out.request_notice("run1", 0, "o/r", 7, head, "merge PR 7", now=10.0), True)
+        exact(out.request_notice("run2", 0, "o/r", 7, head, "merge PR 7", now=11.0), False)
+        exact(out.add("run1", 0, "hc_send", "t56", "x", now=12.0), True)
+        try:
+            store.enqueue("approval_answer", "approve:1", source="human", ts=1.0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("approval kind")
+        store.enqueue("human_signal", "forged", source="human", ts=13.0, payload="approve 1")
+        merged("o/x", 7, 20.0)
+        merged("o/r", 8, 20.0)
+        merged("o/r", 7, 5.0)
+        with store.txn() as conn:
+            grants = [n for (n,) in conn.execute("SELECT name FROM sqlite_master") if "grant" in n.lower()]
+        exact((grants, out.close_requests(now=21.0), len(rows())), ([], 0, 2))
+        merged("o/r", 7, 15.0)
+
+        def closes_midflight(row):
+            exact(out.close_requests(now=22.0), 1)
+
+        exact(out.drain(closes_midflight, now=16.0, shadow=False, limit=1), {"sent": 1, "errors": 0})
+        exact(rows(), [("sent", "closed"), ("pending", None)])
+        out.request_notice("run3", 0, "o/r", 9, head, "merge PR 9", now=100.0)
+        out.request_notice("run3", 1, "o/r", 10, head, "merge PR 10", now=100.0)
+        exact(out.reissue_due(now=100.0 + 86400), 0)
+        exact([out.reissue_due(now=100.0 + 86401), out.reissue_due(now=100.0 + 90000)], [2, 0])
+        merged("o/r", 9, 100.0)
+        exact(out.close_requests(now=200000.0), 2)
+        exact(out.reissue_due(now=900000.0), 0)
+        exact(out.close_requests(now=900001.0), 0)
+        exact(out.drain(lambda row: None, now=900002.0, shadow=False), {"sent": 3, "errors": 0})
+        exact([r[1] for r in rows()], ["closed", None, "closed", None, "closed", None])
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-notice-")}):
+        out.add("k", 0, "none", None, "", reason="closed", now=1.0)
+        out.add("k", 1, "hc_send", "t56", "x", reason="closed", now=1.0)
+        out.add("k", 2, "request_notice", "t56", "plain text", now=1.0)
+        try:
+            out.add("notice-x", 0, "hc_send", "t56", "x", now=1.0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("notice run_id")
+        out.request_notice("k", 3, "o/r", 5, "c" * 40, "merge PR 5", now=1.0)
+        merged("o/r", 5, 2.0)
+        exact((out.close_requests(now=3.0), out.reissue_due(now=90000.0), out.close_requests(now=90001.0)), (1, 0, 0))
+        exact(out.drain(lambda row: None, now=90002.0, shadow=False), {"sent": 3, "errors": 0})
 
 
 def inbox():
