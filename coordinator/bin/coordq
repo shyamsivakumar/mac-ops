@@ -2215,7 +2215,8 @@ def write_replay(root, key, body, cmd, head):
             handle.write(text.rstrip("\n") + "\n")
 
 
-def opened_red(repo, issue):
+def opened_proof(repo, issue):
+    red, sha = False, None
     folder = journal.journal_dir()
     for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
         if not name.startswith("events-"):
@@ -2227,47 +2228,64 @@ def opened_red(repo, issue):
                 except ValueError:
                     continue
                 if (isinstance(row, dict) and row.get("event") == "ticket_opened" and row.get("repo") == repo
-                        and row.get("ticket") == int(issue) and (row.get("data") or {}).get("proof") == "red"):
-                    return True
-    return False
+                        and row.get("ticket") == int(issue) and isinstance(row.get("data"), dict)):
+                    red = red or row["data"].get("proof") == "red"
+                    sha = row["data"].get("proofSha") or sha
+    return red, sha
 
 
-def run_head_proof(settings, repo, number, issue, head):
-    """The green proof of one head, run in a clean checkout by the runner.
+def proof_changed(opened_sha, cmd):
+    return bool(opened_sha) and hashlib.sha256(cmd.encode()).hexdigest() != opened_sha
 
-    The state is green, red, unresolved, prose or fetch_failed, and the
-    tail is the runner's own record, never the builder's paste. A
-    fetch_failed head has not been proved yet.
+
+def run_head_proof(settings, repo, number, cmd, head):
+    """The state and tail of one head's proof, run in a clean checkout.
+
+    The state is green, unresolved or fetch_failed, and the tail is the
+    runner's own record, never the builder's paste. A fetch_failed head
+    has not been proved yet.
     """
     import tempfile
     import proof_run
-    body = (gh_json(f"repos/{repo}/issues/{issue}").get("body") or "")
-    try:
-        cmd = proof_run.parse_body(body)["cmd"]
-    except ValueError:
-        return "prose", "", body, ""
-    if cmd.lower().startswith("none (prose)"):
-        return "prose", "", body, cmd
     if not settings.get("checkout"):
-        return "unresolved", "the repo has no checkout path in tickets.json", body, cmd
+        return "unresolved", "the repo has no checkout path in tickets.json"
     repo_dir = os.path.expanduser(settings["checkout"])
-    fetch = subprocess.run(["git", "-C", repo_dir, "fetch", "origin", f"refs/pull/{number}/head"],
-                           capture_output=True, text=True)
-    if fetch.returncode:
-        return "fetch_failed", f"cannot fetch the head: {fetch.stderr.strip()[-200:]}", body, cmd
+    _, failure = read_or_failure(
+        subprocess.run, ["git", "-C", repo_dir, "fetch", "origin", f"refs/pull/{number}/head"],
+        check=True, capture_output=True, text=True, timeout=60)
+    fetched, failure = (None, failure) if failure else read_or_failure(
+        subprocess.run, ["git", "-C", repo_dir, "rev-parse", "FETCH_HEAD"],
+        check=True, capture_output=True, text=True, timeout=60)
+    if failure:
+        return "fetch_failed", failure[-200:]
+    if fetched.stdout.strip() != head:
+        return "fetch_failed", f"the pull request head moved to {fetched.stdout.strip()[:8]}"
     fd, record = tempfile.mkstemp(prefix="proof-record-")
     os.close(fd)
     try:
-        result = proof_run.run("green", repo_dir, head, cmd, None, record)
+        try:
+            result, failure = read_or_failure(proof_run.run, "green", repo_dir, head, cmd, None, record)
+        except SystemExit:
+            result, failure = None, f"the head {head[:8]} is not in the checkout"
+        if failure:
+            return "fetch_failed", failure[-200:]
         with open(record, encoding="utf-8") as handle:
             tail = handle.read()[-1500:]
     finally:
         os.unlink(record)
-    return ("green" if result["state"] == "green" else "unresolved"), tail, body, cmd
+    return ("green" if result["state"] == "green" else "unresolved"), tail
 
 
 PROOF_FETCH_ATTEMPTS = 3
+PROOF_RETRY_SECONDS = 3600
 PROOF_PASSING = ("green", "prose", "legacy")
+PROOF_CARD = {
+    "unresolved": ("does not pass", "Fix the head and push it again, or correct the proof command in the ticket."),
+    "untrusted": ("will not run", "The ticket or the pull request is by another account than the signed-in one. "
+                                  "Re-open it under the signed-in account."),
+    "changed": ("will not run", "The ticket's proof command is not the one it opened with. "
+                                "Put the opened command back in the ticket."),
+}
 
 
 def gate_allowed(state, required):
@@ -2278,23 +2296,79 @@ def proof_required(settings):
     return bool(settings.get("proofRequired") or os.environ.get("COORD_PROOF_REQUIRED"))
 
 
-def proof_gate(settings, repo, number, event, key, dry_run):
+def proof_text(kept):
+    return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
+
+
+def proof_state(settings, repo, number, event, key, author, body, failure, ran):
+    """The state, tail and command of a head's proof, or None while it waits."""
+    import proof_run
+    if failure:
+        return "fetch_failed", failure, ""
+    if not (author == event["login"] == event["prAuthor"]):
+        return "untrusted", (f"the ticket was written by {author}, the pull request by "
+                              f"{event['prAuthor']}, and the signed-in account is {event['login']}"), ""
+    opened, failure = read_or_failure(opened_proof, repo, event["scopeIssue"])
+    if failure:
+        return "fetch_failed", failure, ""
+    red, opened_sha = opened
+    if not red:
+        return "legacy", "", ""
+    try:
+        cmd = proof_run.parse_body(body)["cmd"]
+    except ValueError:
+        cmd = ""
+    if proof_changed(opened_sha, cmd):
+        return "changed", "the proof command differs from the one the ticket opened with", cmd
+    if not cmd or cmd.lower().startswith("none (prose)"):
+        return "prose", "", cmd
+    if ran:
+        print(stamped(f"proof of {event['pr']} waits: one proof per run"), flush=True)
+        return None
+    ran.add(key)
+    state, tail = run_head_proof(settings, repo, number, cmd, event["head"])
+    return state, tail, cmd
+
+
+def proof_gate(settings, repo, number, event, key, dry_run, ran):
     """The proof text for the gate brief, or None when this head gets no gate.
 
     The proof runs once per head: the result is kept under the head's
     key, so a later run reads it instead of running again. A head that
-    does not pass gets a board card and no gate.
+    does not pass gets a board card and no gate. `ran` is the set of the
+    heads proved by one gatekeep run, so one run proves one head.
     """
-    kept = load().get("proofHeads", {}).get(key)
-    if kept is None:
+    queue = load()
+    heads = queue.get("proofHeads", {})
+    kept = heads.get(key)
+    if key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
+        return proof_text(kept) if kept and kept["state"] in PROOF_PASSING else ""
+    head = event["head"]
+    card_id = f"proof-{settings['key']}-{number}"
+    carded = [name for name, row in heads.items() if row.get("carded") and row["pr"] == event["pr"]]
+    blocked = bool(kept) and not gate_allowed(kept["state"], proof_required(settings))
+    if kept and not blocked:
+        if not drop_scope_card(card_id, carded, dry_run, "proofHeads"):
+            return None
+        return proof_text(kept)
+    ticket, failure = read_or_failure(gh_json, f"repos/{repo}/issues/{event['scopeIssue']}")
+    ticket = (ticket or [{}])[0]
+    body = ticket.get("body") or ""
+    author = (ticket.get("user") or {}).get("login")
+    digest = "" if failure else hashlib.sha256(
+        "\n".join(map(str, [event["login"], event["prAuthor"], author, body])).encode()).hexdigest()[:16]
+    hold = blocked and (failure or (kept["body"] == digest and not (
+        kept.get("fetched") and time.time() - kept["at"] > PROOF_RETRY_SECONDS)))
+    if not hold:
         if dry_run:
             print(stamped(f"would run the proof of {event['pr']}"), flush=True)
             return ""
-        if opened_red(repo, event["issue"]):
-            state, tail, body, cmd = run_head_proof(settings, repo, number, event["issue"], event["head"])
-        else:
-            state, tail, body, cmd = "legacy", "", "", ""
-        if state == "fetch_failed":
+        outcome = proof_state(settings, repo, number, event, key, author, body, failure, ran)
+        if outcome is None:
+            return None
+        state, tail, cmd = outcome
+        fetched = state == "fetch_failed"
+        if fetched:
             with Lock(True):
                 queue = load()
                 tries = queue.setdefault("proofFetch", {}).get(key, {}).get("attempts", 0) + 1
@@ -2304,28 +2378,33 @@ def proof_gate(settings, repo, number, event, key, dry_run):
             if tries < PROOF_FETCH_ATTEMPTS:
                 return None
             state = "unresolved"
-        kept = {"state": state, "tail": tail, "pr": event["pr"], "carded": False}
+        kept = {"state": state, "tail": tail, "pr": event["pr"], "body": digest,
+                "at": time.time(), "fetched": fetched,
+                "carded": bool(kept and kept["carded"]) and (
+                    kept["state"] == state or gate_allowed(state, proof_required(settings)))}
         with Lock(True):
             queue = load()
             queue.setdefault("proofHeads", {})[key] = kept
             save(queue)
         journal.emit("proof_run", "gatekeep", state=state, **journal.parse_request_id(key))
-        card_id = f"proof-{settings['key']}-{number}"
-        if state == "green":
-            write_replay(REPLAY_DIR, f"{settings['key']}-{event['issue']}", body, cmd, event["head"])
-            alarms.route_update(DECISIONS_PATH, card_id, "remove")
-    if gate_allowed(kept["state"], proof_required(settings)):
-        return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
-    print(stamped(f"no proof record for {event['pr']}"), flush=True)
-    if not kept["carded"] and not dry_run:
-        item = {"id": f"proof-{settings['key']}-{number}", "group": "Coordinator", "kind": "ask",
-                "title": f"{repo}#{number} head {event['head'][:8]}: the proof does not pass",
-                "cause": kept["tail"][-600:] or "the proof could not run",
-                "why": "Gatekeep queued no gate for this head. Fix the head and push it again.",
-                "options": [{"label": "Fix and push", "detail": "", "recommended": True}]}
-        if alarms.route_update(DECISIONS_PATH, item["id"], "raise", item) == "wrote":
+        if gate_allowed(state, proof_required(settings)):
+            if state == "green":
+                write_replay(REPLAY_DIR, f"{settings['key']}-{event['scopeIssue']}", body, cmd, head)
+            if not drop_scope_card(card_id, carded, dry_run, "proofHeads"):
+                return None
+            return proof_text(kept)
+    rec = kept
+    print(stamped(f"no proof record for {event['pr']} ({rec['state']})"), flush=True)
+    if not dry_run and not rec["carded"]:
+        item = {"id": card_id, "group": "Coordinator", "kind": "ask",
+                "title": f"{repo}#{number} head {head[:8]}: the proof {PROOF_CARD[rec['state']][0]}",
+                "cause": rec["tail"][-600:] or "the proof could not run",
+                "why": PROOF_CARD[rec["state"]][1] + " The head is checked again.",
+                "options": [{"label": "Fix it", "detail": "", "recommended": True}]}
+        if alarms.route_update(DECISIONS_PATH, card_id, "raise", item) == "wrote":
             with Lock(True):
                 queue = load()
+                uncard(queue, event["pr"])
                 queue["proofHeads"][key]["carded"] = True
                 save(queue)
             journal.emit("gate_skipped", "gatekeep", reason="no_proof", **journal.parse_request_id(key))
@@ -2342,16 +2421,23 @@ def scope_refusal(items):
             and not i.get("unknown")]
 
 
-def read_or_failure(call, *args):
+def read_or_failure(call, *args, **kwargs):
     try:
-        return call(*args), ""
+        return call(*args, **kwargs), ""
     except gh_gateway.ApiBudgetExhausted:
         raise
     except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as exc:
         return None, str(exc)
 
 
-def drop_scope_card(card_id, carded, dry_run):
+def uncard(queue, pr, groups=("scopeHeads", "proofHeads")):
+    for group in groups:
+        for row in queue.get(group, {}).values():
+            if row.get("pr") == pr:
+                row["carded"] = False
+
+
+def drop_scope_card(card_id, carded, dry_run, group="scopeHeads"):
     if not carded or dry_run:
         return True
     if alarms.route_update(DECISIONS_PATH, card_id, "remove") != "wrote":
@@ -2359,7 +2445,7 @@ def drop_scope_card(card_id, carded, dry_run):
     with Lock(True):
         queue = load()
         for name in carded:
-            queue["scopeHeads"][name]["carded"] = False
+            queue[group][name]["carded"] = False
         save(queue)
     return True
 
@@ -2432,6 +2518,7 @@ def scope_gate(settings, repo, number, event, key, dry_run):
         if alarms.route_update(DECISIONS_PATH, card_id, "raise", item) == "wrote":
             with Lock(True):
                 queue = load()
+                uncard(queue, event["pr"])
                 queue["scopeHeads"][key]["carded"] = True
                 save(queue)
         else:
@@ -2561,7 +2648,8 @@ def gate_candidates(config, rounds=None):
                     break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
                        "issue": issue, "scopeIssue": scope_issue(issue, body),
-                       "builderModels": models, **pr_size(repo, number, pr),
+                       "builderModels": models, "login": login,
+                       "prAuthor": (pr.get("user") or {}).get("login"), **pr_size(repo, number, pr),
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
@@ -2582,7 +2670,8 @@ def gate_candidates(config, rounds=None):
                         key, args = gated_key, {**args, "clientRequestId": gated_key}
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
                            "key": key, "builderModels": models, "args": args,
-                           "scopeIssue": scope_issue(None, pr.get("body")),
+                           "scopeIssue": scope_issue(None, pr.get("body")), "login": login,
+                           "prAuthor": (pr.get("user") or {}).get("login"),
                            **pr_size(repo, number, pr)}
 
 
@@ -2609,6 +2698,7 @@ def cmd_gatekeep(a):
         seen = set()
         stuck = []
         attempted = set()
+        ran = set()
         for event in gate_candidates(config, lane_ledger()):
             if event["kind"] == "skip":
                 pr = event["pr"]
@@ -2664,8 +2754,8 @@ def cmd_gatekeep(a):
             settings = config.get("repos", {}).get(repo_name, {})
             if event.get("scopeIssue") and not scope_gate(settings, repo_name, pr_number, event, key, a.dry_run):
                 continue
-            if settings.get("proofOnOpen") and event.get("issue"):
-                proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run)
+            if settings.get("proofOnOpen") and event.get("scopeIssue"):
+                proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run, ran)
                 if proof is None:
                     continue
                 args["message"] += proof
