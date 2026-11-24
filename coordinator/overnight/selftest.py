@@ -4707,6 +4707,32 @@ def inbox_poll_cases():
     with patch.dict(os.environ, {"COORD_INBOX_REPOS": ""}):
         exact(poll.poll_prs(poll.configured_repos(), raising, now=1.0), 0)
     exact(tried, [])
+    big = [pr(2 ** 70), pr(True), pr({}), pr(3, headRefOid={}), pr(4, reviews=[{"id": {}, "state": "APPROVED", "submittedAt": "x"}]), pr(5)]
+    for bad in (None, {"a": 1}, "x"):
+        with scratch():
+            exact(poll.poll_prs(["bad/x", "o/r"], lambda repo: bad if repo == "bad/x" else big, now=1.0), 2)
+    body = "SECRET-REVIEW-BODY"
+    leaky = [pr(1, reviews=[{"id": "R1", "state": "APPROVED", "submittedAt": "nope", "body": body}]), pr(None, body=body)]
+    with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
+        poll.poll_prs(["o/r"], lambda repo: leaky, now=1.0)
+    exact((body in err.getvalue(), "o/r#1" in err.getvalue()), (False, True))
+    calls = []
+
+    def gh(argv, **kw):
+        calls.append((argv, kw["limit"]))
+        return subprocess.CompletedProcess(argv, *answers.pop(0))
+
+    answers = [(0, "[]", ""), (1, "", "boom"), (0, "not json", "")]
+    with patch.object(poll.gh_gateway, "run", gh):
+        exact(poll.fetch("o/r"), [])
+        for error in (RuntimeError, ValueError):
+            try:
+                poll.fetch("o/r")
+            except error:
+                continue
+            raise AssertionError("fetch accepted a bad answer")
+    exact(calls[0][0], ["gh", "pr", "list", "-R", "o/r", "--state", "open", "--limit", "100",
+                        "--json", "number,headRefOid,isDraft,createdAt,labels,reviews"])
 
 
 def outbox_cases():
