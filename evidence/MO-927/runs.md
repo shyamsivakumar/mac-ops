@@ -17,7 +17,7 @@ All paths end in `call()` (coordinator/bin/coordq:400-412), which prefixes the r
 
 - Dispatch drain: reads rules at coordq:805-815, then `call(step["tool"], step["args"], rules)` at :831. Gets the rule.
 - `ticket start` (builder launch): builds a launch payload and queues it with `coordq start` (coordinator/bin/ticket:1498). `cmd_start` checks the rules file reads (coordq:1006-1011) and queues; the drain above adds the prefix. Gets the rule.
-- Refill: runs `ticket start` through coordq.py (:1285 area, refill at :1379+), so the same path. Gets the rule.
+- Refill: runs `ticket start` (coordq:1278-1279, refill at :1379+), so the same path. Gets the rule.
 - Lane re-cut brief: `cmd_start` at coordq:2436 with `t3_thread_launch` and taskType design, then the drain. Gets the rule.
 - `coordq create` (:1528): idle thread, refuses any message, so no brief to prefix. Not applicable.
 - Gate and review launches (ticket:1901): skipped on purpose by `wants_rules` (review task type, gate model, or title). Does not get the rule; a reviewer does not build.
