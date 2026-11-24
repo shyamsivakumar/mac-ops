@@ -28,3 +28,7 @@ Method: `install_coordinator.plan(checkout, tmp_home)` lists the installer's tar
 No other eval fails flat. A first run with the files in a bare directory failed worktree-base-ref and consolidation-guard (they look for ../bin/coordq) and alarm-mute (panel files); those were set-up faults of the temp layout, absent once the layout matched the installed one, and 820e81b8 passes the same way.
 
 The moved case runs as `python3 -m unittest tests.test_coordq_message_dedupe.WakeMetricsTests` (1 test, OK) and is not in the installed selftest. It lives in test_coordq_message_dedupe.py, the existing module that already tests the coordinator queue's dedupe keys; no module covers inbox.py.
+
+## After merging origin/main (#924 outbox_cases included)
+
+Merge commit a5555437: outbox_cases() and its call kept, only the metrics case removed. Flat run of the merged code: exit 0, 34 PASS, 41 files in the flat directory (inbox_outbox.py is one of them), so the inbox eval including outbox_cases passes without repository files. WakeMetricsTests still passes.
