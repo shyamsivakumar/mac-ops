@@ -2364,6 +2364,11 @@ def drop_scope_card(card_id, carded, dry_run):
     return True
 
 
+def scope_issue(event_issue, body):
+    number = event_issue if event_issue else close_check.issue_of(body)
+    return None if number is None else str(number)
+
+
 def scope_gate(settings, repo, number, event, key, dry_run):
     """True when this head may go on to its gate, False when it gets none this run."""
     queue = load()
@@ -2377,14 +2382,14 @@ def scope_gate(settings, repo, number, event, key, dry_run):
         return drop_scope_card(card_id, carded, dry_run)
     if not kept and queue.get("scopeFetch", {}).get(key, {}).get("attempts", 0) >= PROOF_FETCH_ATTEMPTS:
         return True
-    ticket, failure = read_or_failure(gh_json, f"repos/{repo}/issues/{event['issue']}")
-    digest = hashlib.sha256(((ticket or {}).get("body") or "").encode()).hexdigest()[:16]
+    ticket, failure = read_or_failure(gh_json, f"repos/{repo}/issues/{event['scopeIssue']}")
+    digest = hashlib.sha256(((ticket or [{}])[0].get("body") or "").encode()).hexdigest()[:16]
     result = None
     if not failure and not (kept and kept["body"] == digest):
         if dry_run:
             print(stamped(f"would check the scope of {event['pr']}"), flush=True)
             return True
-        result, failure = read_or_failure(close_check.run_check, repo, int(number), event["issue"])
+        result, failure = read_or_failure(close_check.run_check, repo, int(number), event["scopeIssue"])
     if result and result["merge"] != event["head"]:
         return False
     if result:
@@ -2555,7 +2560,8 @@ def gate_candidates(config, rounds=None):
                            "reason": "changed-file list unreadable, gate deferred"}
                     break
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "issue": issue, "builderModels": models, **pr_size(repo, number, pr),
+                       "issue": issue, "scopeIssue": scope_issue(issue, body),
+                       "builderModels": models, **pr_size(repo, number, pr),
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
@@ -2576,6 +2582,7 @@ def gate_candidates(config, rounds=None):
                         key, args = gated_key, {**args, "clientRequestId": gated_key}
                     yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
                            "key": key, "builderModels": models, "args": args,
+                           "scopeIssue": scope_issue(None, pr.get("body")),
                            **pr_size(repo, number, pr)}
 
 
@@ -2655,7 +2662,7 @@ def cmd_gatekeep(a):
                 continue
             repo_name, pr_number = event["pr"].rsplit("#", 1)
             settings = config.get("repos", {}).get(repo_name, {})
-            if event.get("issue") and not scope_gate(settings, repo_name, pr_number, event, key, a.dry_run):
+            if event.get("scopeIssue") and not scope_gate(settings, repo_name, pr_number, event, key, a.dry_run):
                 continue
             if settings.get("proofOnOpen") and event.get("issue"):
                 proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run)
