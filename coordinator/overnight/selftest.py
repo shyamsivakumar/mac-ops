@@ -4868,6 +4868,20 @@ def notice_cases(store, out):
         exact(out.close_requests(now=900001.0), 0)
         exact(out.drain(lambda row: None, now=900002.0, shadow=False), {"sent": 3, "errors": 0})
         exact([r[1] for r in rows()], ["closed", None, "closed", None, "closed", None])
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-notice-")}):
+        out.add("k", 0, "none", None, "", reason="closed", now=1.0)
+        out.add("k", 1, "hc_send", "t56", "x", reason="closed", now=1.0)
+        out.add("k", 2, "request_notice", "t56", "plain text", now=1.0)
+        try:
+            out.add("notice-x", 0, "hc_send", "t56", "x", now=1.0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("notice run_id")
+        out.request_notice("k", 3, "o/r", 5, "c" * 40, "merge PR 5", now=1.0)
+        merged("o/r", 5, 2.0)
+        exact((out.close_requests(now=3.0), out.reissue_due(now=90000.0), out.close_requests(now=90001.0)), (1, 0, 0))
+        exact(out.drain(lambda row: None, now=90002.0, shadow=False), {"sent": 3, "errors": 0})
 
 
 def inbox():
