@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -18,15 +19,24 @@ def configured_repos():
 
 def fetch(repo):
     result = gh_gateway.run(["gh", "pr", "list", "-R", repo, "--state", "open",
-                             "--limit", str(LIMIT), "--json", FIELDS])
+                             "--limit", str(LIMIT), "--json", FIELDS],
+                            timeout=120, limit=gh_gateway.floor(), caller_name="inbox_poll")
     if result.returncode:
-        raise RuntimeError(result.stderr)
+        raise RuntimeError(f"gh pr list exit {result.returncode}")
     prs = json.loads(result.stdout)
-    if len(prs) == LIMIT:
-        print(f"{repo}: the limit of {LIMIT} open pull requests was reached; any beyond the"
-              " newest are not polled this pass, they were seen on an earlier pass",
-              file=sys.stderr)
+    if isinstance(prs, list) and len(prs) == LIMIT:
+        print(f"{repo}: {LIMIT} open pull requests returned; any beyond the newest {LIMIT}"
+              " are not polled this pass", file=sys.stderr)
     return prs
+
+
+def _int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and abs(value) < 2 ** 63
+
+
+def _valid(pr):
+    return (isinstance(pr, dict) and _int(pr.get("number")) and isinstance(pr.get("headRefOid"), str)
+            and isinstance(pr.get("createdAt"), str))
 
 
 def poll_prs(repos, fetch, *, now):
@@ -34,14 +44,20 @@ def poll_prs(repos, fetch, *, now):
     for repo in repos:
         try:
             prs = fetch(repo)
-        except Exception as exc:
-            print(f"{repo}: {exc}", file=sys.stderr)
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"{repo}: fetch failed: {type(exc).__name__}", file=sys.stderr)
+            continue
+        if not isinstance(prs, list):
+            print(f"{repo}: fetch returned {type(prs).__name__}, not a list", file=sys.stderr)
             continue
         for pr in prs:
+            if not _valid(pr):
+                print(f"{repo}: skipped a malformed pull request", file=sys.stderr)
+                continue
             try:
                 total += _poll_pr(repo, pr, now)
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
-                print(f"{repo} {pr!r}: {exc}", file=sys.stderr)
+                print(f"{repo}#{pr['number']}: skipped: {type(exc).__name__}", file=sys.stderr)
     return total
 
 
@@ -85,8 +101,11 @@ def _poll_pr(repo, pr, now):
                 count += row("human_signal", signal, now,
                              {"verified": False, "label": HUMAN_LABEL})
         for review in pr.get("reviews") or []:
+            if not isinstance(review, dict):
+                continue
             rid, state = review.get("id"), review.get("state")
-            if not rid or state == "PENDING" or not review.get("submittedAt"):
+            if not isinstance(rid, str) or not rid or state == "PENDING" \
+                    or not isinstance(review.get("submittedAt"), str):
                 continue
             reviewed = _epoch(review["submittedAt"])
             keys = (f"pr_review:{repo}#{number}:{rid}", f"human_signal:{repo}#{number}:{rid}")
