@@ -1,23 +1,33 @@
 # MO-933 runs
 
+Code commit: 5421f6285351d6a4264ee2d1aa1a66a688bc7c26. The ticket's "first multiple of its period after now" is read as multiples counted from due_ts, so the next due time is strictly after now and stays on the timer's own grid.
+
+Proof command is the ticket's, run as a file (same statements). Case that fails on main and passes on the branch: the `inbox` eval of coordinator/overnight/selftest.py.
+
 ## origin/main (b9954b96) with the new selftest
 ```
-$ proof command
-  File "<string>", line 1, in <module>
+$ proof
+    import os,sys,tempfile;os.environ['COORD_INBOX_DIR']=tempfile.mkdtemp();sys.path.insert(0,'coordinator/bin');import inbox;inbox.add_timer('t1',due_ts=100.0,period=50.0);assert inbox.enqueue_due_ti
 AttributeError: module 'inbox' has no attribute 'add_timer'
-exit (see output)
-$ inbox eval
-  File "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.wPn7vxgOqF/coordinator/overnight/selftest.py", line 4516, in timer_cases
+exit 1
+$ eval
     store.add_timer("t1", due_ts=100.0, period=50.0)
 AttributeError: module 'inbox' has no attribute 'add_timer'
-exit (see output)
+exit 1
 ```
 
-## branch
+## branch at the code commit
 ```
-$ proof command
-exit (see output)
-$ inbox eval
+$ proof
+
+exit 0
+$ eval
 inbox ok
-exit (see output)
+exit 0
+```
+
+## Fast check (M1)
+```
+Checked commit: `5421f6285351d6a4264ee2d1aa1a66a688bc7c26`
+Run result: passed
 ```
