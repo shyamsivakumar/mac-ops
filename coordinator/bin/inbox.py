@@ -221,6 +221,8 @@ def _last_run(conn):
 def add_timer(id, *, due_ts, period=None, payload=None):
     if period is not None and period <= 0:
         raise ValueError(period)
+    if payload is not None and not isinstance(payload, dict):
+        raise TypeError("timer payload must be a dict")
     with txn() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO timers (id, due_ts, period, payload) VALUES (?,?,?,?)",
@@ -270,13 +272,13 @@ def enqueue_due_timers(*, now):
                 f"timer_due:{timer}:{due_ts}",
                 source="timer",
                 ts=now,
-                payload={"timer": timer, **extra},
+                payload={**extra, "timer": timer},
             ):
                 count += 1
             if period:
                 conn.execute(
                     "UPDATE timers SET due_ts=? WHERE id=?",
-                    ((now // period + 1) * period, timer),
+                    (due_ts + ((now - due_ts) // period + 1) * period, timer),
                 )
             else:
                 conn.execute("DELETE FROM timers WHERE id=?", (timer,))
