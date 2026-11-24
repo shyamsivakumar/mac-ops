@@ -2410,8 +2410,10 @@ def decisions_board_guard():
 
     repo = "shyamsivakumar/mac-ops"
     settled = [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (602, 623, 625, 627)]
-    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544"]
-    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702"]
+    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544",
+                "recut-MO-868", "proof-MO-882", "herdr-build-MO-890"]
+    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702",
+            "recut-MO-700", "proof-MO-901", "herdr-build-MO-700"]
     # The close-failed title is the one `close_failed_item` writes, and it
     # names the ticket the close was for.
     def close_failed_title(pr, ticket):
@@ -2422,7 +2424,7 @@ def decisions_board_guard():
     open_card = cards[len(settled) + 1]
     open_card["title"] = close_failed_title(702, 701)
     snapshot = {"repos": {repo: {"prs": [{"number": 700}]}}}
-    closed_prs = {602, 623, 625, 627, 544}
+    closed_prs = {602, 623, 625, 627, 544, 868, 882, 890}
     closed_tickets = {660}
 
     def read(cmd, timeout=150):
@@ -2447,7 +2449,7 @@ def decisions_board_guard():
                 patch.object(lane, "withdraw_decision", withdraw):
             return lane.reconcile_prompt_items(snapshot)
 
-    # The five cards this ticket names are withdrawn, and the prompt-merge
+    # The settled cards this ticket names are withdrawn, and the prompt-merge
     # card is still withdrawn. The open pull request and the open ticket keep
     # their cards.
     exact(reconcile(), len(settled))
