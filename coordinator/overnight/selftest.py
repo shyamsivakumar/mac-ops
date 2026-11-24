@@ -4470,7 +4470,9 @@ def closed_ticket_merge():
 
 
 def inbox():
+    import functools
     import inbox as store
+    import sqlite3
 
     with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-inbox-")}):
         dead, base = 4194303, dict(source="journal", ts=1.0)
@@ -4528,6 +4530,31 @@ def inbox():
             store.claim("coordinator", worker="d", now=3000.0, lease=10, pid=1)
             exact(store.reap(now=3020.0), 0)
         exact(store.reap(now=3000.0 + 3611.0), 1)
+        future = tempfile.mkdtemp(prefix="selftest-inbox-v2-")
+        raw = sqlite3.connect(os.path.join(future, "inbox.db"))
+        raw.execute("PRAGMA user_version=2")
+        raw.close()
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": future}):
+            try:
+                store.connect()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("a newer schema was opened")
+            raw = sqlite3.connect(os.path.join(future, "inbox.db"))
+            exact(raw.execute("PRAGMA user_version").fetchone()[0], 2)
+            raw.close()
+        holder = sqlite3.connect(os.path.join(os.environ["COORD_INBOX_DIR"], "inbox.db"), isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        quick = functools.partial(sqlite3.connect, timeout=0.1)
+        with patch.object(store.sqlite3, "connect", quick):
+            try:
+                store.enqueue("recut", "recut:locked", **base)
+            except sqlite3.OperationalError as error:
+                exact("locked" in str(error), True)
+            else:
+                raise AssertionError("a locked begin did not raise")
+        holder.close()
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
