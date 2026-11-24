@@ -348,7 +348,7 @@ def item_scope(body, files, evidence="", error=""):
     evidence of this ticket, never another ticket's.
     """
     if error:
-        return {"item": "scope", "status": FAIL, "required": True,
+        return {"item": "scope", "status": FAIL, "required": True, "unknown": True,
                 "detail": ("the files of the pull request were not read to the end, so the scope "
                            f"cannot be judged: {error}")}
     permission, exclusion = scope_texts(body)
@@ -391,7 +391,7 @@ def item_proof(state, path, detail=""):
     if state == proof_file.MISSING:
         return {"item": "proof file", "status": FAIL, "required": True,
                 "detail": detail or f"the pull request carries no proof file at {path}"}
-    return {"item": "proof file", "status": FAIL, "required": True,
+    return {"item": "proof file", "status": FAIL, "required": True, "unknown": True,
             "detail": f"the proof file at {path} could not be read, so the checks are unproven"}
 
 
@@ -709,11 +709,13 @@ def run_check(repo, pr, issue=None, reader=None, status_reader=None):
         statuses = (status_reader or fetch_statuses)(repo, head) if repo == SRW_REPO else []
         repo_items = (item_agent_check(repo, head, pull.get("body"), statuses),
                       item_checks_skipped(repo))
+    proof_unknown = False
     if state == proof_file.FOUND and not changed_proof(files, proof_path):
         # The file is on the base branch: it is an earlier run's proof.
         state, text = proof_file.MISSING, None
         proof_detail = (f"the proof file at {proof_path} is not part of this change: the pull "
                         "request does not change it, so it is an earlier run's proof")
+        proof_unknown = bool(files_error)
     if reader is None:
         report, report_detail = report_state(repo, merge)
     else:
@@ -722,6 +724,10 @@ def run_check(repo, pr, issue=None, reader=None, status_reader=None):
         report_detail = ""
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
                       report_detail, proof_detail, scope_files, files_error, repo_items)
+    if proof_unknown:
+        for item in items:
+            if item["item"] == "proof file":
+                item["unknown"] = True
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 

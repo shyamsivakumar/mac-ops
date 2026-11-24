@@ -4421,6 +4421,79 @@ def close_evidence():
     exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {'b' * 40}")["proof file"]["status"], "fail")
     exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
 
+    coordq = load_coordq()
+    recorded = (
+        (911, "In: `coordinator/bin/hourly_selftest.py`", ["coordinator/bin/hourly_selftest.py", "coordinator/overnight/selftest.py"], True),
+        (917, "In: `scripts/coord_wake_metrics.py` and `evidence/event-inbox-design/tickets/fixtures/`", ["scripts/coord_wake_metrics.py", "coordinator/overnight/selftest.py"], True),
+        (928, "In: `runtime/agents/deny-rules.json`, `runtime/agents/deny-merge-guard.py`, `tests/test_install_deny_rules.py`", ["runtime/agents/deny-rules.json", "runtime/pi/AGENTS.md"], True),
+        (918, "In: `coordinator/overnight/lane_driver.py`, `coordinator/overnight/selftest.py`", ["coordinator/overnight/lane_driver.py", "coordinator/overnight/selftest.py"], False),
+        (923, "In: `coordinator/overnight/overnight`, `coordinator/overnight/selftest.py`", ["coordinator/overnight/overnight", "coordinator/overnight/selftest.py"], False),
+        (926, "In: `coordinator/overnight/selftest.py`, an existing module in `tests/`", ["coordinator/overnight/selftest.py", "tests/test_coordq_message_dedupe.py"], False),
+        (927, "In: `coordinator/config/AGENT-RULES.md`", ["coordinator/config/AGENT-RULES.md"], False),
+    )
+    for issue, scope, files, refused in recorded:
+        items = [check.item_scope(scope, files + [f"evidence/MO-{issue}/runs.md"], f"evidence/MO-{issue}")]
+        exact((issue, bool(coordq.scope_refusal(items))), (issue, refused))
+    exact(coordq.scope_refusal([check.item_scope("In: a.py", ["a.py"], "", "502")]), [])
+
+    state = {"scope": recorded[0][1], "runs": 0, "raises": None, "merge": None, "head": "", "removal": "wrote"}
+    board = []
+
+    def run_check(repo, pr, issue):
+        state["runs"] += 1
+        if state["raises"]:
+            raise state["raises"]
+        files = list(recorded[0][2])
+        return {"merge": state["merge"] or state["head"], "files": files,
+                "items": [check.item_scope(state["scope"], files, "evidence/MO-911")]}
+
+    def route_update(board_path, card, action, item=None):
+        board.append((card, action))
+        return state["removal"] if action == "remove" else "wrote"
+
+    def gate(head, dry=False):
+        state["head"] = head
+        event = {"pr": "r/x#7", "issue": 911, "head": head}
+        return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", dry)
+
+    with tempfile.TemporaryDirectory() as scratch, \
+         patch.object(coordq, "DIR", scratch), \
+         patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
+         patch.object(coordq, "gh_json", lambda endpoint: {"body": state["scope"]}), \
+         patch.object(coordq.close_check, "run_check", run_check), \
+         patch.object(coordq.alarms, "route_update", route_update):
+        exact((gate("a" * 8), gate("a" * 8), state["runs"], board), (False, False, 1, [("proof-MO-7", "raise")]))
+        state["scope"] = recorded[0][1] + ", `coordinator/overnight/selftest.py`"
+        state["removal"] = "failed"
+        exact((gate("a" * 8), state["runs"], board[-1]), (False, 2, ("proof-MO-7", "remove")))
+        exact((gate("a" * 8), gate("a" * 8)), (False, False))
+        state["removal"] = "wrote"
+        exact((gate("a" * 8), board[-2:]), (True, [("proof-MO-7", "remove")] * 2))
+        board.clear()
+        exact((gate("a" * 8), board), (True, []))
+        for raised in (RuntimeError("gh api failed: HTTP 502"), subprocess.TimeoutExpired("gh", 60), ValueError("bad JSON")):
+            state["raises"], state["runs"] = raised, 0
+            head = type(raised).__name__[:8].ljust(8, "x")
+            exact(([gate(head, True)] + [gate(head) for _ in range(4)], state["runs"]), ([True, False, False, True, True], 3))
+        before = coordq.load()
+        with patch.object(coordq, "gh_json", side_effect=RuntimeError("HTTP 502")):
+            exact((gate("g" * 8, True), coordq.load()), (True, before))
+        with patch.object(coordq, "gh_json", side_effect=coordq.gh_gateway.ApiBudgetExhausted("below the floor")):
+            try:
+                gate("h" * 8)
+            except coordq.gh_gateway.ApiBudgetExhausted:
+                pass
+            else:
+                raise AssertionError("the budget stop was swallowed")
+        state["raises"], state["merge"] = None, "d" * 8
+        wrong = "gate:r/x#7:" + "e" * 8
+        exact((gate("e" * 8), wrong in coordq.load().get("scopeHeads", {}), wrong in coordq.load().get("scopeFetch", {})), (False, False, False))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["gatedHeads"] = {"gate:r/x#7:" + "f" * 8: {}}
+            coordq.save(queue)
+        exact(gate("f" * 8), True)
+
 
 def provider_until():
     """A provider block ends by a successful probe, never by its time, and an unknown model is dropped."""
