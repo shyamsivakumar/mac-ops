@@ -2059,6 +2059,14 @@ def watchdog_signal(name, minutes, label, age, state):
     return "launchd", None
 
 
+def inbox_liveness():
+    try:
+        import inbox_worker
+        return inbox_worker.watch(now=time.time())
+    except Exception as exc:
+        return f"inbox liveness check failed ({type(exc).__name__})"
+
+
 def watchdog():
     import datetime as dt
     stale = []
@@ -2079,6 +2087,10 @@ def watchdog():
               + (f" alarm={alarm}" if alarm else ""))
         if alarm:
             stale.append(alarm)
+    inbox_alarm = inbox_liveness()
+    if inbox_alarm:
+        print(f"WATCH inbox-worker: alarm={inbox_alarm}")
+        stale.append(inbox_alarm)
     p = DECISIONS_PATH
     if stale:
         cause = "; ".join(stale)
