@@ -4546,6 +4546,74 @@ def timer_cases():
         exact([store.enqueue_due_timers(now=719990.0), store.enqueue_due_timers(now=719990.0 + 7199), store.enqueue_due_timers(now=719990.0 + 7200)], [1, 0, 1])
 
 
+def inbox_poll_cases():
+    import inbox as store
+    import inbox_poll as poll
+
+    def scratch():
+        return patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-poll-")})
+
+    def pr(number, **extra):
+        base = dict(number=number, headRefOid="a" * 40, isDraft=False,
+                    createdAt="2026-11-22T17:18:16Z", labels=[], reviews=[])
+        return dict(base, **extra)
+
+    def payloads(kind):
+        with store.txn() as conn:
+            return [json.loads(r[0]) for r in conn.execute(
+                "SELECT payload FROM inbox WHERE kind=? ORDER BY id", (kind,))]
+
+    prs = [pr(1), pr(2, labels=None, reviews=None)]
+    with scratch():
+        exact([poll.poll_prs(["o/r"], lambda repo: prs, now=10.0),
+               poll.poll_prs(["o/r"], lambda repo: prs, now=11.0)], [2, 0])
+    prs = [pr(1), pr(2)]
+    with scratch():
+        poll.poll_prs(["o/r"], lambda repo: prs, now=10.0)
+        prs[1]["headRefOid"] = "b" * 40
+        prs[0]["labels"] = [{"name": "merge:human-ok"}, {"name": "merge:human-ok"}]
+        exact(poll.poll_prs(["o/r"], lambda repo: prs, now=11.0), 2)
+        exact(payloads("human_signal"), [{"verified": False, "label": "merge:human-ok"}])
+    prs = [pr(1, reviews=[{"id": "R1", "author": None, "state": "APPROVED",
+                           "submittedAt": "2026-11-22T17:18:16Z"},
+                          {"id": "R2", "state": "PENDING"}])]
+    with scratch():
+        exact(poll.poll_prs(["o/r"], lambda repo: prs, now=10.0), 3)
+        exact(payloads("pr_review"), [{"review": "R1", "state": "APPROVED"}])
+        exact(payloads("human_signal"), [{"verified": False, "review": "R1"}])
+    prs = [pr(1, labels=[{"name": "bug"}])]
+    with scratch():
+        exact(poll.poll_prs(["o/r"], lambda repo: prs, now=10.0), 1)
+        exact(payloads("human_signal"), [])
+    prs = [pr(1), {"headRefOid": "a" * 40, "createdAt": "2026-11-22T17:18:16Z"}]
+
+    def fetch(repo):
+        if repo == "bad/x":
+            raise RuntimeError("unreadable")
+        return prs
+
+    with scratch():
+        exact(poll.poll_prs(["bad/x", "o/r"], fetch, now=10.0), 1)
+    prs = [pr(1)]
+    with scratch():
+        with store.txn() as conn:
+            conn.execute("INSERT INTO meta (k, v) VALUES (?,?)",
+                         ("activated_at", str(poll._epoch("2026-11-23T00:00:00Z"))))
+        exact(poll.poll_prs(["o/r"], lambda repo: prs, now=10.0), 0)
+        prs[0]["headRefOid"] = "b" * 40
+        exact(poll.poll_prs(["o/r"], lambda repo: prs, now=11.0), 1)
+        exact([r[0] for r in store.connect().execute("SELECT kind FROM inbox")], ["pr_new_head"])
+    tried = []
+
+    def raising(repo):
+        tried.append(repo)
+        raise RuntimeError("never")
+
+    with patch.dict(os.environ, {"COORD_INBOX_REPOS": ""}):
+        exact(poll.poll_prs(poll.configured_repos(), raising, now=1.0), 0)
+    exact(tried, [])
+
+
 def outbox_cases():
     import inbox as store
     import inbox_outbox as out
@@ -4762,6 +4830,7 @@ def inbox():
         exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
     outbox_cases()
     timer_cases()
+    inbox_poll_cases()
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
