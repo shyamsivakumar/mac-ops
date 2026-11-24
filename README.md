@@ -331,6 +331,18 @@ this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
 
+The `dev.coordinator.inbox` job (mac-ops #964) runs one shadow pass of the
+event inbox worker (`inbox_worker.py`) every 60 seconds, for the shadow week.
+Each pass replays the journal into the inbox database and, when a batch is
+due, writes one `inbox_would_wake` journal row. It sends nothing, calls no
+model and makes no `gh` call: the job sets `COORD_INBOX_SHADOW=1`, names no
+repository and has no journal hook, and the worker refuses to run (exit 2)
+when shadow mode is off. It logs a line only when a batch ran or a pass
+failed, to `~/Library/Logs/coordinator/inbox.log`. To stop it, run
+`launchctl bootout gui/$(id -u)/dev.coordinator.inbox` and remove
+`coordinator/launchd/dev.coordinator.inbox.plist` from the repo, so the
+installer does not write it again.
+
 The `dev.coordinator.tick` job runs again (MO-250, mac-ops #267): it fires
 the tick every 30 minutes, on DeepSeek, and the installer leaves it alone
 (the retired set is empty). The tick reads the whole board but starts no
