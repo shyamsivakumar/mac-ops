@@ -4617,6 +4617,48 @@ def inbox():
         lines, err = run_hook(held, emits[:1], wait=0.3)
         lock.close()
         exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
+        metrics = tempfile.mkdtemp(prefix="selftest-metrics-")
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": metrics}):
+            store.enqueue("pr_opened", "pr_opened:a#5", repo="shyamsivakumar/mac-ops", pr=5, **base)
+            store.enqueue("pr_opened", "pr_opened:b#6", repo="other/repo", pr=6, **base)
+            store.enqueue("recut", "recut:5", pr=5, **base)
+            rows = store.claim("coordinator", worker="m", now=2.0, pid=os.getpid())
+            store.ack(rows[:1], now=3.0)
+            conn = store.connect()
+            conn.execute("INSERT INTO outbox(ts, run_id, kind, sent_ts) VALUES (1.0, ?, 'send', 601.0)", (rows[0]["run_id"],))
+            conn.close()
+        github = os.path.join(metrics, "prs.json")
+        json.dump([{"number": 5, "createdAt": "2026-11-23T15:00:00Z"}, {"number": 6, "createdAt": "2026-11-23T15:00:00Z"}], open(github, "w"))
+        many = os.path.join(metrics, "many.json")
+        json.dump([{"number": n, "createdAt": "2026-11-23T15:00:00Z"} for n in range(1000)], open(many, "w"))
+        fixtures = ROOT.parent.parent / "evidence/event-inbox-design/tickets/fixtures"
+        spec = importlib.util.spec_from_file_location("coord_wake_metrics", ROOT.parent.parent / "scripts/coord_wake_metrics.py")
+        wake_metrics = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake_metrics)
+        reports = []
+        for prs in (github, many):
+            out = io.StringIO()
+            with patch.dict(os.environ, {"HOME": "/nonexistent"}), contextlib.redirect_stdout(out):
+                wake_metrics.main(["--json", "--inbox-dir", metrics, "--github-prs", prs,
+                                   "--journal", str(fixtures / "journal-sample.jsonl"), "--launcher-log", str(fixtures / "launcher-sample.log")])
+            reports.append(json.loads(out.getvalue()))
+        report, capped = reports
+        exact((report["buckets"]["skipped"], report["buckets"]["lock_skipped"]), (1, 1))
+        exact((capped["lost"]["never_enqueued"], capped["lost"]["never_enqueued_truncated"]), (None, True))
+        exact((report["runs"], report["duplicate_rate"]["journal"]), (6, 0.333))
+        exact((report["volume"]["inbox"], report["latency"]["inbox_min"]["batch"]["median"]), ({"pr_opened/batch": 2, "recut/wake": 1}, 10.0))
+        exact((report["lost"]["stuck"], report["lost"]["never_enqueued"]), (2, [6]))
+        exact(sqlite3.connect(os.path.join(metrics, "inbox.db")).execute("SELECT COUNT(*) FROM inbox").fetchone()[0], 3)
+        conn = sqlite3.connect(os.path.join(metrics, "inbox.db"))
+        conn.execute("INSERT INTO inbox(ts, kind, status, repo, pr, tier, done_ts) VALUES (1795459920.0, 'pr_review', 'pending', 'shyamsivakumar/mac-ops', 7, 'batch', NULL), (1795459920.0, 'pr_review', 'done', 'shyamsivakumar/mac-ops', 8, 'batch', 1795470000.0)")
+        conn.commit()
+        conn.close()
+        out = io.StringIO()
+        with patch.dict(os.environ, {"HOME": "/nonexistent"}), contextlib.redirect_stdout(out):
+            wake_metrics.main(["--json", "--inbox-dir", metrics, "--since", "2026-11-23T15:40:00Z",
+                               "--until", "2026-11-23T21:06:00Z", "--journal", str(fixtures / "journal-sample.jsonl"),
+                               "--launcher-log", str(fixtures / "launcher-sample.log")])
+        exact(json.loads(out.getvalue())["lost"]["stuck"], 2)
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
