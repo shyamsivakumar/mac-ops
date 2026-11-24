@@ -2585,6 +2585,95 @@ def send_integrity():
         else:
             exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
 
+    coordq = load_coordq()
+    from argparse import Namespace
+    old, new = "a" * 40, "b" * 40
+
+    def queued(item_id, title, thread="t1", key=None):
+        item = {"id": item_id, "messageTitle": title, "args": {"threadId": thread}}
+        if key:
+            item["actionKey"] = key
+        return item
+
+    started = [{"id": 9, "title": f"SRW#7 check {old}", "target": "t1"}]
+
+    def older_heads(items, keys, title, below=None, reserved=None):
+        queue = {"items": list(items), "started": started, "reserved": reserved or {},
+                 "actionKeys": {key: {"id": 1, "state": "queued"} for key in keys}}
+        dropped = coordq.drop_older_heads(queue, title, below)
+        exact(queue["started"], started)
+        return dropped, [item["id"] for item in queue["items"]], sorted(queue["actionKeys"])
+
+    items = [queued(1, f"SRW#7 check {old}", key="k1"), queued(2, f"SRW#7 gate findings {old}"),
+             queued(3, f"SRW#7 continue {new}", thread="t2"), queued(4, f"SRW#8 check {old}"),
+             queued(5, f"SRW#7 check {old}", thread="t2"), queued(6, f"gate:SRW#7:{old}"),
+             queued(7, f"SRW#7 check {old}")]
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}"), (4, [3, 4, 6], []))
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}", 7), (3, [3, 4, 6, 7], []))
+    exact(older_heads(items, [], f"SRW#7 continue {new}", reserved={"2": 1, "7:send": 1}),
+          (2, [2, 3, 4, 6, 7], []))
+    exact(older_heads(items, [], f"SRW#7 continue {old}")[0], 1)
+    for other in ("SRW#7 continue", f"SRW#7 retry {new}", f"SRW#7 continue {new[:39]}", f"gate:SRW#7:{new}", ""):
+        exact(older_heads(items, [], other)[0], 0)
+
+    repos = {"repos": {"o/one": {"key": "SRW"}, "o/two": {"key": "MO"}, "o/three": {"key": "MO"}}}
+
+    def read_head(config, run):
+        with tempfile.TemporaryDirectory() as scratch:
+            file = Path(scratch, "tickets.json")
+            file.write_text(config if isinstance(config, str) else json.dumps(config))
+            with patch.object(coordq, "TICKETS_CONFIG", str(file)), \
+                 patch.object(coordq.gh_gateway, "run", side_effect=run) as gh:
+                return coordq.current_head(f"SRW#7 check {old}"), gh.call_args_list
+
+    def answer(stdout, code=0):
+        return lambda *args, **kwargs: subprocess.CompletedProcess(args[0], code, stdout, "")
+
+    def raising(error):
+        def run(*args, **kwargs):
+            raise error
+        return run
+
+    failures = (answer("not json"), answer("{}"), answer("", 1), raising(subprocess.TimeoutExpired("gh", 40)),
+                raising(OSError("gh missing")), raising(coordq.gh_gateway.ApiBudgetExhausted("budget")))
+
+    head, calls = read_head(repos, answer(json.dumps({"head": {"sha": new}})))
+    exact(head, new)
+    exact([(c.args, c.kwargs) for c in calls], [((["gh", "api", "repos/o/one/pulls/7"],), {"timeout": 40, "fresh": True})])
+    for bad in failures:
+        exact(read_head(repos, bad)[0], None)
+    exact(read_head("{broken", answer("{}"))[0], None)
+    exact(read_head({"repos": {"o/one": {"key": "X"}}}, answer("{}")), (None, []))
+    exact(read_head({"repos": {"o/one": {"key": "SRW"}, "o/two": {"key": "SRW"}}}, answer("{}")), (None, []))
+
+    def start(runner, key=None, thread="t1", head=new, queued_items=items):
+        args = json.dumps({"threadId": thread, "message": "m"})
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch, "COORD_JOURNAL_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), patch.object(coordq, "drain"), \
+             patch.object(coordq, "TICKETS_CONFIG", str(Path(scratch, "tickets.json"))), \
+             patch.object(coordq.gh_gateway, "run", side_effect=runner) as gh, \
+             patch.object(coordq, "flush_provider_blocks"), contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "tickets.json").write_text(json.dumps(repos))
+            coordq.save({"next": 8, "items": [dict(item) for item in queued_items],
+                         "actionKeys": {"k1": {"id": 1, "state": "queued"}}})
+            try:
+                coordq.cmd_start(Namespace(args=args, tool="t3_thread_send", title=f"SRW#7 continue {head}",
+                                           priority=800, action_key=key))
+            except SystemExit:
+                pass
+            return [item["id"] for item in coordq.load()["items"]], gh.call_count
+
+    current = answer(json.dumps({"head": {"sha": new}}))
+    exact(start(current), ([3, 4, 6, 8], 1))
+    exact(start(current, thread="t3"), ([3, 4, 6, 8], 1))
+    exact(start(current, head=old), (list(range(1, 9)), 1))
+    exact(start(answer(json.dumps({"head": {"sha": old}}))), (list(range(1, 9)), 1))
+    exact(start(current, key="k1"), (list(range(1, 8)), 1))
+    exact(start(current, queued_items=items[2:4]), ([3, 4, 8], 0))
+    for broken in failures:
+        exact(start(broken), (list(range(1, 9)), 1))
+
 
 def build_here():
     import lane_driver as lane
@@ -4331,6 +4420,79 @@ def close_evidence():
     exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {head}")["proof file"]["status"], "pass")
     exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {'b' * 40}")["proof file"]["status"], "fail")
     exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
+
+    coordq = load_coordq()
+    recorded = (
+        (911, "In: `coordinator/bin/hourly_selftest.py`", ["coordinator/bin/hourly_selftest.py", "coordinator/overnight/selftest.py"], True),
+        (917, "In: `scripts/coord_wake_metrics.py` and `evidence/event-inbox-design/tickets/fixtures/`", ["scripts/coord_wake_metrics.py", "coordinator/overnight/selftest.py"], True),
+        (928, "In: `runtime/agents/deny-rules.json`, `runtime/agents/deny-merge-guard.py`, `tests/test_install_deny_rules.py`", ["runtime/agents/deny-rules.json", "runtime/pi/AGENTS.md"], True),
+        (918, "In: `coordinator/overnight/lane_driver.py`, `coordinator/overnight/selftest.py`", ["coordinator/overnight/lane_driver.py", "coordinator/overnight/selftest.py"], False),
+        (923, "In: `coordinator/overnight/overnight`, `coordinator/overnight/selftest.py`", ["coordinator/overnight/overnight", "coordinator/overnight/selftest.py"], False),
+        (926, "In: `coordinator/overnight/selftest.py`, an existing module in `tests/`", ["coordinator/overnight/selftest.py", "tests/test_coordq_message_dedupe.py"], False),
+        (927, "In: `coordinator/config/AGENT-RULES.md`", ["coordinator/config/AGENT-RULES.md"], False),
+    )
+    for issue, scope, files, refused in recorded:
+        items = [check.item_scope(scope, files + [f"evidence/MO-{issue}/runs.md"], f"evidence/MO-{issue}")]
+        exact((issue, bool(coordq.scope_refusal(items))), (issue, refused))
+    exact(coordq.scope_refusal([check.item_scope("In: a.py", ["a.py"], "", "502")]), [])
+
+    state = {"scope": recorded[0][1], "runs": 0, "raises": None, "merge": None, "head": "", "removal": "wrote"}
+    board = []
+
+    def run_check(repo, pr, issue):
+        state["runs"] += 1
+        if state["raises"]:
+            raise state["raises"]
+        files = list(recorded[0][2])
+        return {"merge": state["merge"] or state["head"], "files": files,
+                "items": [check.item_scope(state["scope"], files, "evidence/MO-911")]}
+
+    def route_update(board_path, card, action, item=None):
+        board.append((card, action))
+        return state["removal"] if action == "remove" else "wrote"
+
+    def gate(head, dry=False):
+        state["head"] = head
+        event = {"pr": "r/x#7", "issue": 911, "head": head}
+        return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", dry)
+
+    with tempfile.TemporaryDirectory() as scratch, \
+         patch.object(coordq, "DIR", scratch), \
+         patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
+         patch.object(coordq, "gh_json", lambda endpoint: {"body": state["scope"]}), \
+         patch.object(coordq.close_check, "run_check", run_check), \
+         patch.object(coordq.alarms, "route_update", route_update):
+        exact((gate("a" * 8), gate("a" * 8), state["runs"], board), (False, False, 1, [("proof-MO-7", "raise")]))
+        state["scope"] = recorded[0][1] + ", `coordinator/overnight/selftest.py`"
+        state["removal"] = "failed"
+        exact((gate("a" * 8), state["runs"], board[-1]), (False, 2, ("proof-MO-7", "remove")))
+        exact((gate("a" * 8), gate("a" * 8)), (False, False))
+        state["removal"] = "wrote"
+        exact((gate("a" * 8), board[-2:]), (True, [("proof-MO-7", "remove")] * 2))
+        board.clear()
+        exact((gate("a" * 8), board), (True, []))
+        for raised in (RuntimeError("gh api failed: HTTP 502"), subprocess.TimeoutExpired("gh", 60), ValueError("bad JSON")):
+            state["raises"], state["runs"] = raised, 0
+            head = type(raised).__name__[:8].ljust(8, "x")
+            exact(([gate(head, True)] + [gate(head) for _ in range(4)], state["runs"]), ([True, False, False, True, True], 3))
+        before = coordq.load()
+        with patch.object(coordq, "gh_json", side_effect=RuntimeError("HTTP 502")):
+            exact((gate("g" * 8, True), coordq.load()), (True, before))
+        with patch.object(coordq, "gh_json", side_effect=coordq.gh_gateway.ApiBudgetExhausted("below the floor")):
+            try:
+                gate("h" * 8)
+            except coordq.gh_gateway.ApiBudgetExhausted:
+                pass
+            else:
+                raise AssertionError("the budget stop was swallowed")
+        state["raises"], state["merge"] = None, "d" * 8
+        wrong = "gate:r/x#7:" + "e" * 8
+        exact((gate("e" * 8), wrong in coordq.load().get("scopeHeads", {}), wrong in coordq.load().get("scopeFetch", {})), (False, False, False))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["gatedHeads"] = {"gate:r/x#7:" + "f" * 8: {}}
+            coordq.save(queue)
+        exact(gate("f" * 8), True)
 
 
 def provider_until():
