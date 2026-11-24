@@ -61,6 +61,61 @@ def poll_prs(repos, fetch, *, now):
     return total
 
 
+CI_CONTEXTS = "srw/agent-check"
+
+
+def ci_contexts():
+    raw = os.environ.get("COORD_INBOX_CI_CONTEXTS") or CI_CONTEXTS
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def fetch_status(repo):
+    result = gh_gateway.run(["gh", "api", f"repos/{repo}/commits/HEAD/status"],
+                            timeout=120, limit=gh_gateway.floor(), caller_name="inbox_poll")
+    if result.returncode:
+        raise RuntimeError(f"gh api exit {result.returncode}")
+    data = json.loads(result.stdout)
+    if not isinstance(data, dict):
+        return data
+    return {"sha": data.get("sha"), "statuses": data.get("statuses")}
+
+
+def poll_ci(repos, fetch_status, *, now):
+    total = 0
+    for repo in repos:
+        try:
+            data = fetch_status(repo)
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"{repo}: fetch failed: {type(exc).__name__}", file=sys.stderr)
+            continue
+        if not isinstance(data, dict):
+            print(f"{repo}: fetch returned {type(data).__name__}, not a dict", file=sys.stderr)
+            continue
+        sha, statuses = data.get("sha"), data.get("statuses")
+        if not isinstance(sha, str) or not isinstance(statuses, list):
+            print(f"{repo}: skipped a malformed status reply", file=sys.stderr)
+            continue
+        contexts = ci_contexts()
+        found = False
+        with inbox.txn() as conn:
+            for status in statuses:
+                if not isinstance(status, dict):
+                    continue
+                context, state = status.get("context"), status.get("state")
+                if not isinstance(context, str) or context not in contexts:
+                    continue
+                found = True
+                if state not in ("failure", "error", "success"):
+                    continue
+                total += inbox._insert(conn, "ci_main", f"ci_main:{repo}:{sha}:{context}:{state}",
+                                       source="poll", ts=now, repo=repo, head=sha,
+                                       payload={"context": context, "state": state},
+                                       tier="wake" if state in ("failure", "error") else "batch")
+        if not found:
+            print(f"{repo}: no Mac-published status", file=sys.stderr)
+    return total
+
+
 def _mark(conn, key, ts):
     conn.execute("INSERT OR IGNORE INTO seen(key, ts) VALUES (?,?)", (key, ts))
 
