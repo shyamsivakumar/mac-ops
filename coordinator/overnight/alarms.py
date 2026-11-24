@@ -262,6 +262,16 @@ OWNER_IDS = re.compile(
     r"|lane-gate-rounds-shyamsivakumar-mac-ops-\d+|.+-MO-\d+")
 
 
+PRODUCER_OWNED = re.compile(
+    r"lane-gate-rounds-.+|prompt-merge-.+|lane-close-failed-.+|lane-merged-unreviewed-.+"
+    r"|merge-pass-stuck-.+|factory-watchdog|factory-zero-merge"
+    r"|factory-overnight-stall|recut-.+|proof-.+|overnight-selftest")
+
+
+def producer_owned(alarm_id):
+    return PRODUCER_OWNED.fullmatch(str(alarm_id)) is not None
+
+
 def board_for(decisions, alarm_id):
     """The board file an item id belongs to.
 
