@@ -5198,6 +5198,62 @@ def liveness_cases():
         lock.close()
         exact(w.watch(now=1000.0), None)
 
+    beatdir = tempfile.mkdtemp(prefix="selftest-liveness-beat-")
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": beatdir}):
+        failures = []
+
+        def hammer():
+            for n in range(150):
+                try:
+                    w.heartbeat(now=float(n))
+                except Exception as exc:
+                    failures.append(exc)
+
+        threads = [threading.Thread(target=hammer) for _ in range(2)]
+        began = time.monotonic()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        exact((failures, [n for n in os.listdir(beatdir) if n.endswith(".tmp")], time.monotonic() - began < 1), ([], [], True))
+        calls = []
+
+        def flaky(*, now):
+            calls.append(now)
+            if len(calls) == 1:
+                raise OSError("disk")
+
+        stop = threading.Event()
+        ticks = iter(range(10))
+        with patch.object(w, "heartbeat", flaky), contextlib.redirect_stderr(io.StringIO()):
+            thread = threading.Thread(target=w._beat, args=(stop, 0.02, lambda: next(ticks)), daemon=True)
+            thread.start()
+            time.sleep(0.2)
+            stop.set()
+            thread.join(1)
+        exact(len(calls) > 1, True)
+
+    seen_alarm = []
+    old = signal.signal(signal.SIGALRM, lambda signum, frame: seen_alarm.append(signum))
+    try:
+        w._on_alarm(signal.SIGALRM, None)
+        signal.raise_signal(signal.SIGALRM)
+        exact(seen_alarm, [signal.SIGALRM])
+    finally:
+        signal.signal(signal.SIGALRM, old)
+
+    import lane_driver as lane
+    unreadable = os.path.join(tempfile.mkdtemp(prefix="selftest-liveness-"), w.LOCK)
+    real_open = open
+
+    def denied(path, *args, **kwargs):
+        if str(path) == unreadable:
+            raise PermissionError(13, "denied")
+        return real_open(path, *args, **kwargs)
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": os.path.dirname(unreadable)}), patch("builtins.open", denied):
+        exact(lane.inbox_liveness(), "inbox liveness check failed (PermissionError)")
+
     def seed():
         store.enqueue("round_cap", "round_cap:o/r#1:x", source="journal", ts=0.0, repo="o/r", pr=1)
 
@@ -5231,6 +5287,17 @@ def liveness_cases():
         threading.Timer(0.1, probing.close).start()
         exact(w.shadow_pass(now=100.0, runner=runner, retry_delay=0.4, beat_seconds=0.05, clock=lambda: 555.0)["batches"], 1)
         exact(seen, [555.0])
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-liveness-"),
+                                 "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-liveness-j-")}):
+        seed()
+
+        def interrupted(conn, rows, now):
+            raise w.PassTimeout()
+
+        with patch.object(store, "_ack", interrupted):
+            exact(w.shadow_pass(now=100.0, runner=lambda lines: "NOTHING: x")["batches"], 0)
+        exact((state(), store.connect().execute("SELECT COUNT(*) FROM outbox").fetchone()[0]), ([("pending", 1)], 0))
 
 
 def inbox():
