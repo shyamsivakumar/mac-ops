@@ -75,10 +75,12 @@ SKIPPED = "skipped"
 SEGMENT = re.compile(r"(?i)\b(in|inside|out|out of scope|not in scope|excludes|except)\b\s*:")
 OUT_MARKERS = ("out", "out of scope", "not in scope", "excludes", "except")
 # A prohibition names a change it forbids: "must not change x", "do not
-# touch x", "without changing x". A phrase that merely forbids something
-# else, "never file follow-up issues", forbids no file and excludes nothing.
-PROHIBITION = re.compile(r"(?i)\b(?:must not|do not|never|without)\s+"
+# touch x". A phrase that merely forbids something else, "never file
+# follow-up issues", forbids no file and excludes nothing.
+PROHIBITION = re.compile(r"(?i)\b(?:must not|do not|never)\s+"
                           r"(?:change|changes|changing|touch|touches|touching|edit|edits|editing|include|includes)\b")
+WITHOUT_CLAUSE = re.compile(r"(?i)\bwithout\s+"
+                            r"(?:change|changes|changing|touch|touches|touching|edit|edits|editing|include|includes)\b")
 SENTENCE = re.compile(r";|\.\s")
 # A Markdown heading opens a section, and a section states its own intent.
 HEADING = re.compile(r"^[ \t]{0,3}(#{1,6})[ \t]*(.*)$")
@@ -113,6 +115,11 @@ def scope_texts(body):
             return kind
         if PROHIBITION.search(text):
             exclusion.append(text)
+            return kind
+        clause = None if kind == "exclusion" else WITHOUT_CLAUSE.search(text)
+        if clause:
+            record(text[:clause.start()], kind)
+            exclusion.append(text[clause.start():])
             return kind
         if kind == "exclusion":
             exclusion.append(text)
