@@ -4753,7 +4753,9 @@ def inbox_poll_cases():
         exact(poll.poll_ci(["o/r"], lambda repo: status, now=5.0), 1)
         exact(tiers(), ["batch", "wake", "wake"])
     good = {"sha": sha, "statuses": [{"context": "srw/agent-check", "state": "failure"}]}
-    replies = {"bad/x": RuntimeError("unreadable"), "n/a": None, "s/x": {"sha": 7, "statuses": []},
+    good_list = [{"context": "srw/agent-check", "state": "failure"}]
+    replies = {"bad/x": RuntimeError("unreadable"), "n/a": None, "s/x": {"sha": 7, "statuses": []}, "u/x": {"sha": "\ud800", "statuses": good_list},
+               "h/x": {"sha": "ABC", "statuses": good_list},
                "l/x": {"sha": sha, "statuses": "x"}, "w/x": {"sha": sha, "statuses": [
                    None, {"context": {}, "state": "failure"}, {"context": "srw/agent-check", "state": []}]},
                "o/r": good}
@@ -4766,6 +4768,10 @@ def inbox_poll_cases():
     with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
         exact(poll.poll_ci(list(replies), fetch_ci, now=1.0), 1)
     exact(("bad/x: fetch failed: RuntimeError" in err.getvalue(), "unreadable" in err.getvalue()), (True, False))
+    more = dict(good, total_count=31)
+    with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
+        exact(poll.poll_ci(["o/r"], lambda repo: more, now=1.0), 1)
+    exact(err.getvalue(), "o/r: 31 statuses, 1 returned; the rest are not polled\n")
     with scratch(), patch.dict(os.environ, {"COORD_INBOX_CI_CONTEXTS": " a/b, ,c/d "}):
         exact(sorted(poll.ci_contexts()), ["a/b", "c/d"])
     exact(sorted(poll.ci_contexts()), ["srw/agent-check"])
@@ -4775,14 +4781,14 @@ def inbox_poll_cases():
     calls.clear()
     answers = [(0, json.dumps(dict(good, extra="x")), ""), (1, "", "boom")]
     with patch.object(poll.gh_gateway, "run", gh):
-        exact(poll.fetch_status("o/r"), good)
+        exact(poll.fetch_status("o/r"), dict(good, total_count=None))
         try:
             poll.fetch_status("o/r")
         except RuntimeError:
             pass
         else:
             raise AssertionError("fetch_status accepted a failed read")
-    exact(calls[0][0], ["gh", "api", "repos/o/r/commits/HEAD/status"])
+    exact(calls[0][0], ["gh", "api", "repos/o/r/commits/HEAD/status?per_page=100"])
 
 
 def outbox_cases():
