@@ -63,3 +63,12 @@ Window 21 Nov to now (95 runs, the log has grown): failed 38, noop 43, alerts 14
 - Duplicate rate on the inbox side: T1 keeps no count of ignored inserts, so only the journal-side rate is reported.
 - Event to action latency from the inbox (outbox sent_ts): reported when the tables hold data; the selftest covers it with one row.
 - The GitHub reconciliation runs only with --reconcile-github or --github-prs FILE.
+
+## Review fixes (repo-scoped never_enqueued, truncation, lock skips)
+
+inbox eval with the new assertions, red on 5fa26488:
+```
+    exact((report["buckets"]["skipped"], report["buckets"]["lock_skipped"]), (1, 1))
+KeyError: 'lock_skipped'
+```
+green: PASS inbox; proof command exit 0 (fixture now also has one `skipped: another tick holds the lock` line)
