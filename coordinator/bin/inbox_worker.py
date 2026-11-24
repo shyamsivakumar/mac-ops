@@ -289,3 +289,22 @@ def watch(*, now):
     return liveness(now=now, lock_held=_lock_held(os.path.join(d, LOCK)),
                     heartbeat=_stamp(HEARTBEAT), last_pass_end=_stamp(PASS_END),
                     expect_passes=os.environ.get("COORD_INBOX_EXPECT_PASSES", "0") not in ("", "0"))
+
+
+def main(argv=None) -> int:
+    if not outbox.shadow_on():
+        print("inbox shadow pass skipped: shadow mode off", file=sys.stderr)
+        return 2
+    try:
+        result = shadow_pass(now=time.time())
+    except Exception as exc:
+        print(f"inbox shadow pass failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    batches, lines = result["batches"], result["lines"]
+    if batches:
+        print(f"inbox shadow pass: batches={batches} lines={lines}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

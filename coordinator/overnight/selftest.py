@@ -5740,6 +5740,31 @@ def inbox():
     inbox_poll_cases()
     worker_cases()
     liveness_cases()
+    main_cases()
+
+
+def main_cases():
+    import plistlib
+    import inbox_worker as w
+
+    inbox_dir = tempfile.mkdtemp(prefix="selftest-main-")
+    env = {"COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-main-journal-"),
+           "COORD_INBOX_DIR": inbox_dir, "COORD_INBOX_SHADOW": "1"}
+    with patch.dict(os.environ, env):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exact((w.main([]), out.getvalue()), (0, ""))
+        exact(os.path.exists(os.path.join(inbox_dir, "inbox.db")), True)
+        with patch.object(w, "shadow_pass", return_value={"batches": 1, "lines": 3}), contextlib.redirect_stdout(io.StringIO()) as out:
+            exact((w.main([]), out.getvalue()), (0, "inbox shadow pass: batches=1 lines=3\n"))
+        with patch.object(w, "shadow_pass", side_effect=RuntimeError("secret payload")), contextlib.redirect_stderr(io.StringIO()) as err:
+            exact((w.main([]), err.getvalue()), (1, "inbox shadow pass failed: RuntimeError\n"))
+    off = os.path.join(tempfile.mkdtemp(prefix="selftest-main-off-"), "x")
+    with patch.dict(os.environ, {**env, "COORD_INBOX_DIR": off, "COORD_INBOX_SHADOW": "0"}), contextlib.redirect_stderr(io.StringIO()):
+        exact((w.main([]), os.path.exists(off)), (2, False))
+    job = plistlib.loads((ROOT.parent / "launchd/dev.coordinator.inbox.plist").read_bytes())
+    exact((sorted(job["EnvironmentVariables"]), job["EnvironmentVariables"]["COORD_INBOX_SHADOW"], "KeepAlive" in job),
+          (["COORD_INBOX_SHADOW", "HOME", "PATH"], "1", False))
+    exact((job["StartInterval"], job["RunAtLoad"], job["ProgramArguments"][1].endswith("/.local/bin/inbox_worker.py")), (60, True, True))
 
 
 def worker_cases():
