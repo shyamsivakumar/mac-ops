@@ -1,0 +1,19 @@
+2026-11-23 10:00 EST | tick | overnight selftest: not-due
+2026-11-23 10:01 EST | tick | pi exited 1: 402: {"message":"Insufficient Balance (request_id: 00000000-0000-0000-0000-000000000000)","type":"insufficient_balance_error"}
+2026-11-23 10:01 EST | tick | exit=1 reply=(empty)
+ALARM: job dev.coordinator.tick last exit 1
+2026-11-23 10:30 EST | tick | overnight selftest: not-due
+2026-11-23 10:31 EST | tick | pi exited 1: 402: {"message":"Insufficient Balance (request_id: 00000000-0000-0000-0000-000000000000)","type":"insufficient_balance_error"}
+2026-11-23 10:31 EST | tick | exit=1 reply=(empty)
+ALARM: job dev.coordinator.tick last exit 1
+2026-11-23 11:00 EST | tick | overnight selftest: PASS
+2026-11-23 11:01 EST | tick | exit=0 reply=NOOP
+2026-11-23 11:30 EST | tick | overnight selftest: not-due
+2026-11-23 11:31 EST | tick | exit=0 reply=NOOP
+2026-11-23 12:00 EST | tick | skip: no wake-class journal event since 11:30 EST; full tick due by 13:30 EST
+2026-11-23 12:30 EST | tick | overnight selftest: not-due
+2026-11-23 12:31 EST | tick | exit=0 reply=NOOP
+2026-11-23 13:00 EST | tick | overnight selftest: PASS
+2026-11-23 13:01 EST | tick | alert sent to t56: ALERT: recut for mac-ops#902
+2026-11-23 13:02 EST | tick | exit=0 reply=ALERT: recut for mac-ops#902
+2026-11-23 12:15 EST | tick | skipped: another tick holds the lock
