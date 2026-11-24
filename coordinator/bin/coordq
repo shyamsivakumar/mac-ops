@@ -2035,7 +2035,6 @@ SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
 OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
 RECUT_LINES = 300
-RECUT_FILES = 6
 RECUT_RULE = 2
 GATE_WHOLE_LABEL = "gate:whole"
 
@@ -2065,7 +2064,7 @@ def gate_whole(pr):
 
 def size_class(files, whole=False):
     lines, count = code_size(files)
-    if lines > RECUT_LINES or count > RECUT_FILES:
+    if lines > RECUT_LINES:
         return "over_cap" if whole else "recut"
     if lines > OVER_CAP_LINES or count > OVER_CAP_FILES:
         return "over_cap"
@@ -2085,7 +2084,7 @@ def recut_item(repo_key, repo, number, head, lines, count):
         "group": "Coordinator",
         "kind": "ask",
         "title": f"{repo}#{number} head {head[:8]} is {lines} code lines in {count} code files: re-cut it",
-        "cause": f"{repo}#{number} head {head[:8]}: over {RECUT_LINES} code lines or {RECUT_FILES} code files",
+        "cause": f"{repo}#{number} head {head[:8]}: over {RECUT_LINES} code lines",
         "why": "Gatekeep queued no gate for a pull request this large. It is re-cut into smaller pull requests.",
         "options": [{"label": "Re-cut it into smaller pull requests", "detail": "", "recommended": True}],
     }

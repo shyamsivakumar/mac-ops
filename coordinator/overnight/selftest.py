@@ -1099,7 +1099,7 @@ def hourly_selftest_fixture():
         now[0] += 3600
         outcome[0] = SimpleNamespace(returncode=0, stdout="".join("PASS " + name + "\n" for name in sorted(adapter.EXPECTED)))
         exact(run(), "PASS")
-        exact(json.loads(decisions.read_text()), {"items": [{"id": "unrelated"}]})
+        exact(json.loads(decisions.read_text())["items"], [{"id": "unrelated"}])
         with patch.object(adapter, "hourly", return_value="PASS"):
             outcome[0] = SimpleNamespace(returncode=1, stdout="FAIL watchdog\n")
             now[0] += 3600
@@ -1109,6 +1109,25 @@ def hourly_selftest_fixture():
                 pass
             else:
                 raise AssertionError("negative control accepted unconditional PASS")
+    with tempfile.TemporaryDirectory() as directory:
+        state = Path(directory) / "state.json"
+        decisions = Path(directory) / "decisions.json"
+        decisions.write_text(json.dumps({"items": [{"id": "old"}]}))
+
+        def raising_runner(command, **options):
+            decisions.write_text(json.dumps({"items": [{"id": "old"}, {"id": "new"}]}))
+            return SimpleNamespace(returncode=1, stdout="")
+
+        exact(adapter.hourly(state, decisions, ["x"], clock=lambda: 1, runner=raising_runner), "FAIL")
+        exact([item["id"] for item in json.loads(decisions.read_text())["items"]], ["old", "new", adapter.ALARM])
+        exact(json.loads(state.read_text()), {"last_run": 1, "passed": False})
+        decisions.write_text("{broken")
+        exact(adapter.hourly(state, decisions, ["x"], clock=lambda: 9999, runner=lambda *a, **k: SimpleNamespace(returncode=1, stdout="")), "FAIL")
+        exact(decisions.read_text(), "{broken")
+        exact(json.loads(state.read_text()), {"last_run": 9999, "passed": False, "board": "failed"})
+        missing = Path(directory) / "missing.json"
+        exact(adapter.hourly(state, missing, ["x"], clock=lambda: 99999, runner=lambda *a, **k: SimpleNamespace(returncode=1, stdout="")), "FAIL")
+        exact([item["id"] for item in json.loads(missing.read_text())["items"]], [adapter.ALARM])
     # The adapter must run the executable beside it: a stub that prints the
     # suite's own names passes, and a missing executable fails with a reason
     # of its own.
@@ -2391,8 +2410,10 @@ def decisions_board_guard():
 
     repo = "shyamsivakumar/mac-ops"
     settled = [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (602, 623, 625, 627)]
-    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544"]
-    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702"]
+    settled += ["lane-close-failed-MO-661", "prompt-merge-MO-544",
+                "recut-MO-868", "proof-MO-882", "herdr-build-MO-890"]
+    kept = ["lane-gate-rounds-shyamsivakumar-mac-ops-700", "lane-close-failed-MO-702",
+            "recut-MO-700", "proof-MO-901", "herdr-build-MO-700"]
     # The close-failed title is the one `close_failed_item` writes, and it
     # names the ticket the close was for.
     def close_failed_title(pr, ticket):
@@ -2403,7 +2424,7 @@ def decisions_board_guard():
     open_card = cards[len(settled) + 1]
     open_card["title"] = close_failed_title(702, 701)
     snapshot = {"repos": {repo: {"prs": [{"number": 700}]}}}
-    closed_prs = {602, 623, 625, 627, 544}
+    closed_prs = {602, 623, 625, 627, 544, 868, 882, 890}
     closed_tickets = {660}
 
     def read(cmd, timeout=150):
@@ -2428,7 +2449,7 @@ def decisions_board_guard():
                 patch.object(lane, "withdraw_decision", withdraw):
             return lane.reconcile_prompt_items(snapshot)
 
-    # The five cards this ticket names are withdrawn, and the prompt-merge
+    # The settled cards this ticket names are withdrawn, and the prompt-merge
     # card is still withdrawn. The open pull request and the open ticket keep
     # their cards.
     exact(reconcile(), len(settled))
@@ -4555,6 +4576,47 @@ def inbox():
             else:
                 raise AssertionError("a locked begin did not raise")
         holder.close()
+        import journal
+        clean = tempfile.mkdtemp(prefix="selftest-hook-off-")
+        env = {"COORD_JOURNAL_DIR": clean, "COORD_INBOX_DIR": clean}
+        with patch.dict(os.environ, env), patch.dict(sys.modules):
+            os.environ.pop("COORD_INBOX_HOOK", None)
+            sys.modules.pop("inbox")
+            journal.emit("gate_verdict", "lane", repo="o/r", pr=7, head="a" * 40)
+            exact(("inbox" in sys.modules, sorted(os.listdir(clean))[0].startswith("events-"), len(os.listdir(clean))), (False, True, 1))
+
+        def run_hook(inbox_dir, emits, wait=None):
+            journal_dir = tempfile.mkdtemp(prefix="selftest-hook-journal-")
+            env = {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": inbox_dir, "COORD_INBOX_HOOK": "on"}
+            err = io.StringIO()
+            with patch.dict(os.environ, env), patch.object(journal, "INBOX_WAIT", wait or journal.INBOX_WAIT), contextlib.redirect_stderr(err):
+                for args in emits:
+                    journal.emit(*args[:2], **args[2])
+            lines = sum(len(open(os.path.join(journal_dir, f)).readlines()) for f in os.listdir(journal_dir))
+            return lines, err.getvalue()
+
+        pr = dict(repo="o/r", pr=7, head="a" * 40)
+        fresh = tempfile.mkdtemp(prefix="selftest-hook-inbox-")
+        emits = [("gate_verdict", "lane", pr), ("gate_verdict", "lane", pr), ("alarm_raised", "alarms", dict(alarm="x-1")),
+                 ("alarm_withdrawn", "alarms", dict(alarm="x-1")), ("alarm_raised", "alarms", dict(alarm="x-1")),
+                 ("alarm_raised", "alarms", dict(alarm="x-1")), ("gate_started", "lane", pr)]
+        exact(run_hook(fresh, emits), (7, ""))
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": fresh}):
+            rows = [r[0] for r in store.connect().execute("SELECT dedupe_key FROM inbox ORDER BY id")]
+        exact(rows, ["gate_verdict:o/r#7:" + "a" * 40, "alarm:x-1:0", "alarm:x-1:1"])
+        blocked = tempfile.mkdtemp(prefix="selftest-hook-blocked-")
+        open(os.path.join(blocked, "file"), "w").close()
+        lines, err = run_hook(os.path.join(blocked, "file", "sub"), emits[:1])
+        exact((lines, err.count("\n"), "not queued" in err), (1, 1, True))
+        held = tempfile.mkdtemp(prefix="selftest-hook-held-")
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": held}):
+            store.counts()
+        lock = sqlite3.connect(os.path.join(held, "inbox.db"), isolation_level=None)
+        lock.execute("BEGIN IMMEDIATE")
+        began = time.monotonic()
+        lines, err = run_hook(held, emits[:1], wait=0.3)
+        lock.close()
+        exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
         metrics = tempfile.mkdtemp(prefix="selftest-metrics-")
         with patch.dict(os.environ, {"COORD_INBOX_DIR": metrics}):
             store.enqueue("pr_opened", "pr_opened:a#5", repo="shyamsivakumar/mac-ops", pr=5, **base)

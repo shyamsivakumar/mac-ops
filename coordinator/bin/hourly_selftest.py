@@ -5,6 +5,11 @@ import subprocess
 import sys
 import time
 
+_OVERNIGHT_DIR = str(Path(__file__).resolve().parent.parent / "overnight")
+if _OVERNIGHT_DIR not in sys.path:
+    sys.path.append(_OVERNIGHT_DIR)
+import alarms
+
 ALARM = "overnight-selftest"
 EXECUTABLE = "overnight"
 # The eval names the suite registers today. This set is what the hourly
@@ -53,7 +58,6 @@ def hourly(state_path, decisions_path, command, *, clock=time.time,
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     if "last_run" in state and now - state["last_run"] < 3600:
         return "not-due"
-    decisions = json.loads(decisions_path.read_text()) if decisions_path.exists() else {"items": []}
     if failure:
         passed, reason = False, failure
     else:
@@ -66,12 +70,20 @@ def hourly(state_path, decisions_path, command, *, clock=time.time,
             reason = "fixture suite failed" if not passed else ""
         except (OSError, subprocess.SubprocessError) as exc:
             passed, reason = False, type(exc).__name__
-    decisions["items"] = [item for item in decisions.get("items", []) if item.get("id") != ALARM]
-    if not passed:
-        decisions["items"].append({"id": ALARM, "group": "Coordinator", "kind": "action",
-                                   "title": "Overnight fixture selftest failed", "why": reason})
-    save(decisions_path, decisions)
-    save(state_path, {"last_run": now, "passed": passed})
+    card = {"id": ALARM, "group": "Coordinator", "kind": "action",
+            "title": "Overnight fixture selftest failed", "why": reason}
+    existing = alarms.read_board(decisions_path)[1]
+    if passed and not (existing and any(isinstance(entry, dict) and entry.get("id") == ALARM
+                                       for entry in existing["items"])):
+        board = "wrote"
+    else:
+        board = alarms.board_update(decisions_path, ALARM, "raise" if not passed else "remove",
+                                    card, create=True)
+    state = {"last_run": now, "passed": passed}
+    if board != "wrote":
+        state["board"] = board
+        print(f"decisions board not updated: {board}", file=sys.stderr)
+    save(state_path, state)
     return "PASS" if passed else "FAIL"
 
 

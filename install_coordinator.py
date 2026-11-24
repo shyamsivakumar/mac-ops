@@ -127,7 +127,7 @@ TURN_CAP_JOB = "dev.coordinator.turncap"
 # dev.coordinator.lanes; the lanes job is kept because the lane watchdog and
 # the tick check its label and lanes.log.
 RETIRED_JOBS: tuple[str, ...] = ("dev.coordinator.overnight",)
-RETIRED_FILES = (("loop", "turn_cap.py"),)
+RETIRED_FILES = (("loop", "turn_cap.py"), ("loop", "board.py"))
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
 # queue here: the board is the list.
