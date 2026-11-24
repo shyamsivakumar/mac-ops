@@ -1,6 +1,12 @@
+import hashlib
+import json
 import os
 
 import inbox
+
+NOTICE_PREFIX = "notice-"
+OWN_NOTICE = "kind='request_notice' AND dedupe_key LIKE 'notice-%'"
+CLOSED_NOTICE = "(" + OWN_NOTICE + " AND COALESCE(reason,'')='closed')"
 
 KINDS = ("hc_send", "coordq_send", "request_notice", "none")
 
@@ -10,7 +16,7 @@ def shadow_on():
 
 
 def add(run_id, index, kind, target, body, *, reason=None, now):
-    if kind not in KINDS or (kind == "none" and not (reason or "").strip()):
+    if kind not in KINDS or run_id.startswith(NOTICE_PREFIX) or (kind == "none" and not (reason or "").strip()):
         raise ValueError(kind)
     with inbox.txn() as conn:
         return conn.execute(
@@ -24,7 +30,7 @@ def _claim(skip, clock, lease):
     marks = ",".join("?" * len(skip))
     with inbox.txn() as conn:
         row = conn.execute(
-            "SELECT * FROM outbox WHERE status='pending' AND id NOT IN (%s) ORDER BY id LIMIT 1" % marks,
+            "SELECT * FROM outbox WHERE status='pending' AND NOT %s AND id NOT IN (%s) ORDER BY id LIMIT 1" % (CLOSED_NOTICE, marks),
             tuple(skip),
         ).fetchone()
         if row is None:
@@ -47,7 +53,7 @@ def drain(sender, *, now, shadow=None, lease=600, limit=50, clock=None):
     if shadow:
         with inbox.txn() as conn:
             n = conn.execute(
-                "SELECT COUNT(*) FROM outbox WHERE status='pending' AND kind!='none'"
+                "SELECT COUNT(*) FROM outbox WHERE status='pending' AND kind!='none' AND NOT " + CLOSED_NOTICE
             ).fetchone()[0]
         return {"would_send": n}
     clock = clock or (lambda: now)
@@ -95,3 +101,61 @@ def reap(*, now):
             )
             extra[key] = extra.get(key, 0) + 1
     return {"unknown": unknown, **extra}
+
+
+REISSUE_AFTER = 86400
+
+
+def _notice_key(repo, pr, head, action, again=False):
+    digest = hashlib.sha256(json.dumps([repo, pr, head, action]).encode()).hexdigest()
+    return NOTICE_PREFIX + digest + ("-again" if again else "")
+
+
+def _insert_notice(conn, run_id, repo, pr, head, action, ts, again):
+    return conn.execute(
+        "INSERT OR IGNORE INTO outbox (ts, run_id, kind, target, body, dedupe_key) VALUES (?,?,?,?,?,?)",
+        (ts, run_id, "request_notice", "%s#%s" % (repo, pr),
+         json.dumps({"repo": repo, "pr": pr, "head": head, "action": action}),
+         _notice_key(repo, pr, head, action, again)),
+    ).rowcount == 1
+
+
+def request_notice(run_id, index, repo, pr, head, action, *, now):
+    with inbox.txn() as conn:
+        return _insert_notice(conn, run_id, repo, pr, head, action, now, False)
+
+
+def close_requests(*, now):
+    closed = 0
+    with inbox.txn() as conn:
+        rows = conn.execute(
+            "SELECT id, ts, body FROM outbox WHERE " + OWN_NOTICE + " AND reason IS NOT 'closed'"
+        ).fetchall()
+        for row in rows:
+            notice = json.loads(row["body"])
+            merged = conn.execute(
+                "SELECT 1 FROM inbox WHERE kind='pr_merged' AND repo=? AND pr=? AND ts>=? LIMIT 1",
+                (notice["repo"], notice["pr"], row["ts"]),
+            ).fetchone()
+            if merged:
+                closed += conn.execute(
+                    "UPDATE outbox SET reason='closed' WHERE id=?", (row["id"],)
+                ).rowcount
+    return closed
+
+
+def reissue_due(*, now):
+    raised = 0
+    with inbox.txn() as conn:
+        rows = conn.execute(
+            "SELECT run_id, ts, body, dedupe_key FROM outbox"
+            " WHERE " + OWN_NOTICE + " AND reason IS NOT 'closed' AND dedupe_key NOT LIKE '%-again'"
+            " AND ts < ?",
+            (now - REISSUE_AFTER,),
+        ).fetchall()
+        for row in rows:
+            n = json.loads(row["body"])
+            raised += _insert_notice(
+                conn, row["run_id"], n["repo"], n["pr"], n["head"], n["action"], row["ts"], True
+            )
+    return raised
