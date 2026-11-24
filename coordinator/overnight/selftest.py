@@ -4332,6 +4332,47 @@ def close_evidence():
     exact(proof_item(elsewhere, [], f"Refs #7\nBuilder check: PASS {'b' * 40}")["proof file"]["status"], "fail")
     exact(proof_item(elsewhere, [success], "Refs #7")["proof file"]["status"], "fail")
 
+    coordq = load_coordq()
+    recorded = (
+        (911, "In: `coordinator/bin/hourly_selftest.py`", ["coordinator/bin/hourly_selftest.py", "coordinator/overnight/selftest.py"], True),
+        (917, "In: `scripts/coord_wake_metrics.py` and `evidence/event-inbox-design/tickets/fixtures/`", ["scripts/coord_wake_metrics.py", "coordinator/overnight/selftest.py"], True),
+        (928, "In: `runtime/agents/deny-rules.json`, `runtime/agents/deny-merge-guard.py`, `tests/test_install_deny_rules.py`", ["runtime/agents/deny-rules.json", "runtime/pi/AGENTS.md"], True),
+        (918, "In: `coordinator/overnight/lane_driver.py`, `coordinator/overnight/selftest.py`", ["coordinator/overnight/lane_driver.py", "coordinator/overnight/selftest.py"], False),
+        (923, "In: `coordinator/overnight/overnight`, `coordinator/overnight/selftest.py`", ["coordinator/overnight/overnight", "coordinator/overnight/selftest.py"], False),
+        (926, "In: `coordinator/overnight/selftest.py`, an existing module in `tests/`", ["coordinator/overnight/selftest.py", "tests/test_coordq_message_dedupe.py"], False),
+        (927, "In: `coordinator/config/AGENT-RULES.md`", ["coordinator/config/AGENT-RULES.md"], False),
+    )
+    for issue, scope, files, refused in recorded:
+        items = [check.item_scope(scope, files + [f"evidence/MO-{issue}/runs.md"], f"evidence/MO-{issue}")]
+        exact((issue, bool(coordq.scope_refusal(items))), (issue, refused))
+    exact(coordq.scope_refusal([check.item_scope("In: a.py", ["a.py"], "", "502")]), [])
+
+    state = {"scope": recorded[0][1], "runs": 0, "down": False}
+    board = []
+
+    def run_check(repo, pr, issue):
+        state["runs"] += 1
+        if state["down"]:
+            raise RuntimeError("gh api failed: HTTP 502")
+        files = list(recorded[0][2])
+        return {"files": files, "items": [check.item_scope(state["scope"], files, "evidence/MO-911")]}
+
+    def gate(head):
+        event = {"pr": "r/x#7", "issue": 911, "head": head}
+        return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", False)
+
+    with tempfile.TemporaryDirectory() as scratch, \
+         patch.dict(os.environ, {"COORDQ_DIR": scratch, "COORD_JOURNAL_DIR": scratch}), \
+         patch.object(coordq, "gh_json", lambda endpoint: {"body": state["scope"]}), \
+         patch.object(coordq.close_check, "run_check", run_check), \
+         patch.object(coordq.alarms, "route_update", lambda board_path, card, action, item=None: board.append((card, action)) or "wrote"):
+        exact((gate("a" * 8), gate("a" * 8), state["runs"], board), (False, False, 1, [("proof-MO-7", "raise")]))
+        state["scope"] = recorded[0][1] + ", `coordinator/overnight/selftest.py`"
+        exact((gate("a" * 8), state["runs"], board[-1]), (True, 2, ("proof-MO-7", "remove")))
+        state["down"] = True
+        exact([gate("b" * 8) for _ in range(3)], [False, False, True])
+        exact(board[-1], ("proof-MO-7", "remove"))
+
 
 def provider_until():
     """A provider block ends by a successful probe, never by its time, and an unknown model is dropped."""
