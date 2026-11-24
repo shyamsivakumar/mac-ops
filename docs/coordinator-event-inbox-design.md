@@ -539,6 +539,9 @@ Invariants:
 2. `claimed` implies `lease_until` is set. A run is killed at 600 seconds
    (`coord-tick:46`), and the lease is 900 seconds, so a live run never loses
    its rows.
+   Each claim stores a fresh token (`run_id`) on its rows. `ack` and `release`
+   take the claimed rows and match on id and token, so a late call from a reaped
+   claim changes nothing.
 3. `done` is written in the same SQL transaction that inserts the outbox rows
    for the run. A crash cannot leave a done row without its decision on record.
 4. At most one worker claims at a time: an `flock` on `inbox.worker.lock` (the
@@ -1059,10 +1062,16 @@ been read through, but were not run green.
   script, its fast-check entry and the README activation steps. Blocked by: T12
   and 14 days on the inbox.
 
-T0 (skip the tick when nothing wake-class is new, section 2) is an optional
-stand-alone step that can ship first. It edits `coord-tick`, so it is outside the
-shadow-only set above and has no body in the tickets folder. The T0 replay shows
-it captures about the whole run-count saving of the inbox at current volume.
+T0 (skip the tick when nothing wake-class is new, section 2) is approved to build
+alongside the inbox and has a body in `tickets/T0-tick-precheck.md`. It is
+stand-alone and not shadow-only: it edits `coord-tick` and `journal.py`, so it
+changes the live tick once installed. It skips only when the journal scan proves
+no wake-class event since the last tick that exited 0, forces a full tick every 2
+hours, logs one `skip` line so the stale-log watchdog stays quiet, and ignores the
+tick's own tagged journal writes. A fact the journal does not carry can wait up to
+2.5 hours. It captures about the whole run-count saving the inbox replays to.
+Blocked by: none. It does not conflict with T9 as written (T9 does not edit
+`coord-tick`); if a filed T9 does, T0 merges first.
 
 Order of work: T1; then T2, T3, T5, T6, T7 in parallel; then T4, T8; then T9;
 then T10 and T11; then T12 after the shadow week; then T13.

@@ -16,7 +16,7 @@ Add the worker pass in shadow mode. One pass takes the worker lock, reaps, enque
 
 In:
 
-- `coordinator/bin/inbox_worker.py` (new): `shadow_pass(*, now) -> dict` (`batches`, `lines`), `coalesce(rows)`, `parse_reply(text) -> list`, `finish(ids, reply, *, run_id, now)`, and `ModelUnavailable`. The lock is `inbox.worker.lock` in `COORD_INBOX_DIR`.
+- `coordinator/bin/inbox_worker.py` (new): `shadow_pass(*, now) -> dict` (`batches`, `lines`), `coalesce(rows)`, `parse_reply(text) -> list`, `finish(rows, reply, *, now)`, and `ModelUnavailable`. `finish` ends the claim with T1's `ack(rows, *, now)` and `release(rows, *, count_attempt)`, which match on id and the claim token, and uses the token (`rows[0]["run_id"]`) as the outbox `run_id`, so a late `finish` from a reaped claim changes nothing and writes no outbox row. The lock is `inbox.worker.lock` in `COORD_INBOX_DIR`.
 - Settings: `COORD_INBOX_DEBOUNCE`, default `60`; `COORD_INBOX_MIN_GAP`, default `1800` (the design's 30-minute gap, Shyam's open question 3); `COORD_INBOX_SHADOW`, default `1`.
 - `coordinator/overnight/selftest.py`: extend the `inbox` eval with the proof plus a garbage reply (rows pending, attempt counted) and a `ModelUnavailable` runner (rows pending, attempt not counted).
 - `evidence/MO-<issue#>/check-proof.md`, `evidence/MO-<issue#>/runs.md`.

@@ -24,7 +24,7 @@ Out: Starting a run, a launchd job, the in-session idle timer, `coord-tick`. Als
 
 ## Design fit
 
-Requires: T1.
+Requires: T1's `enqueue`, `meta` and `timers` table. This ticket never claims, so it does not use `claim`, `ack(rows, *, now)` or `release(rows, *, count_attempt)` or the claim token; `enqueue_due_timers` only calls `enqueue`.
 Provides: The fallback row T9's pass reads.
 
 ## Blocked by
