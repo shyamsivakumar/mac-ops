@@ -116,7 +116,8 @@ def read_json(cmd, fresh=False):
 
 LOOP_RELEASE_LABEL = "merge:human-ok"
 LOOP_REPO = "shyamsivakumar/mac-ops"
-PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles,labels"
+PR_FIELDS = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles,labels,additions,deletions"
+OPEN_PR_LIMIT = 200
 PASS_PRS = {}
 PASS_WORKTREES = set()
 
@@ -124,7 +125,7 @@ PASS_WORKTREES = set()
 def open_prs(repo):
     """The open pull requests of one repository, read once per pass."""
     if repo not in PASS_PRS:
-        rows = read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200",
+        rows = read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", str(OPEN_PR_LIMIT),
                           "--json", PR_FIELDS], fresh=True)
         PASS_PRS[repo] = {row["number"]: row for row in rows}
     return PASS_PRS[repo]
@@ -893,7 +894,32 @@ def card_on_board(alarm_id):
                for entry in (board or {"items": []})["items"])
 
 
-def gate_round_decision(repo, number, head, ledger):
+def round_cap_to_board(repo):
+    return CFG[repo].get("build") == "here"
+
+
+def record_round_cap(repo, number, head, ledger, gate):
+    """The clear runs first because it pops the key this write puts back."""
+    key = f"roundcap:{repo}#{number}"
+    prior = ledger.get(key) if isinstance(ledger.get(key), dict) else {}
+    same = prior.get("head") == head
+    if DRY:
+        return f"DRY #{number}: no fix round, the round cap goes to coordq status"
+    removed = clear_gate_round_decision(repo, number, ledger)
+    pr = next((p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number), {})
+    lines = pr["additions"] + pr["deletions"] if "additions" in pr and "deletions" in pr else None
+    ledger[key] = {"repo": repo, "pr": number, "head": head,
+                   "rounds": failed_reviews(repo, number, ledger)[0],
+                   "gate": (gate or {}).get("threadId") or (prior.get("gate") if same else None),
+                   "lines": lines, "at": prior["at"] if same else time.time()}
+    if not removed:
+        return (f"#{number}: no fix round, the round cap is on coordq status, "
+                "the old decisions item could not be taken off the board")
+    return (f"#{number}: no fix round after {GATE_ROUND_CAP} failed reviews, "
+            "the round cap is on coordq status")
+
+
+def gate_round_decision(repo, number, head, ledger, gate=None):
     """Raise the one decisions item for a pull request that used its rounds.
 
     The board holds one item per pull request: the item has a fixed id,
@@ -902,6 +928,8 @@ def gate_round_decision(repo, number, head, ledger):
     that the card is there: a card that was withdrawn or never written is
     raised again, so the ledger and the board cannot disagree.
     """
+    if not round_cap_to_board(repo):
+        return record_round_cap(repo, number, head, ledger, gate)
     lkey = f"rounds-decision:{repo}#{number}"
     item = gate_round_item(repo, number, head)
     if lkey in ledger:
@@ -942,6 +970,7 @@ def clear_gate_round_decision(repo, number, ledger):
     Returns False when the item is still on the board. The ledger key
     stays, so the next pass retries the removal.
     """
+    ledger.pop(f"roundcap:{repo}#{number}", None)
     lkey = f"rounds-decision:{repo}#{number}"
     if lkey not in ledger:
         return True
@@ -950,6 +979,29 @@ def clear_gate_round_decision(repo, number, ledger):
         return False
     ledger.pop(lkey, None)
     return True
+
+
+def prune_round_caps(snapshot, ledger):
+    """Drop the round cap keys of pull requests that are no longer open.
+
+    A repository that is whole in the snapshot and short of the read
+    limit is read whole, so a pull request missing from it is closed. A
+    repository that is missing or at the limit is unread or truncated,
+    and keeps its keys.
+    """
+    repos = snapshot.get("repos") or {}
+    for key in list(ledger):
+        if not key.startswith("roundcap:"):
+            continue
+        value = ledger[key]
+        if not isinstance(value, dict):
+            del ledger[key]
+            continue
+        repo = value.get("repo")
+        if repo not in repos or len(repos[repo]["prs"]) >= OPEN_PR_LIMIT:
+            continue
+        if value.get("pr") not in [pr["number"] for pr in repos[repo]["prs"]]:
+            del ledger[key]
 
 
 def check_step(repo, proof_path):
@@ -1654,7 +1706,7 @@ def act_on_pr(repo, number, ledger):
         if reviews >= GATE_ROUND_CAP and not waive_round_cap(repo, number, head, pr, ledger):
             if no_open_findings(reply, head):
                 return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
-            return gate_round_decision(repo, number, head, ledger)
+            return gate_round_decision(repo, number, head, ledger, gate)
     if verdict == "FAIL" and CFG[repo].get("build") == "here":
         return herdr_build_card(repo, number, head, "the gate returned FAIL findings")
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
@@ -1678,7 +1730,7 @@ def act_on_pr(repo, number, ledger):
         # The pull request has used the three reviews the rule gives it.
         # It is re-cut into smaller pull requests, or Shyam takes it
         # over, and it is not reviewed a 4th time as it is.
-        return gate_round_decision(repo, number, head, ledger)
+        return gate_round_decision(repo, number, head, ledger, gate)
     if verdict == "none" and gatekeep_gave_up(repo, number, head):
         ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after gatekeep retries"
         return f"#{number}: needs-you, gate ended without verdict after gatekeep retries"
@@ -2644,6 +2696,7 @@ def main():
         run_pass(ledger)
         if not DRY:
             zero_merge(SNAPSHOT)
+            prune_round_caps(SNAPSHOT, ledger)
             stale = reconcile_prompt_items(SNAPSHOT)
             if stale:
                 print(f"BOARD removed {stale} settled merge ask(s)")
