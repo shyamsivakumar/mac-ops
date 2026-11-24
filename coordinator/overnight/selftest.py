@@ -5071,6 +5071,89 @@ def inbox():
     outbox_cases()
     timer_cases()
     inbox_poll_cases()
+    worker_cases()
+
+
+def worker_cases():
+    import fcntl
+    import glob
+    import inbox as store
+    import inbox_outbox as out
+    import inbox_worker as w
+
+    def seed(wake=1, **extra):
+        for n in range(1, 6):
+            for head in "ab":
+                store.enqueue("pr_new_head", f"pr_new_head:o/r#{n}:{head}", source="journal", ts=0.0, repo="o/r", pr=n)
+        for n in range(1, wake + 1):
+            store.enqueue("round_cap", f"round_cap:o/r#{n}:x", source="journal", ts=0.0, repo="o/r", pr=n, **extra)
+
+    def rows():
+        return [tuple(r) for r in store.connect().execute("SELECT status, attempts FROM inbox ORDER BY id")]
+
+    def outbox():
+        return [tuple(r) for r in store.connect().execute("SELECT kind, target, body, reason FROM outbox ORDER BY id")]
+
+    journal_dir = tempfile.mkdtemp(prefix="selftest-worker-journal-")
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-")}):
+        seed(2)
+        exact(w.shadow_pass(now=100.0), {"batches": 1, "lines": 7})
+        exact((set(rows()), outbox()), ({("done", 1)}, [("none", None, "", "shadow")]))
+        exact(w.shadow_pass(now=101.0)["batches"], 0)
+        exact("inbox_would_wake" in "".join(open(f).read() for f in glob.glob(journal_dir + "/events-*.jsonl")), True)
+
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-")}):
+        seed(1)
+        exact(w.shadow_pass(now=100.0, runner=lambda lines: "no decision here")["batches"], 0)
+        exact((set(rows()), outbox()), ({("pending", 1)}, []))
+        exact(w.shadow_pass(now=200.0)["batches"], 0)
+
+        def unavailable(lines):
+            raise w.ModelUnavailable
+
+        def broken(lines):
+            raise RuntimeError("runner")
+
+        w.shadow_pass(now=2000.0, runner=unavailable)
+        exact(set(rows()), {("pending", 1)})
+        w.shadow_pass(now=4000.0, runner=broken)
+        exact((set(rows()), outbox()), ({("pending", 2)}, []))
+
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-")}):
+        seed(1)
+        first = store.claim("coordinator", worker="a", now=0.0)
+        store.release(first, count_attempt=True)
+        store.claim("coordinator", worker="b", now=1.0)
+        exact((w.finish(first, "NOTHING: late", now=2.0), outbox()), (0, []))
+
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-")}):
+        seed(1)
+        store.enqueue("round_cap", "other", source="journal", ts=0.0, session="other")
+        with open(os.path.join(os.environ["COORD_INBOX_DIR"], "inbox.worker.lock"), "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            exact(w.shadow_pass(now=100.0)["batches"], 0)
+        exact(set(r[0] for r in rows()), {"pending"})
+        with patch("inbox_poll.fetch", side_effect=AssertionError("polled")):
+            exact(w.shadow_pass(now=100.0)["batches"], 1)
+        exact([r[0] for r in store.connect().execute("SELECT status FROM inbox WHERE session='other'")], ["pending"])
+
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-")}):
+        seed(0)
+        for n, payload in enumerate(({"t": "\ud800"}, {"t": "x" * 2_000_000}, [1, 2], "str")):
+            store.enqueue("alarm", f"alarm:{n}:0", source="journal", ts=0.0, payload=payload)
+        store.connect().execute("INSERT INTO inbox (ts, source, kind, dedupe_key, session, payload, tier) VALUES (0, 'j', 'alarm', 'corrupt', 'coordinator', '{not json', 'wake')")
+        reply = "SEND t56;rm: \ud800 $(id)\nNOTHING: r"
+        exact(w.shadow_pass(now=100.0, runner=lambda lines: reply)["batches"], 1)
+        exact([r[:2] for r in outbox()], [("hc_send", "t56;rm"), ("none", None)])
+        exact(out.drain(None, now=100.0, shadow=True), {"would_send": 1})
+
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir, "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-worker-"),
+                                 "COORD_INBOX_DEBOUNCE": "soon", "COORD_INBOX_MIN_GAP": "nan"}):
+        seed(1)
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer):
+            exact(w.shadow_pass(now=100.0)["batches"], 1)
+        exact(("COORD_INBOX_DEBOUNCE='soon'" in buffer.getvalue(), "COORD_INBOX_MIN_GAP='nan'" in buffer.getvalue()), (True, True))
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
