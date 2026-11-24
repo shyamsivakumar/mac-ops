@@ -2239,12 +2239,15 @@ def read_or_failure(call, *args):
 
 
 def drop_scope_card(card_id, carded, dry_run):
-    if carded and not dry_run and alarms.route_update(DECISIONS_PATH, card_id, "remove") == "wrote":
-        with Lock(True):
-            queue = load()
-            for name in carded:
-                queue["scopeHeads"][name]["carded"] = False
-            save(queue)
+    if not carded or dry_run:
+        return True
+    if alarms.route_update(DECISIONS_PATH, card_id, "remove") != "wrote":
+        return False
+    with Lock(True):
+        queue = load()
+        for name in carded:
+            queue["scopeHeads"][name]["carded"] = False
+        save(queue)
     return True
 
 
