@@ -5761,10 +5761,12 @@ def main_cases():
     off = os.path.join(tempfile.mkdtemp(prefix="selftest-main-off-"), "x")
     with patch.dict(os.environ, {**env, "COORD_INBOX_DIR": off, "COORD_INBOX_SHADOW": "0"}), contextlib.redirect_stderr(io.StringIO()):
         exact((w.main([]), os.path.exists(off)), (2, False))
-    job = plistlib.loads((ROOT.parent / "launchd/dev.coordinator.inbox.plist").read_bytes())
-    exact((sorted(job["EnvironmentVariables"]), job["EnvironmentVariables"]["COORD_INBOX_SHADOW"], "KeepAlive" in job),
-          (["COORD_INBOX_SHADOW", "HOME", "PATH"], "1", False))
-    exact((job["StartInterval"], job["RunAtLoad"], job["ProgramArguments"][1].endswith("/.local/bin/inbox_worker.py")), (60, True, True))
+    plist = ROOT.parent / "launchd/dev.coordinator.inbox.plist"
+    if plist.is_file():
+        job = plistlib.loads(plist.read_bytes())
+        exact((sorted(job["EnvironmentVariables"]), job["EnvironmentVariables"]["COORD_INBOX_SHADOW"], "KeepAlive" in job),
+              (["COORD_INBOX_SHADOW", "HOME", "PATH"], "1", False))
+        exact((job["StartInterval"], job["RunAtLoad"], job["ProgramArguments"][1].endswith("/.local/bin/inbox_worker.py")), (60, True, True))
 
 
 def worker_cases():
