@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -4468,7 +4469,95 @@ def closed_ticket_merge():
     exact((merges, items), ([], []))
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge}
+def inbox():
+    import functools
+    import inbox as store
+    import sqlite3
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-inbox-")}):
+        dead, base = 4194303, dict(source="journal", ts=1.0)
+        key = "pr_merged:a#1:"
+        exact((store.enqueue("pr_merged", key, **base), store.enqueue("pr_merged", key, **base)), (True, False))
+        conn = store.connect()
+        exact(conn.execute("SELECT tier FROM inbox").fetchone()[0], "batch")
+        exact(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+        store.enqueue("alarm", "alarm:x:1", payload={"n": 1}, **base)
+        exact(conn.execute("SELECT tier FROM inbox WHERE kind='alarm'").fetchone()[0], "wake")
+        try:
+            store.enqueue("bogus", "bogus:1", **base)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an unknown kind was stored")
+        exact(conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0], 2)
+        for number in range(8):
+            store.enqueue("pr_opened", f"pr_opened:a#{number}", **base)
+        exact(store.counts()["pending"], 10)
+        script = ("import json,sys;sys.path.insert(0,sys.argv[1]);import inbox;"
+                  "open(sys.argv[3],'w').write(json.dumps([r['id'] for r in inbox.claim('coordinator',worker=sys.argv[2],now=50.0,limit=6)]))")
+        outputs = [os.path.join(os.environ["COORD_INBOX_DIR"], name + ".json") for name in ("w1", "w2")]
+        children = [os.spawnv(os.P_NOWAIT, sys.executable, [sys.executable, "-c", script, str(ROOT.parent / "bin"), f"w{n + 1}", outputs[n]])
+                    for n in range(2)]
+        for child in children:
+            exact(os.waitpid(child, 0)[1], 0)
+        picked = [row_id for out in outputs for row_id in json.load(open(out))]
+        exact((len(picked), len(set(picked))), (10, 10))
+        exact(store.reap(now=100.0), 0)
+        exact(store.reap(now=1000.0), 10)
+        first = store.claim("coordinator", worker="w1", now=1100.0, lease=10, limit=1, pid=dead)
+        exact((len(first), first[0]["attempts"]), (1, 2))
+        exact(store.reap(now=1105.0), 0)
+        exact(store.reap(now=1111.0), 1)
+        store.claim("coordinator", worker="w1", now=1200.0, lease=10, limit=1, pid=dead)
+        exact(store.reap(now=1220.0), 1)
+        exact(store.counts()["failed"], 1)
+        conn.execute("DELETE FROM inbox")
+        store.enqueue("recut", "recut:1", **base)
+        stale = store.claim("coordinator", worker="a", now=0.0, lease=10, pid=dead)
+        exact(store.reap(now=20.0), 1)
+        live = store.claim("coordinator", worker="b", now=30.0, lease=10, pid=os.getpid())
+        exact((store.ack(stale, now=31.0), store.release(stale, count_attempt=True)), (0, 0))
+        exact(conn.execute("SELECT status, claimed_by FROM inbox").fetchone()[:], ("claimed", "b"))
+        exact(store.reap(now=1000.0), 0)
+        exact(store.release(live, count_attempt=False), 1)
+        exact(conn.execute("SELECT attempts FROM inbox").fetchone()[0], 1)
+        again = store.claim("coordinator", worker="c", now=2000.0, lease=10, pid=os.getpid())
+        exact((store.ack(live, now=2001.0), store.release(live, count_attempt=False)), (0, 0))
+        exact(conn.execute("SELECT status, claimed_by FROM inbox").fetchone()[:], ("claimed", "c"))
+        exact(store.ack(again, now=2002.0), 1)
+        with patch.object(os, "kill", side_effect=PermissionError):
+            store.enqueue("recut", "recut:2", **base)
+            store.claim("coordinator", worker="d", now=3000.0, lease=10, pid=1)
+            exact(store.reap(now=3020.0), 0)
+        exact(store.reap(now=3000.0 + 3611.0), 1)
+        future = tempfile.mkdtemp(prefix="selftest-inbox-v2-")
+        raw = sqlite3.connect(os.path.join(future, "inbox.db"))
+        raw.execute("PRAGMA user_version=2")
+        raw.close()
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": future}):
+            try:
+                store.connect()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("a newer schema was opened")
+            raw = sqlite3.connect(os.path.join(future, "inbox.db"))
+            exact(raw.execute("PRAGMA user_version").fetchone()[0], 2)
+            raw.close()
+        holder = sqlite3.connect(os.path.join(os.environ["COORD_INBOX_DIR"], "inbox.db"), isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        quick = functools.partial(sqlite3.connect, timeout=0.1)
+        with patch.object(store.sqlite3, "connect", quick):
+            try:
+                store.enqueue("recut", "recut:locked", **base)
+            except sqlite3.OperationalError as error:
+                exact("locked" in str(error), True)
+            else:
+                raise AssertionError("a locked begin did not raise")
+        holder.close()
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
 
 
 def main():
