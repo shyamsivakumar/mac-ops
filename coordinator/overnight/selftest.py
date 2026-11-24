@@ -4571,6 +4571,15 @@ def replay_cases():
             fh.write(',"event":"gate_verdict"}\n')
         exact(replay.replay(), {"enqueued": 0, "seen_only": 1, "skipped": 0})
         exact(store.counts()["pending"], 3)
+        write(jdir, "events-backfill.jsonl", row(8000, "gate_verdict", 9))
+        bad = [{"ts": "x", "event": "merged"}, {"ts": None, "event": "merged"}, {"ts": True, "event": "merged"}, {"ts": 9e9, "event": ["a"]}, {"ts": 9e9, "event": "alarm_raised", "data": [1]}, {"ts": 9e9, "event": "merged", "repo": ["r"]}, {"ts": 9e9, "event": "merged", "pr": {"n": 1}}, {"ts": 9e9, "event": "merged", "head": 1.5}, [1], 7]
+        write(jdir, "events-2026-11.jsonl", *bad, row(9100, "alarm_raised", 0, alarm=["a", {"b": 1}]), row(9101, "alarm_withdrawn", 0, alarm={"k": 1}), row(9200, "gate_verdict", 4))
+        with open(os.path.join(jdir, "events-2026-11.jsonl"), "a") as fh:
+            fh.write('{"ts":9300,"event":"gate_verdict","pr":5,"note":"a\rb"}\r\n')
+        exact(replay.replay(), {"enqueued": 2, "seen_only": 0, "skipped": 12})
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": os.path.join(tempfile.mkdtemp(prefix="selftest-replay-j-"), "missing"), "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-replay-i-")}):
+        replay.activate(now=1.0)
+        exact(replay.replay(), {"enqueued": 0, "seen_only": 0, "skipped": 0})
     for steps in (("hook", "replay"), ("replay", "hook")):
         with patch.dict(os.environ, fresh()):
             rows = [
