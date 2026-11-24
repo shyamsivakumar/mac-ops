@@ -667,8 +667,10 @@ def cmd_open(a):
     except GhError as e:
         die(f"gh failed ({e.kind}): {e}")
     number = url.rsplit("/", 1)[-1]
+    proof_sha = (hashlib.sha256(proof_run.parse_body(body)["cmd"].encode()).hexdigest()
+                 if proof == "red" else None)
     journal.emit("ticket_opened", "ticket", repo=repo, ticket=int(number) if number.isdigit() else None,
-                 key=key, labels=labels, proof=proof)
+                 key=key, labels=labels, proof=proof, proofSha=proof_sha)
     print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "proof": proof, "url": url}))
 
 
