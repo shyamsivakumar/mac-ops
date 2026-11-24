@@ -10,7 +10,7 @@ def shadow_on():
 
 
 def add(run_id, index, kind, target, body, *, reason=None, now):
-    if kind not in KINDS or (kind == "none" and reason is None):
+    if kind not in KINDS or (kind == "none" and not (reason or "").strip()):
         raise ValueError(kind)
     with inbox.txn() as conn:
         return conn.execute(
@@ -20,7 +20,28 @@ def add(run_id, index, kind, target, body, *, reason=None, now):
         ).rowcount == 1
 
 
-def drain(sender, *, now, shadow=None, lease=600, limit=50):
+def _claim(skip, clock, lease):
+    marks = ",".join("?" * len(skip))
+    with inbox.txn() as conn:
+        row = conn.execute(
+            "SELECT * FROM outbox WHERE status='pending' AND id NOT IN (%s) ORDER BY id LIMIT 1" % marks,
+            tuple(skip),
+        ).fetchone()
+        if row is None:
+            return None
+        now = clock()
+        if row["kind"] == "none":
+            conn.execute("UPDATE outbox SET status='sent', sent_ts=? WHERE id=?", (now, row["id"]))
+            return dict(row), None
+        attempts, lease_until = row["attempts"] + 1, now + lease
+        conn.execute(
+            "UPDATE outbox SET status='sending', attempts=?, lease_until=? WHERE id=?",
+            (attempts, lease_until, row["id"]),
+        )
+        return dict(row, attempts=attempts, lease_until=lease_until), (attempts, lease_until)
+
+
+def drain(sender, *, now, shadow=None, lease=600, limit=50, clock=None):
     if shadow is None:
         shadow = shadow_on()
     if shadow:
@@ -29,38 +50,28 @@ def drain(sender, *, now, shadow=None, lease=600, limit=50):
                 "SELECT COUNT(*) FROM outbox WHERE status='pending' AND kind!='none'"
             ).fetchone()[0]
         return {"would_send": n}
-    claimed, sent = [], 0
-    with inbox.txn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM outbox WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
-        ).fetchall()
-        for row in rows:
-            if row["kind"] == "none":
-                sent += conn.execute(
-                    "UPDATE outbox SET status='sent', sent_ts=? WHERE id=? AND status='pending'",
-                    (now, row["id"]),
-                ).rowcount
-                continue
-            attempts, lease_until = row["attempts"] + 1, now + lease
-            ok = conn.execute(
-                "UPDATE outbox SET status='sending', attempts=?, lease_until=?"
-                " WHERE id=? AND status='pending'",
-                (attempts, lease_until, row["id"]),
-            ).rowcount
-            if ok == 1:
-                claimed.append((dict(row, attempts=attempts), attempts, lease_until))
-    errors = 0
-    for row, attempts, lease_until in claimed:
+    clock = clock or (lambda: now)
+    sent = errors = 0
+    skip = [-1]
+    for _ in range(limit):
+        claimed = _claim(skip, clock, lease)
+        if claimed is None:
+            break
+        row, token = claimed
+        if token is None:
+            sent += 1
+            continue
         try:
             sender(row)
         except Exception:
             errors += 1
+            skip.append(row["id"])
             continue
         with inbox.txn() as conn:
             sent += conn.execute(
                 "UPDATE outbox SET status='sent', sent_ts=? WHERE id=? AND status='sending'"
                 " AND attempts=? AND lease_until=?",
-                (now, row["id"], attempts, lease_until),
+                (clock(), row["id"], *token),
             ).rowcount
     return {"sent": sent, "errors": errors}
 
