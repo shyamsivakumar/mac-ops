@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import sqlite3
+import time
 import uuid
 
 KINDS = frozenset(
@@ -31,6 +32,18 @@ SCHEMA = (
         attempts INTEGER DEFAULT 0, lease_until REAL, sent_ts REAL)""",
 )
 DB_NAME = "inbox.db"
+JOURNAL_KINDS = {
+    "gate_queued": "gate_queued",
+    "gate_verdict": "gate_verdict",
+    "merged": "pr_merged",
+    "merged_outside_lane": "pr_merged",
+    "alarm_raised": "alarm",
+    "round_cap": "round_cap",
+    "merge_held": "merge_held",
+    "close_failed": "close_failed",
+    "launch_failed": "launch_failed",
+    "recut": "recut",
+}
 
 
 def _db_path():
@@ -43,8 +56,29 @@ def _read_version(conn):
     return conn.execute("PRAGMA user_version").fetchone()[0]
 
 
-def _init(conn):
+def _remaining_ms(deadline):
+    return max(0, int((deadline - time.monotonic()) * 1000))
+
+
+def _lock_wait(lock, deadline):
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(lock.name) from None
+            time.sleep(0.01)
+
+
+def _begin(conn, deadline):
+    if deadline is not None:
+        conn.execute("PRAGMA busy_timeout = %d" % _remaining_ms(deadline))
     conn.execute("BEGIN IMMEDIATE")
+
+
+def _init(conn, deadline=None):
+    _begin(conn, deadline)
     try:
         if _read_version(conn) == 0:
             for statement in SCHEMA:
@@ -56,16 +90,20 @@ def _init(conn):
         raise
 
 
-def connect():
+def connect(deadline=None):
     path = _db_path()
-    conn = sqlite3.connect(path, isolation_level=None, timeout=30)
+    timeout = 30 if deadline is None else _remaining_ms(deadline) / 1000
+    conn = sqlite3.connect(path, isolation_level=None, timeout=timeout)
     conn.row_factory = sqlite3.Row
     try:
         if _read_version(conn) == 0:
             with open(path + ".init", "w") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+                if deadline is None:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                else:
+                    _lock_wait(lock, deadline)
                 conn.execute("PRAGMA journal_mode=WAL")
-                _init(conn)
+                _init(conn, deadline)
         version = _read_version(conn)
         if version != 1:
             raise RuntimeError("unsupported inbox user_version: %r" % (version,))
@@ -76,9 +114,9 @@ def connect():
 
 
 @contextlib.contextmanager
-def txn():
-    conn = connect()
-    conn.execute("BEGIN IMMEDIATE")
+def txn(deadline=None):
+    conn = connect(deadline)
+    _begin(conn, deadline)
     try:
         yield conn
         conn.execute("COMMIT")
@@ -91,21 +129,74 @@ def txn():
 
 def enqueue(kind, key, *, source, ts, session="coordinator", repo=None, pr=None, head=None,
             payload=None, tier=None):
+    with txn() as conn:
+        return _insert(conn, kind, key, source=source, ts=ts, session=session, repo=repo, pr=pr,
+                       head=head, payload=payload, tier=tier)
+
+
+def _insert(conn, kind, key, *, source, ts, session="coordinator", repo=None, pr=None, head=None,
+            payload=None, tier=None):
     if kind not in KINDS:
         raise ValueError(kind)
     wake = frozenset((os.environ.get("COORD_INBOX_WAKE_KINDS") or WAKE).split(","))
     tier = tier or ("wake" if kind in wake else "batch")
-    with txn() as conn:
-        seen = conn.execute("INSERT OR IGNORE INTO seen(key, ts) VALUES (?, ?)", (key, ts))
-        if seen.rowcount == 0:
-            return False
-        conn.execute(
-            "INSERT INTO inbox (ts, source, kind, dedupe_key, session, repo, pr, head, payload, tier)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (ts, source, kind, key, session, repo, pr, head,
-             None if payload is None else json.dumps(payload), tier),
-        )
+    seen = conn.execute("INSERT OR IGNORE INTO seen(key, ts) VALUES (?, ?)", (key, ts))
+    if seen.rowcount == 0:
+        return False
+    conn.execute(
+        "INSERT INTO inbox (ts, source, kind, dedupe_key, session, repo, pr, head, payload, tier)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (ts, source, kind, key, session, repo, pr, head,
+         None if payload is None else json.dumps(payload), tier),
+    )
     return True
+
+
+def _alarm_gen(conn, name):
+    row = conn.execute("SELECT v FROM meta WHERE k=?", ("alarm_gen:" + str(name),)).fetchone()
+    return 0 if row is None else int(row[0])
+
+
+def from_journal(conn, row):
+    data = row.get("data") or {}
+    event = row["event"]
+    if event == "alarm_withdrawn":
+        conn.execute(
+            "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            ("alarm_gen:" + str(data.get("alarm")), str(_alarm_gen(conn, data.get("alarm")) + 1)),
+        )
+        return None
+    kind = JOURNAL_KINDS.get(event)
+    if kind is None:
+        return None
+    pr, ticket = row.get("pr"), row.get("ticket")
+    num = pr if pr is not None else ticket if ticket is not None else ""
+    payload = None
+    if kind == "alarm":
+        name = data.get("alarm")
+        gen = _alarm_gen(conn, name)
+        key = f"alarm:{name}:{gen}"
+        payload = {"alarm": name, "generation": gen}
+    else:
+        key = f"{kind}:{row.get('repo') or ''}#{num}:{row.get('head') or ''}"
+    return dict(
+        kind=kind,
+        key=key,
+        source="journal",
+        ts=row["ts"],
+        repo=row.get("repo"),
+        pr=pr if pr is not None else ticket,
+        head=row.get("head"),
+        payload=payload,
+    )
+
+
+def record_journal(row, *, wait):
+    deadline = time.monotonic() + wait
+    with txn(deadline) as conn:
+        event = from_journal(conn, row)
+        if event:
+            _insert(conn, event.pop("kind"), event.pop("key"), **event)
 
 
 def claim(session, *, worker, now, lease=900, limit=50, pid=None):
