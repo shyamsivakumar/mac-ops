@@ -1,5 +1,7 @@
 import json
+import math
 import os
+import re
 
 import inbox
 import journal
@@ -15,6 +17,26 @@ def _value(conn, key, default=None):
     return default if row is None else row[0]
 
 
+JOURNAL_FILE = re.compile(r"events-\d{4}-\d{2}\.jsonl")
+
+
+def _scalar(value):
+    return value is None or isinstance(value, (str, int)) and not isinstance(value, bool)
+
+
+def _valid(row):
+    ts = row.get("ts") if isinstance(row, dict) else None
+    return (
+        isinstance(row, dict)
+        and isinstance(ts, (int, float))
+        and not isinstance(ts, bool)
+        and math.isfinite(ts)
+        and isinstance(row.get("event"), str)
+        and isinstance(row.get("data"), (dict, type(None)))
+        and all(_scalar(row.get(k)) for k in ("repo", "pr", "head", "ticket"))
+    )
+
+
 def replay():
     counts = {"enqueued": 0, "seen_only": 0, "skipped": 0}
     with inbox.txn() as conn:
@@ -23,21 +45,20 @@ def replay():
             raise RuntimeError("inbox not activated")
         since = float(activated)
         directory = journal.journal_dir()
-        for name in sorted(os.listdir(directory)):
-            if not name.startswith("events-") or not name.endswith(".jsonl"):
-                continue
+        names = sorted(os.listdir(directory)) if os.path.isdir(directory) else []
+        for name in filter(JOURNAL_FILE.fullmatch, names):
             offset = int(_value(conn, "replay_off:" + name, 0))
             with open(os.path.join(directory, name), "rb") as fh:
                 fh.seek(offset)
                 data = fh.read()
             cut = data.rfind(b"\n") + 1
-            for line in data[:cut].splitlines():
+            for line in data[:cut].split(b"\n")[:-1]:
                 try:
                     row = json.loads(line)
                 except ValueError:
                     counts["skipped"] += 1
                     continue
-                if not isinstance(row, dict) or "event" not in row or "ts" not in row:
+                if not _valid(row):
                     counts["skipped"] += 1
                     continue
                 counts[inbox.apply_journal(conn, row, since=since)] += 1
