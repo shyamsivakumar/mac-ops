@@ -4526,12 +4526,24 @@ def timer_cases():
             except ValueError:
                 continue
             raise AssertionError("period %r accepted" % bad)
+        for bad in ([1], "x"):
+            try:
+                store.add_timer("p", due_ts=1.0, payload=bad)
+            except TypeError:
+                continue
+            raise AssertionError("payload %r accepted" % (bad,))
+        store.add_timer("named", due_ts=2500.0, payload={"timer": "other", "k": 1})
+        store.enqueue_due_timers(now=2501.0)
+        exact(json.loads(store.connect().execute("SELECT payload FROM inbox ORDER BY id DESC").fetchone()[0]), {"timer": "named", "k": 1})
         store.set_last_run(now=10000.0)
         store.ensure_fallback(now=10000.0)
         exact(store.enqueue_due_timers(now=14000.0), 0)
         store.set_last_run(now=17000.0)
         exact([store.enqueue_due_timers(now=17300.0), store.enqueue_due_timers(now=24300.0)], [0, 1])
         exact(fired()[-1].startswith("timer_due:fallback:"), True)
+        store.set_last_run(now=712790.0)
+        store.enqueue_due_timers(now=719900.0)
+        exact([store.enqueue_due_timers(now=719990.0), store.enqueue_due_timers(now=719990.0 + 7199), store.enqueue_due_timers(now=719990.0 + 7200)], [1, 0, 1])
 
 
 def outbox_cases():
