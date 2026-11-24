@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import fcntl
 import importlib.machinery
 import importlib.util
@@ -408,6 +409,63 @@ class TestTickLauncher(unittest.TestCase):
                 held.close()
             self.assertEqual(result.returncode, 0)
             self.assertIn("skipped: another tick holds the lock", log_path.read_text())
+
+    def precheck(self, mark=None, month_files=None, now=None, unreadable=False):
+        module = self.launcher()
+        with tempfile.TemporaryDirectory(prefix="coord-tick-test-") as tmp:
+            tmp = Path(tmp)
+            if mark is not None:
+                (tmp / "mark").write_text(mark)
+            for name, lines in (month_files or {}).items():
+                (tmp / name).write_text("\n".join(lines) + "\n")
+            if unreadable:
+                (tmp / "events-2023-11.jsonl").mkdir()
+            overrides = {
+                "COORD_TICK_PRECHECK": "on",
+                "COORD_TICK_MARK": str(tmp / "mark"),
+                "COORD_JOURNAL_DIR": str(tmp),
+            }
+            with mock.patch.dict(os.environ, overrides):
+                return module.skip_reason(now)
+
+    def row(self, ts, event="alarm_raised", **data):
+        return json.dumps({"ts": ts, "event": event, "data": data})
+
+    def test_a_quiet_journal_skips_and_a_wake_event_runs(self):
+        started = 1_700_000_000.0
+        mark = json.dumps({"started": started, "ran": started})
+        lines = [self.row(started - 5, "gate_verdict")]
+        month = {"events-2023-11.jsonl": lines}
+        self.assertIn("no wake-class", self.precheck(mark, month, started + 60))
+        lines.append(self.row(started + 5))
+        self.assertIsNone(self.precheck(mark, month, started + 60))
+        lines[-1] = self.row(started + 5, via_tick=True)
+        self.assertIsNotNone(self.precheck(mark, month, started + 60))
+
+    def test_a_month_boundary_reads_both_month_files(self):
+        started = calendar.timegm((2023, 11, 30, 23, 50, 0))
+        now = started + 1200
+        mark = json.dumps({"started": started, "ran": started})
+        old = self.row(started - 5, "gate_verdict")
+        both = {"events-2023-11.jsonl": [old], "events-2023-12.jsonl": [self.row(now - 60)]}
+        self.assertIsNone(self.precheck(mark, both, now))
+        late = {"events-2023-11.jsonl": [old, self.row(started + 30)]}
+        self.assertIsNone(self.precheck(mark, late, now))
+        quiet = {"events-2023-11.jsonl": [old]}
+        self.assertIsNotNone(self.precheck(mark, quiet, now))
+
+    def test_doubt_runs_the_tick(self):
+        started = 1_700_000_000.0
+        mark = json.dumps({"started": started, "ran": started})
+        old = self.row(started - 5, "gate_verdict")
+        month = {"events-2023-11.jsonl": [old]}
+        bad = {"events-2023-11.jsonl": [old, "{not json"]}
+        self.assertIsNone(self.precheck(mark, bad, started + 60))
+        self.assertIsNone(self.precheck(mark, month, started - 60))
+        self.assertIsNone(self.precheck(mark, month, started + 7200))
+        self.assertIsNone(self.precheck("junk", month, started + 60))
+        self.assertIsNone(self.precheck(None, month, started + 60))
+        self.assertIsNone(self.precheck(mark, None, started + 60, unreadable=True))
 
     def test_the_lock_path_is_the_same_for_every_caller(self):
         module = self.launcher()
