@@ -4506,6 +4506,92 @@ def closed_ticket_merge():
     exact((merges, items), ([], []))
 
 
+def replay_cases():
+    import inbox as store
+    import inbox_replay as replay
+
+    def row(ts, event, pr=None, **data):
+        return {
+            "ts": ts,
+            "event": event,
+            "actor": "x",
+            "repo": "o/r",
+            "pr": pr,
+            "head": "a" * 40,
+            "ticket": None,
+            "data": data,
+        }
+
+    def write(directory, name, *rows, tail=""):
+        with open(os.path.join(directory, name), "a") as fh:
+            fh.writelines(json.dumps(r, default=str) + "\n" for r in rows)
+            fh.write(tail)
+
+    def alarms():
+        return [
+            r[0]
+            for r in store.connect().execute(
+                "SELECT dedupe_key FROM inbox WHERE kind='alarm' ORDER BY id"
+            )
+        ]
+
+    def fresh():
+        return {
+            "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-replay-j-"),
+            "COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-replay-i-"),
+        }
+
+    with patch.dict(os.environ, fresh()):
+        jdir = os.environ["COORD_JOURNAL_DIR"]
+        write(
+            jdir,
+            "events-2026-10.jsonl",
+            row(100, "gate_verdict", 1),
+            row(5000, "gate_verdict", 2),
+        )
+        write(
+            jdir,
+            "events-2026-11.jsonl",
+            row(6000, "alarm_raised", 0, alarm="a-1"),
+            tail='not json\n[1]\n{"ts":1',
+        )
+        try:
+            replay.replay()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("replay ran before activation")
+        replay.activate(now=1000.0)
+        replay.activate(now=9999.0)
+        exact(replay.replay(), {"enqueued": 2, "seen_only": 1, "skipped": 2})
+        exact(replay.replay(), {"enqueued": 0, "seen_only": 0, "skipped": 0})
+        write(jdir, "events-2026-10.jsonl", row(7000, "gate_verdict", 3))
+        exact(replay.replay()["enqueued"], 1)
+        with open(os.path.join(jdir, "events-2026-11.jsonl"), "a") as fh:
+            fh.write(',"event":"gate_verdict"}\n')
+        exact(replay.replay(), {"enqueued": 0, "seen_only": 1, "skipped": 0})
+        exact(store.counts()["pending"], 3)
+    for steps in (("hook", "replay"), ("replay", "hook")):
+        with patch.dict(os.environ, fresh()):
+            rows = [
+                row(2000 + n, event, 0, alarm="x-1", at=Path("/p"))
+                for n, event in enumerate(
+                    ("alarm_raised", "alarm_withdrawn", "alarm_raised")
+                )
+            ]
+            write(os.environ["COORD_JOURNAL_DIR"], "events-2026-11.jsonl", *rows)
+            replay.activate(now=1000.0)
+            for step in steps:
+                if step == "replay":
+                    replay.replay()
+                else:
+                    for r in rows:
+                        store.record_journal(r, wait=2)
+            exact(alarms(), ["alarm:x-1:0", "alarm:x-1:1"])
+            replay.replay()
+            exact(alarms(), ["alarm:x-1:0", "alarm:x-1:1"])
+
+
 def outbox_cases():
     import inbox as store
     import inbox_outbox as out
@@ -4720,6 +4806,7 @@ def inbox():
         lines, err = run_hook(held, emits[:1], wait=0.3)
         lock.close()
         exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
+    replay_cases()
     outbox_cases()
 
 
