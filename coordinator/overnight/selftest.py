@@ -4733,6 +4733,62 @@ def inbox_poll_cases():
             raise AssertionError("fetch accepted a bad answer")
     exact(calls[0][0], ["gh", "pr", "list", "-R", "o/r", "--state", "open", "--limit", "100",
                         "--json", "number,headRefOid,isDraft,createdAt,labels,reviews"])
+    sha = "c" * 40
+    status = {"sha": sha, "statuses": [{"context": "srw/agent-check", "state": "pending"},
+                                       {"context": "ci/other", "state": "failure"}]}
+
+    def tiers():
+        with store.txn() as conn:
+            return [r[0] for r in conn.execute("SELECT tier FROM inbox WHERE kind='ci_main' ORDER BY id")]
+
+    with scratch():
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=1.0), 0)
+        status["statuses"][0]["state"] = "success"
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=2.0), 1)
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=3.0), 0)
+        status["statuses"][0]["state"] = "failure"
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=4.0), 1)
+        exact(tiers(), ["batch", "wake"])
+        status["statuses"][0]["state"] = "error"
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=5.0), 1)
+        exact(tiers(), ["batch", "wake", "wake"])
+    good = {"sha": sha, "statuses": [{"context": "srw/agent-check", "state": "failure"}]}
+    good_list = [{"context": "srw/agent-check", "state": "failure"}]
+    replies = {"bad/x": RuntimeError("unreadable"), "n/a": None, "s/x": {"sha": 7, "statuses": []}, "u/x": {"sha": "\ud800", "statuses": good_list},
+               "h/x": {"sha": "ABC", "statuses": good_list},
+               "l/x": {"sha": sha, "statuses": "x"}, "w/x": {"sha": sha, "statuses": [
+                   None, {"context": {}, "state": "failure"}, {"context": "srw/agent-check", "state": []}]},
+               "o/r": good}
+
+    def fetch_ci(repo):
+        if isinstance(replies[repo], Exception):
+            raise replies[repo]
+        return replies[repo]
+
+    with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
+        exact(poll.poll_ci(list(replies), fetch_ci, now=1.0), 1)
+    exact(("bad/x: fetch failed: RuntimeError" in err.getvalue(), "unreadable" in err.getvalue()), (True, False))
+    more = dict(good, total_count=31)
+    with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
+        exact(poll.poll_ci(["o/r"], lambda repo: more, now=1.0), 1)
+    exact(err.getvalue(), "o/r: 31 statuses, 1 returned; the rest are not polled\n")
+    with scratch(), patch.dict(os.environ, {"COORD_INBOX_CI_CONTEXTS": " a/b, ,c/d "}):
+        exact(sorted(poll.ci_contexts()), ["a/b", "c/d"])
+    exact(sorted(poll.ci_contexts()), ["srw/agent-check"])
+    with patch.dict(os.environ, {"COORD_INBOX_REPOS": ""}):
+        exact(poll.poll_ci(poll.configured_repos(), raising, now=1.0), 0)
+    exact(tried, [])
+    calls.clear()
+    answers = [(0, json.dumps(dict(good, extra="x")), ""), (1, "", "boom")]
+    with patch.object(poll.gh_gateway, "run", gh):
+        exact(poll.fetch_status("o/r"), dict(good, total_count=None))
+        try:
+            poll.fetch_status("o/r")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("fetch_status accepted a failed read")
+    exact(calls[0][0], ["gh", "api", "repos/o/r/commits/HEAD/status?per_page=100"])
 
 
 def outbox_cases():
