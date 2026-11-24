@@ -1099,7 +1099,7 @@ def hourly_selftest_fixture():
         now[0] += 3600
         outcome[0] = SimpleNamespace(returncode=0, stdout="".join("PASS " + name + "\n" for name in sorted(adapter.EXPECTED)))
         exact(run(), "PASS")
-        exact(json.loads(decisions.read_text()), {"items": [{"id": "unrelated"}]})
+        exact(json.loads(decisions.read_text())["items"], [{"id": "unrelated"}])
         with patch.object(adapter, "hourly", return_value="PASS"):
             outcome[0] = SimpleNamespace(returncode=1, stdout="FAIL watchdog\n")
             now[0] += 3600
@@ -1109,6 +1109,25 @@ def hourly_selftest_fixture():
                 pass
             else:
                 raise AssertionError("negative control accepted unconditional PASS")
+    with tempfile.TemporaryDirectory() as directory:
+        state = Path(directory) / "state.json"
+        decisions = Path(directory) / "decisions.json"
+        decisions.write_text(json.dumps({"items": [{"id": "old"}]}))
+
+        def raising_runner(command, **options):
+            decisions.write_text(json.dumps({"items": [{"id": "old"}, {"id": "new"}]}))
+            return SimpleNamespace(returncode=1, stdout="")
+
+        exact(adapter.hourly(state, decisions, ["x"], clock=lambda: 1, runner=raising_runner), "FAIL")
+        exact([item["id"] for item in json.loads(decisions.read_text())["items"]], ["old", "new", adapter.ALARM])
+        exact(json.loads(state.read_text()), {"last_run": 1, "passed": False})
+        decisions.write_text("{broken")
+        exact(adapter.hourly(state, decisions, ["x"], clock=lambda: 9999, runner=lambda *a, **k: SimpleNamespace(returncode=1, stdout="")), "FAIL")
+        exact(decisions.read_text(), "{broken")
+        exact(json.loads(state.read_text()), {"last_run": 9999, "passed": False, "board": "failed"})
+        missing = Path(directory) / "missing.json"
+        exact(adapter.hourly(state, missing, ["x"], clock=lambda: 99999, runner=lambda *a, **k: SimpleNamespace(returncode=1, stdout="")), "FAIL")
+        exact([item["id"] for item in json.loads(missing.read_text())["items"]], [adapter.ALARM])
     # The adapter must run the executable beside it: a stub that prints the
     # suite's own names passes, and a missing executable fails with a reason
     # of its own.
