@@ -2585,6 +2585,58 @@ def send_integrity():
         else:
             exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
 
+    coordq = load_coordq()
+    from argparse import Namespace
+    old, new = "a" * 40, "b" * 40
+
+    def queued(item_id, title, thread="t1", key=None):
+        item = {"id": item_id, "messageTitle": title, "args": {"threadId": thread}}
+        if key:
+            item["actionKey"] = key
+        return item
+
+    started = [{"id": 9, "title": f"SRW#7 check {old}", "target": "t1"}]
+
+    def older_heads(items, keys, title, target=None, below=None):
+        queue = {"items": list(items), "started": started,
+                 "actionKeys": {key: {"id": 1, "state": "queued"} for key in keys}}
+        dropped = coordq.drop_older_heads(queue, title, target, below)
+        exact(queue["started"], started)
+        return dropped, [item["id"] for item in queue["items"]], sorted(queue["actionKeys"])
+
+    items = [queued(1, f"SRW#7 check {old}", key="k1"), queued(2, f"SRW#7 gate findings {old}"),
+             queued(3, f"SRW#7 continue {new}", thread="t2"), queued(4, f"SRW#8 check {old}"),
+             queued(5, f"SRW#7 check {old}", thread="t2"), queued(6, f"gate:SRW#7:{old}"),
+             queued(7, f"SRW#7 check {old}")]
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}"), (4, [3, 4, 6], []))
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}", "t1", 7), (2, [3, 4, 5, 6, 7], []))
+    exact(older_heads(items, [], f"SRW#7 continue {old}")[0], 1)
+    for other in ("SRW#7 continue", f"SRW#7 retry {new}", f"SRW#7 continue {new[:39]}", f"gate:SRW#7:{new}", ""):
+        exact(older_heads(items, [], other)[0], 0)
+
+    def start(fresh, key=None, thread="t1", head=new):
+        args = json.dumps({"threadId": thread, "message": "m"})
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch, "COORD_JOURNAL_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), patch.object(coordq, "drain"), \
+             patch.object(coordq, "current_head", return_value=fresh), \
+             patch.object(coordq, "flush_provider_blocks"), contextlib.redirect_stdout(io.StringIO()):
+            coordq.save({"next": 8, "items": [dict(item) for item in items],
+                         "actionKeys": {"k1": {"id": 1, "state": "queued"}}})
+            try:
+                coordq.cmd_start(Namespace(args=args, tool="t3_thread_send", title=f"SRW#7 continue {head}",
+                                           priority=800, action_key=key))
+            except SystemExit:
+                pass
+            return [item["id"] for item in coordq.load()["items"]]
+
+    exact(start(new), [3, 4, 5, 6, 8])
+    exact(start(old), list(range(1, 9)))
+    exact(start(None), list(range(1, 9)))
+    exact(start(new, head=old), list(range(1, 9)))
+    exact(start(new, key="k1"), list(range(1, 8)))
+    exact(start(new, thread="t3"), list(range(1, 9)))
+
 
 def build_here():
     import lane_driver as lane
