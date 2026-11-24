@@ -2192,6 +2192,10 @@ def gate_round_cap():
         exact({k: entry[k] for k in ("repo", "pr", "head", "rounds", "gate", "lines")},
               {"repo": repo, "pr": 50, "head": heads[2], "rounds": 3, "gate": "gate", "lines": None})
         exact([c["pr"] for c in coordq.round_caps({**two, f"roundcap:{repo}#4": "bad"})], [50])
+        good = {"repo": repo, "pr": 7, "head": "h", "rounds": 3, "at": 1.5}
+        bad = {f"roundcap:x#{i}": {**good, **change} for i, change in enumerate(
+            ({"repo": 5}, {"pr": "7"}, {"pr": True}, {"rounds": 3.0}, {"rounds": True}, {"at": "1"}, {"at": None}))}
+        exact([c["pr"] for c in coordq.round_caps({**bad, "roundcap:ok": good})], [7])
         entry["at"] = 1.0
         act(50, heads[2], two, verdict=("absent", None, ""), board=False)
         exact((two[key]["at"], two[key]["gate"]), (1.0, "gate"))
@@ -2228,6 +2232,9 @@ def gate_round_cap():
             pruned = {f"roundcap:{repo}#{n}": {"repo": repo, "pr": n} for n in (1, 2)}
             lane.prune_round_caps({"repos": prs}, pruned)
             exact(sorted(v["pr"] for v in pruned.values()), left)
+        pruned = {f"roundcap:{repo}#1": "bad", f"roundcap:{repo}#2": {"repo": repo, "pr": 1}, "other": "x"}
+        lane.prune_round_caps({"repos": {}}, pruned)
+        exact(sorted(pruned), ["other", f"roundcap:{repo}#2"])
     gatekeep_round_cap()
 
 
