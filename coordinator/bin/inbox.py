@@ -114,10 +114,18 @@ def connect(deadline=None):
     return conn
 
 
+_current = None
+
+
 @contextlib.contextmanager
 def txn(deadline=None):
+    global _current
+    if _current is not None:
+        yield _current
+        return
     conn = connect(deadline)
     _begin(conn, deadline)
+    _current = conn
     try:
         yield conn
         conn.execute("COMMIT")
@@ -125,6 +133,7 @@ def txn(deadline=None):
         conn.execute("ROLLBACK")
         raise
     finally:
+        _current = None
         conn.close()
 
 
@@ -304,6 +313,13 @@ def enqueue_due_timers(*, now):
     return count
 
 
+def _payload(raw):
+    try:
+        return None if raw is None else json.loads(raw)
+    except ValueError:
+        return raw
+
+
 def claim(session, *, worker, now, lease=900, limit=50, pid=None):
     with txn() as conn:
         ids = [
@@ -321,10 +337,7 @@ def claim(session, *, worker, now, lease=900, limit=50, pid=None):
                 (worker, pid, now + lease, token, row_id),
             )
         rows = conn.execute("SELECT * FROM inbox WHERE run_id=? ORDER BY id", (token,)).fetchall()
-    return [
-        dict(row, payload=None if row["payload"] is None else json.loads(row["payload"]))
-        for row in rows
-    ]
+    return [dict(row, payload=_payload(row["payload"])) for row in rows]
 
 
 def _update(rows, sql, extra=()):
