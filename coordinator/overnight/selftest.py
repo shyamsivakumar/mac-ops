@@ -1304,7 +1304,7 @@ def watchdog():
             lane.watchdog()
         return buffer.getvalue()
 
-    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace,          patch.object(lane.subprocess, "run", side_effect=fake_run),          patch.object(alarms, "MUTE_PATH", mute),          patch.object(alarms, "read_board", side_effect=read_board),          patch.object(alarms, "write_board", side_effect=write_board):
+    with patch("builtins.open", side_effect=opened),          patch.object(lane, "inbox_liveness", return_value=None),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace,          patch.object(lane.subprocess, "run", side_effect=fake_run),          patch.object(alarms, "MUTE_PATH", mute),          patch.object(alarms, "read_board", side_effect=read_board),          patch.object(alarms, "write_board", side_effect=write_board):
         # A quiet log is not a dead job. Every job is loaded and exits
         # clean, so the stale gatekeep log must not raise an alarm.
         stale = {path: now - 200 * 60 for path in mtimes}
@@ -5237,6 +5237,142 @@ def notice_cases(store, out):
         exact(out.drain(lambda row: None, now=90002.0, shadow=False), {"sent": 3, "errors": 0})
 
 
+def liveness_cases():
+    import fcntl
+    import signal
+    import threading
+    import inbox as store
+    import inbox_worker as w
+
+    def probe(**k):
+        return w.liveness(**{**dict(now=1000.0, lock_held=True, heartbeat=900.0, last_pass_end=0.0, expect_passes=False), **k})
+
+    exact([probe(heartbeat=800.0), bool(probe(heartbeat=700.0)), probe(heartbeat=None) is not None], [None, True, True])
+    exact([probe(lock_held=False, last_pass_end=600.0), bool(probe(lock_held=False, last_pass_end=600.0, expect_passes=True)),
+           probe(lock_held=False, heartbeat=None, last_pass_end=None, expect_passes=True)], [None, True, None])
+
+    root = tempfile.mkdtemp(prefix="selftest-liveness-")
+    missing = os.path.join(root, "never-made")
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": missing, "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-liveness-j-")}):
+        exact((w.watch(now=1000.0), os.path.exists(missing)), (None, False))
+        os.makedirs(missing)
+        exact((w.watch(now=1000.0), os.listdir(missing)), (None, []))
+        lock = open(os.path.join(missing, w.LOCK), "w")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        stale = w.watch(now=1000.0)
+        exact(bool(stale), True)
+        w._write(os.path.join(missing, w.HEARTBEAT), 900.0)
+        exact(w.watch(now=1000.0), None)
+        w._write(os.path.join(missing, w.HEARTBEAT), 700.0)
+        exact((w.watch(now=1000.0), w.watch(now=1100.0)), (stale, stale))
+        with open(os.path.join(missing, w.HEARTBEAT), "w") as handle:
+            handle.write("garbage")
+        exact(w.watch(now=1000.0), stale)
+        lock.close()
+        exact(w.watch(now=1000.0), None)
+
+    beatdir = tempfile.mkdtemp(prefix="selftest-liveness-beat-")
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": beatdir}):
+        failures = []
+
+        def hammer():
+            for n in range(150):
+                try:
+                    w.heartbeat(now=float(n))
+                except Exception as exc:
+                    failures.append(exc)
+
+        threads = [threading.Thread(target=hammer) for _ in range(2)]
+        began = time.monotonic()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        exact((failures, [n for n in os.listdir(beatdir) if n.endswith(".tmp")], time.monotonic() - began < 1), ([], [], True))
+        calls = []
+
+        def flaky(*, now):
+            calls.append(now)
+            if len(calls) == 1:
+                raise OSError("disk")
+
+        stop = threading.Event()
+        ticks = iter(range(10))
+        with patch.object(w, "heartbeat", flaky), contextlib.redirect_stderr(io.StringIO()):
+            thread = threading.Thread(target=w._beat, args=(stop, 0.02, lambda: next(ticks)), daemon=True)
+            thread.start()
+            time.sleep(0.2)
+            stop.set()
+            thread.join(1)
+        exact(len(calls) > 1, True)
+
+    seen_alarm = []
+    old = signal.signal(signal.SIGALRM, lambda signum, frame: seen_alarm.append(signum))
+    try:
+        w._on_alarm(signal.SIGALRM, None)
+        signal.raise_signal(signal.SIGALRM)
+        exact(seen_alarm, [signal.SIGALRM])
+    finally:
+        signal.signal(signal.SIGALRM, old)
+
+    import lane_driver as lane
+    unreadable = os.path.join(tempfile.mkdtemp(prefix="selftest-liveness-"), w.LOCK)
+    real_open = open
+
+    def denied(path, *args, **kwargs):
+        if str(path) == unreadable:
+            raise PermissionError(13, "denied")
+        return real_open(path, *args, **kwargs)
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": os.path.dirname(unreadable)}), patch("builtins.open", denied):
+        exact(lane.inbox_liveness(), "inbox liveness check failed (PermissionError)")
+
+    def seed():
+        store.enqueue("round_cap", "round_cap:o/r#1:x", source="journal", ts=0.0, repo="o/r", pr=1)
+
+    def state():
+        return [tuple(r) for r in store.connect().execute("SELECT status, attempts FROM inbox")]
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-liveness-"),
+                                 "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-liveness-j-")}):
+        seed()
+        before = (signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL))
+        exact(w.shadow_pass(now=100.0, runner=lambda lines: time.sleep(1.5), alarm_seconds=0.3, beat_seconds=0.05, clock=lambda: 555.0), {"batches": 0, "lines": 0})
+        exact((signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL)), before)
+        probe_lock = open(os.path.join(os.environ["COORD_INBOX_DIR"], w.LOCK), "w")
+        fcntl.flock(probe_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        probe_lock.close()
+        exact(state(), [("pending", 1)])
+        exact(w._stamp(w.PASS_END), 555.0)
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-liveness-"),
+                                 "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-liveness-j-")}):
+        seed()
+        seen = []
+
+        def runner(lines):
+            time.sleep(0.3)
+            seen.append(w._stamp(w.HEARTBEAT))
+            return "NOTHING: x"
+
+        probing = open(os.path.join(os.environ["COORD_INBOX_DIR"], w.LOCK), "w")
+        fcntl.flock(probing, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        threading.Timer(0.1, probing.close).start()
+        exact(w.shadow_pass(now=100.0, runner=runner, retry_delay=0.4, beat_seconds=0.05, clock=lambda: 555.0)["batches"], 1)
+        exact(seen, [555.0])
+
+    with patch.dict(os.environ, {"COORD_INBOX_DIR": tempfile.mkdtemp(prefix="selftest-liveness-"),
+                                 "COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-liveness-j-")}):
+        seed()
+
+        def interrupted(conn, rows, now):
+            raise w.PassTimeout()
+
+        with patch.object(store, "_ack", interrupted):
+            exact(w.shadow_pass(now=100.0, runner=lambda lines: "NOTHING: x")["batches"], 0)
+        exact((state(), store.connect().execute("SELECT COUNT(*) FROM outbox").fetchone()[0]), ([("pending", 1)], 0))
+
+
 def inbox():
     import functools
     import inbox as store
@@ -5369,6 +5505,7 @@ def inbox():
     timer_cases()
     inbox_poll_cases()
     worker_cases()
+    liveness_cases()
 
 
 def worker_cases():
