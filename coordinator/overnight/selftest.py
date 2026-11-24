@@ -4515,13 +4515,13 @@ def close_evidence():
 
     def gate(head, dry=False):
         state["head"] = head
-        event = {"pr": "r/x#7", "issue": 911, "head": head}
+        event = {"pr": "r/x#7", "scopeIssue": "911", "head": head}
         return coordq.scope_gate({"proofRequired": True, "key": "MO"}, "r/x", "7", event, f"gate:r/x#7:{head}", dry)
 
     with tempfile.TemporaryDirectory() as scratch, \
          patch.object(coordq, "DIR", scratch), \
          patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
-         patch.object(coordq, "gh_json", lambda endpoint: {"body": state["scope"]}), \
+         patch.object(coordq, "gh_json", lambda endpoint: [{"body": state["scope"]}]), \
          patch.object(coordq.close_check, "run_check", run_check), \
          patch.object(coordq.alarms, "route_update", route_update):
         exact((gate("a" * 8), gate("a" * 8), state["runs"], board), (False, False, 1, [("proof-MO-7", "raise")]))
@@ -4555,6 +4555,79 @@ def close_evidence():
             queue["gatedHeads"] = {"gate:r/x#7:" + "f" * 8: {}}
             coordq.save(queue)
         exact(gate("f" * 8), True)
+
+    mac_ops = "shyamsivakumar/mac-ops"
+    sha = "a" * 40
+    scope_in = "In: `coordinator/bin/coordq`, `coordinator/overnight/selftest.py`"
+    scope_out = "In: `coordinator/bin/coordq`"
+
+    class Reply:
+        def __init__(self, stdout=""):
+            self.stdout, self.stderr, self.returncode = stdout, "", 0
+
+    def drive(pr_text, scope, receipt=False):
+        pr = {"draft": False, "number": 7, "head": {"sha": sha}, "title": "x", "changed_files": 2,
+              "body": f"{pr_text}\nBuilder check: PASS {sha}\n", "base": {"ref": "main"}}
+        stamp = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+        comment = {"user": {"login": "me"}, "body": "<!-- coordinator-ticket " + json.dumps(stamp) + " -->"}
+        counts, cards, rows = {"checks": 0, "proof": 0}, [], []
+
+        def run(argv, **kwargs):
+            if argv[:3] == ["gh", "api", "user"]:
+                return Reply("me\n")
+            endpoint = argv[-1]
+            if endpoint == f"repos/{mac_ops}/pulls?state=open&per_page=100":
+                return Reply(json.dumps([[pr]]))
+            if endpoint == f"repos/{mac_ops}/issues/951/comments?per_page=100":
+                return Reply(json.dumps([[comment] if receipt else []]))
+            if endpoint == f"repos/{mac_ops}/issues/951":
+                return Reply(json.dumps({"body": scope}))
+            if endpoint in (f"repos/{mac_ops}/commits/{sha}/statuses?per_page=100",) or endpoint.endswith("/files?per_page=100"):
+                return Reply("[[]]")
+            raise AssertionError(f"unexpected read: {endpoint}")
+
+        def checked(repo, number, issue):
+            counts["checks"] += 1
+            files = ["coordinator/bin/coordq", "coordinator/overnight/selftest.py"]
+            return {"merge": sha, "files": files, "items": [check.item_scope(scope, files, "evidence/MO-951")]}
+
+        def no_proof(*args):
+            counts["proof"] += 1
+            return ""
+
+        with tempfile.TemporaryDirectory() as scratch, contextlib.ExitStack() as stack:
+            for patcher in (
+                    patch.object(coordq, "DIR", scratch),
+                    patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}),
+                    patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")),
+                    patch.object(coordq, "load_receipts", lambda: {"req-1": "builder-1"}),
+                    patch.object(coordq.gh_gateway, "run", run),
+                    patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None),
+                    patch.object(coordq, "builder_thread_for_issue", return_value=None),
+                    patch.object(coordq, "read_builder_thread", return_value=({"providerInstanceId": "fixture", "model": "m"}, [])),
+                    patch.object(coordq, "router_chain", return_value=[]),
+                    patch.object(coordq, "gate_proof", return_value=("none", "", "path")),
+                    patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR),
+                    patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}),
+                    patch.object(coordq, "gate_args", return_value={"clientRequestId": f"gate:{mac_ops}#7:{sha}", "modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t", "message": "m"}),
+                    patch.object(coordq.model_list, "is_blocked", return_value=False),
+                    patch.object(coordq.close_check, "run_check", checked),
+                    patch.object(coordq, "proof_gate", no_proof),
+                    patch.object(coordq.journal, "emit", lambda name, *rest, **fields: rows.append(name)),
+                    patch.object(coordq.alarms, "route_update", lambda board_path, card, action, item=None: cards.append((card, action)) or "wrote"),
+                    contextlib.redirect_stderr(io.StringIO()),
+                    contextlib.redirect_stdout(io.StringIO())):
+                stack.enter_context(patcher)
+            settings = Path(scratch) / "gatekeep-config.json"
+            settings.write_text(json.dumps({"repos": {mac_ops: {"key": "MO", "projectId": "fixture", "proofRequired": True, "proofOnOpen": True}}}))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+            gated = len(coordq.load().get("items", []))
+        return gated, cards, rows.count("scope_checked"), counts
+
+    for receipt in (False, True):
+        exact(drive("Refs #951", scope_out, receipt), (0, [("proof-MO-7", "raise")], 1, {"checks": 1, "proof": 0}))
+        exact(drive("Refs #951", scope_in, receipt), (1, [], 1, {"checks": 1, "proof": int(receipt)}))
+    exact(drive("no ticket named", scope_out), (1, [], 0, {"checks": 0, "proof": 0}))
 
 
 def provider_until():
