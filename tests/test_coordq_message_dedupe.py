@@ -9,8 +9,13 @@ refused.
 """
 
 import argparse
+import contextlib
+import importlib.util
 import io
 import json
+import os
+import sqlite3
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -18,6 +23,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.test_gatekeep_backstop_reviewer import load_coordq
+
+ROOT = Path(__file__).resolve().parents[1]
 
 TITLE = "MO#544 gate findings"
 THREAD = "mcp:launch:builder"
@@ -350,6 +357,57 @@ class MessageDedupeTests(unittest.TestCase):
         # The same message is refused now that its thread has it.
         with patch.object(self.q, "active_thread_ids", return_value={THREAD}):
             self.assertEqual(self.start()[0], 1)
+
+
+class WakeMetricsTests(unittest.TestCase):
+    def test_wake_metrics_report_from_the_inbox_and_the_journal(self):
+        sys.path.insert(0, str(ROOT / "coordinator/bin"))
+        self.addCleanup(sys.path.remove, str(ROOT / "coordinator/bin"))
+        import inbox as store
+
+        base = dict(source="journal", ts=1.0)
+        metrics = tempfile.mkdtemp(prefix="selftest-metrics-")
+        with patch.dict(os.environ, {"COORD_INBOX_DIR": metrics}):
+            store.enqueue("pr_opened", "pr_opened:a#5", repo="shyamsivakumar/mac-ops", pr=5, **base)
+            store.enqueue("pr_opened", "pr_opened:b#6", repo="other/repo", pr=6, **base)
+            store.enqueue("recut", "recut:5", pr=5, **base)
+            rows = store.claim("coordinator", worker="m", now=2.0, pid=os.getpid())
+            store.ack(rows[:1], now=3.0)
+            conn = store.connect()
+            conn.execute("INSERT INTO outbox(ts, run_id, kind, sent_ts) VALUES (1.0, ?, 'send', 601.0)", (rows[0]["run_id"],))
+            conn.close()
+        github = os.path.join(metrics, "prs.json")
+        json.dump([{"number": 5, "createdAt": "2026-11-23T15:00:00Z"}, {"number": 6, "createdAt": "2026-11-23T15:00:00Z"}], open(github, "w"))
+        many = os.path.join(metrics, "many.json")
+        json.dump([{"number": n, "createdAt": "2026-11-23T15:00:00Z"} for n in range(1000)], open(many, "w"))
+        fixtures = ROOT / "evidence/event-inbox-design/tickets/fixtures"
+        spec = importlib.util.spec_from_file_location("coord_wake_metrics", ROOT / "scripts/coord_wake_metrics.py")
+        wake_metrics = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wake_metrics)
+        reports = []
+        for prs in (github, many):
+            out = io.StringIO()
+            with patch.dict(os.environ, {"HOME": "/nonexistent"}), contextlib.redirect_stdout(out):
+                wake_metrics.main(["--json", "--inbox-dir", metrics, "--github-prs", prs,
+                                   "--journal", str(fixtures / "journal-sample.jsonl"), "--launcher-log", str(fixtures / "launcher-sample.log")])
+            reports.append(json.loads(out.getvalue()))
+        report, capped = reports
+        self.assertEqual((report["buckets"]["skipped"], report["buckets"]["lock_skipped"]), (1, 1))
+        self.assertEqual((capped["lost"]["never_enqueued"], capped["lost"]["never_enqueued_truncated"]), (None, True))
+        self.assertEqual((report["runs"], report["duplicate_rate"]["journal"]), (6, 0.333))
+        self.assertEqual((report["volume"]["inbox"], report["latency"]["inbox_min"]["batch"]["median"]), ({"pr_opened/batch": 2, "recut/wake": 1}, 10.0))
+        self.assertEqual((report["lost"]["stuck"], report["lost"]["never_enqueued"]), (2, [6]))
+        self.assertEqual(sqlite3.connect(os.path.join(metrics, "inbox.db")).execute("SELECT COUNT(*) FROM inbox").fetchone()[0], 3)
+        conn = sqlite3.connect(os.path.join(metrics, "inbox.db"))
+        conn.execute("INSERT INTO inbox(ts, kind, status, repo, pr, tier, done_ts) VALUES (1795459920.0, 'pr_review', 'pending', 'shyamsivakumar/mac-ops', 7, 'batch', NULL), (1795459920.0, 'pr_review', 'done', 'shyamsivakumar/mac-ops', 8, 'batch', 1795470000.0)")
+        conn.commit()
+        conn.close()
+        out = io.StringIO()
+        with patch.dict(os.environ, {"HOME": "/nonexistent"}), contextlib.redirect_stdout(out):
+            wake_metrics.main(["--json", "--inbox-dir", metrics, "--since", "2026-11-23T15:40:00Z",
+                               "--until", "2026-11-23T21:06:00Z", "--journal", str(fixtures / "journal-sample.jsonl"),
+                               "--launcher-log", str(fixtures / "launcher-sample.log")])
+        self.assertEqual(json.loads(out.getvalue())["lost"]["stuck"], 2)
 
 
 if __name__ == "__main__":
