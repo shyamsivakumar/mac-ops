@@ -51,6 +51,7 @@ _NOT_IN_PATH = r"(?<![A-Za-z0-9_.*~/\\-])"
 PATH_TOKEN = re.compile(_NOT_IN_PATH +
                         r"(?=[A-Za-z0-9_.*-]*/)[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)*/?")
 FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
+DOCKERFILE_TOKEN = re.compile(_NOT_IN_PATH + r"Dockerfile(?:\.[A-Za-z0-9_-]+)?\b")
 
 PASS = "pass"
 FAIL = "fail"
@@ -192,6 +193,8 @@ def scope_tokens(body):
                 tokens.add(token)
         for match in FILE_TOKEN.finditer(text or ""):
             tokens.add(match.group(0).strip(".,;:()[]"))
+        for match in DOCKERFILE_TOKEN.finditer(text or ""):
+            tokens.add(match.group(0).strip(".,;:()[]"))
     return {token for token in tokens if not token_matches_any(token, excluded)}
 
 
@@ -203,6 +206,8 @@ def exclusion_tokens(text):
         if token and "://" not in token:
             tokens.add(token)
     for match in FILE_TOKEN.finditer(text or ""):
+        tokens.add(match.group(0).strip(".,;:()[]"))
+    for match in DOCKERFILE_TOKEN.finditer(text or ""):
         tokens.add(match.group(0).strip(".,;:()[]"))
     return tokens
 
@@ -333,6 +338,8 @@ def names_a_scope(tokens):
         if "/" in token:
             return True
         if FILE_TOKEN.fullmatch(token.rsplit("/", 1)[-1]):
+            return True
+        if DOCKERFILE_TOKEN.fullmatch(token.rsplit("/", 1)[-1]):
             return True
     return False
 
