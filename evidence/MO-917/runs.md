@@ -72,3 +72,5 @@ inbox eval with the new assertions, red on 5fa26488:
 KeyError: 'lock_skipped'
 ```
 green: PASS inbox; proof command exit 0 (fixture now also has one `skipped: another tick holds the lock` line)
+
+After merging origin/main (#919): the ticket proof exits 0, the inbox eval prints PASS with #919 hook cases and the metrics case both kept, and the M1 fast check passed on 74bf0998.
