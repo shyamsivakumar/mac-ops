@@ -2647,6 +2647,95 @@ def send_integrity():
         else:
             exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
 
+    coordq = load_coordq()
+    from argparse import Namespace
+    old, new = "a" * 40, "b" * 40
+
+    def queued(item_id, title, thread="t1", key=None):
+        item = {"id": item_id, "messageTitle": title, "args": {"threadId": thread}}
+        if key:
+            item["actionKey"] = key
+        return item
+
+    started = [{"id": 9, "title": f"SRW#7 check {old}", "target": "t1"}]
+
+    def older_heads(items, keys, title, below=None, reserved=None):
+        queue = {"items": list(items), "started": started, "reserved": reserved or {},
+                 "actionKeys": {key: {"id": 1, "state": "queued"} for key in keys}}
+        dropped = coordq.drop_older_heads(queue, title, below)
+        exact(queue["started"], started)
+        return dropped, [item["id"] for item in queue["items"]], sorted(queue["actionKeys"])
+
+    items = [queued(1, f"SRW#7 check {old}", key="k1"), queued(2, f"SRW#7 gate findings {old}"),
+             queued(3, f"SRW#7 continue {new}", thread="t2"), queued(4, f"SRW#8 check {old}"),
+             queued(5, f"SRW#7 check {old}", thread="t2"), queued(6, f"gate:SRW#7:{old}"),
+             queued(7, f"SRW#7 check {old}")]
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}"), (4, [3, 4, 6], []))
+    exact(older_heads(items, ["k1"], f"SRW#7 continue {new}", 7), (3, [3, 4, 6, 7], []))
+    exact(older_heads(items, [], f"SRW#7 continue {new}", reserved={"2": 1, "7:send": 1}),
+          (2, [2, 3, 4, 6, 7], []))
+    exact(older_heads(items, [], f"SRW#7 continue {old}")[0], 1)
+    for other in ("SRW#7 continue", f"SRW#7 retry {new}", f"SRW#7 continue {new[:39]}", f"gate:SRW#7:{new}", ""):
+        exact(older_heads(items, [], other)[0], 0)
+
+    repos = {"repos": {"o/one": {"key": "SRW"}, "o/two": {"key": "MO"}, "o/three": {"key": "MO"}}}
+
+    def read_head(config, run):
+        with tempfile.TemporaryDirectory() as scratch:
+            file = Path(scratch, "tickets.json")
+            file.write_text(config if isinstance(config, str) else json.dumps(config))
+            with patch.object(coordq, "TICKETS_CONFIG", str(file)), \
+                 patch.object(coordq.gh_gateway, "run", side_effect=run) as gh:
+                return coordq.current_head(f"SRW#7 check {old}"), gh.call_args_list
+
+    def answer(stdout, code=0):
+        return lambda *args, **kwargs: subprocess.CompletedProcess(args[0], code, stdout, "")
+
+    def raising(error):
+        def run(*args, **kwargs):
+            raise error
+        return run
+
+    failures = (answer("not json"), answer("{}"), answer("", 1), raising(subprocess.TimeoutExpired("gh", 40)),
+                raising(OSError("gh missing")), raising(coordq.gh_gateway.ApiBudgetExhausted("budget")))
+
+    head, calls = read_head(repos, answer(json.dumps({"head": {"sha": new}})))
+    exact(head, new)
+    exact([(c.args, c.kwargs) for c in calls], [((["gh", "api", "repos/o/one/pulls/7"],), {"timeout": 40, "fresh": True})])
+    for bad in failures:
+        exact(read_head(repos, bad)[0], None)
+    exact(read_head("{broken", answer("{}"))[0], None)
+    exact(read_head({"repos": {"o/one": {"key": "X"}}}, answer("{}")), (None, []))
+    exact(read_head({"repos": {"o/one": {"key": "SRW"}, "o/two": {"key": "SRW"}}}, answer("{}")), (None, []))
+
+    def start(runner, key=None, thread="t1", head=new, queued_items=items):
+        args = json.dumps({"threadId": thread, "message": "m"})
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORDQ_DIR": scratch, "COORD_JOURNAL_DIR": scratch}), \
+             patch.object(coordq, "DIR", scratch), patch.object(coordq, "drain"), \
+             patch.object(coordq, "TICKETS_CONFIG", str(Path(scratch, "tickets.json"))), \
+             patch.object(coordq.gh_gateway, "run", side_effect=runner) as gh, \
+             patch.object(coordq, "flush_provider_blocks"), contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "tickets.json").write_text(json.dumps(repos))
+            coordq.save({"next": 8, "items": [dict(item) for item in queued_items],
+                         "actionKeys": {"k1": {"id": 1, "state": "queued"}}})
+            try:
+                coordq.cmd_start(Namespace(args=args, tool="t3_thread_send", title=f"SRW#7 continue {head}",
+                                           priority=800, action_key=key))
+            except SystemExit:
+                pass
+            return [item["id"] for item in coordq.load()["items"]], gh.call_count
+
+    current = answer(json.dumps({"head": {"sha": new}}))
+    exact(start(current), ([3, 4, 6, 8], 1))
+    exact(start(current, thread="t3"), ([3, 4, 6, 8], 1))
+    exact(start(current, head=old), (list(range(1, 9)), 1))
+    exact(start(answer(json.dumps({"head": {"sha": old}}))), (list(range(1, 9)), 1))
+    exact(start(current, key="k1"), (list(range(1, 8)), 1))
+    exact(start(current, queued_items=items[2:4]), ([3, 4, 8], 0))
+    for broken in failures:
+        exact(start(broken), (list(range(1, 9)), 1))
+
 
 def build_here():
     import lane_driver as lane
@@ -4795,6 +4884,62 @@ def inbox_poll_cases():
             raise AssertionError("fetch accepted a bad answer")
     exact(calls[0][0], ["gh", "pr", "list", "-R", "o/r", "--state", "open", "--limit", "100",
                         "--json", "number,headRefOid,isDraft,createdAt,labels,reviews"])
+    sha = "c" * 40
+    status = {"sha": sha, "statuses": [{"context": "srw/agent-check", "state": "pending"},
+                                       {"context": "ci/other", "state": "failure"}]}
+
+    def tiers():
+        with store.txn() as conn:
+            return [r[0] for r in conn.execute("SELECT tier FROM inbox WHERE kind='ci_main' ORDER BY id")]
+
+    with scratch():
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=1.0), 0)
+        status["statuses"][0]["state"] = "success"
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=2.0), 1)
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=3.0), 0)
+        status["statuses"][0]["state"] = "failure"
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=4.0), 1)
+        exact(tiers(), ["batch", "wake"])
+        status["statuses"][0]["state"] = "error"
+        exact(poll.poll_ci(["o/r"], lambda repo: status, now=5.0), 1)
+        exact(tiers(), ["batch", "wake", "wake"])
+    good = {"sha": sha, "statuses": [{"context": "srw/agent-check", "state": "failure"}]}
+    good_list = [{"context": "srw/agent-check", "state": "failure"}]
+    replies = {"bad/x": RuntimeError("unreadable"), "n/a": None, "s/x": {"sha": 7, "statuses": []}, "u/x": {"sha": "\ud800", "statuses": good_list},
+               "h/x": {"sha": "ABC", "statuses": good_list},
+               "l/x": {"sha": sha, "statuses": "x"}, "w/x": {"sha": sha, "statuses": [
+                   None, {"context": {}, "state": "failure"}, {"context": "srw/agent-check", "state": []}]},
+               "o/r": good}
+
+    def fetch_ci(repo):
+        if isinstance(replies[repo], Exception):
+            raise replies[repo]
+        return replies[repo]
+
+    with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
+        exact(poll.poll_ci(list(replies), fetch_ci, now=1.0), 1)
+    exact(("bad/x: fetch failed: RuntimeError" in err.getvalue(), "unreadable" in err.getvalue()), (True, False))
+    more = dict(good, total_count=31)
+    with scratch(), contextlib.redirect_stderr(io.StringIO()) as err:
+        exact(poll.poll_ci(["o/r"], lambda repo: more, now=1.0), 1)
+    exact(err.getvalue(), "o/r: 31 statuses, 1 returned; the rest are not polled\n")
+    with scratch(), patch.dict(os.environ, {"COORD_INBOX_CI_CONTEXTS": " a/b, ,c/d "}):
+        exact(sorted(poll.ci_contexts()), ["a/b", "c/d"])
+    exact(sorted(poll.ci_contexts()), ["srw/agent-check"])
+    with patch.dict(os.environ, {"COORD_INBOX_REPOS": ""}):
+        exact(poll.poll_ci(poll.configured_repos(), raising, now=1.0), 0)
+    exact(tried, [])
+    calls.clear()
+    answers = [(0, json.dumps(dict(good, extra="x")), ""), (1, "", "boom")]
+    with patch.object(poll.gh_gateway, "run", gh):
+        exact(poll.fetch_status("o/r"), dict(good, total_count=None))
+        try:
+            poll.fetch_status("o/r")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("fetch_status accepted a failed read")
+    exact(calls[0][0], ["gh", "api", "repos/o/r/commits/HEAD/status?per_page=100"])
 
 
 def outbox_cases():
