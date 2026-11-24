@@ -2253,12 +2253,20 @@ def run_head_proof(settings, repo, number, cmd, head):
     _, failure = read_or_failure(
         subprocess.run, ["git", "-C", repo_dir, "fetch", "origin", f"refs/pull/{number}/head"],
         check=True, capture_output=True, text=True, timeout=60)
+    fetched, failure = (None, failure) if failure else read_or_failure(
+        subprocess.run, ["git", "-C", repo_dir, "rev-parse", "FETCH_HEAD"],
+        check=True, capture_output=True, text=True, timeout=60)
     if failure:
         return "fetch_failed", failure[-200:]
+    if fetched.stdout.strip() != head:
+        return "fetch_failed", f"the pull request head moved to {fetched.stdout.strip()[:8]}"
     fd, record = tempfile.mkstemp(prefix="proof-record-")
     os.close(fd)
     try:
-        result, failure = read_or_failure(proof_run.run, "green", repo_dir, head, cmd, None, record)
+        try:
+            result, failure = read_or_failure(proof_run.run, "green", repo_dir, head, cmd, None, record)
+        except SystemExit:
+            result, failure = None, f"the head {head[:8]} is not in the checkout"
         if failure:
             return "fetch_failed", failure[-200:]
         with open(record, encoding="utf-8") as handle:
@@ -2286,6 +2294,10 @@ def gate_allowed(state, required):
 
 def proof_required(settings):
     return bool(settings.get("proofRequired") or os.environ.get("COORD_PROOF_REQUIRED"))
+
+
+def proof_text(kept):
+    return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
 
 
 def proof_state(settings, repo, number, event, key, author, body, failure, ran):
@@ -2327,10 +2339,10 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     heads proved by one gatekeep run, so one run proves one head.
     """
     queue = load()
-    if key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
-        return ""
     heads = queue.get("proofHeads", {})
     kept = heads.get(key)
+    if key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
+        return proof_text(kept) if kept and kept["state"] in PROOF_PASSING else ""
     head = event["head"]
     card_id = f"proof-{settings['key']}-{number}"
     carded = [name for name, row in heads.items() if row.get("carded") and row["pr"] == event["pr"]]
@@ -2338,7 +2350,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     if kept and not blocked:
         if not drop_scope_card(card_id, carded, dry_run, "proofHeads"):
             return None
-        return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
+        return proof_text(kept)
     ticket, failure = read_or_failure(gh_json, f"repos/{repo}/issues/{event['scopeIssue']}")
     ticket = (ticket or [{}])[0]
     body = ticket.get("body") or ""
@@ -2380,7 +2392,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
                 write_replay(REPLAY_DIR, f"{settings['key']}-{event['scopeIssue']}", body, cmd, head)
             if not drop_scope_card(card_id, carded, dry_run, "proofHeads"):
                 return None
-            return f"\n\nProof run by Gatekeep on this head ({kept['state']}):\n{kept['tail']}\n" if kept["tail"] else ""
+            return proof_text(kept)
     rec = kept
     print(stamped(f"no proof record for {event['pr']} ({rec['state']})"), flush=True)
     if not dry_run and not rec["carded"]:
