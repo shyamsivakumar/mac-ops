@@ -4376,7 +4376,8 @@ def close_evidence():
         exact((gate("a" * 8), gate("a" * 8), state["runs"], board), (False, False, 1, [("proof-MO-7", "raise")]))
         state["scope"] = recorded[0][1] + ", `coordinator/overnight/selftest.py`"
         state["removal"] = "failed"
-        exact((gate("a" * 8), state["runs"], board[-1]), (True, 2, ("proof-MO-7", "remove")))
+        exact((gate("a" * 8), state["runs"], board[-1]), (False, 2, ("proof-MO-7", "remove")))
+        exact((gate("a" * 8), gate("a" * 8)), (False, False))
         state["removal"] = "wrote"
         exact((gate("a" * 8), board[-2:]), (True, [("proof-MO-7", "remove")] * 2))
         board.clear()
@@ -4385,6 +4386,16 @@ def close_evidence():
             state["raises"], state["runs"] = raised, 0
             head = type(raised).__name__[:8].ljust(8, "x")
             exact(([gate(head, True)] + [gate(head) for _ in range(4)], state["runs"]), ([True, False, False, True, True], 3))
+        before = coordq.load()
+        with patch.object(coordq, "gh_json", side_effect=RuntimeError("HTTP 502")):
+            exact((gate("g" * 8, True), coordq.load()), (True, before))
+        with patch.object(coordq, "gh_json", side_effect=coordq.gh_gateway.ApiBudgetExhausted("below the floor")):
+            try:
+                gate("h" * 8)
+            except coordq.gh_gateway.ApiBudgetExhausted:
+                pass
+            else:
+                raise AssertionError("the budget stop was swallowed")
         state["raises"], state["merge"] = None, "d" * 8
         wrong = "gate:r/x#7:" + "e" * 8
         exact((gate("e" * 8), wrong in coordq.load().get("scopeHeads", {}), wrong in coordq.load().get("scopeFetch", {})), (False, False, False))

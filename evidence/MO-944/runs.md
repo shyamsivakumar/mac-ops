@@ -45,3 +45,7 @@ PR 921 issue 917 merge d5efd3f8
    proof file pass  - evidence/MO-917/check-proof.md is present
   scope_refusal items: ['scope']
 ```
+
+## After second review (merged origin/main, drop_scope_card holds the head on a failed removal)
+
+Ticket proof: exit 0. close-evidence eval in place: "in place OK"; flat copy: "close-evidence OK". New eval cases: failed removal gives False twice then True; dry run with a failed issue read leaves the queue unchanged; ApiBudgetExhausted passes through.
