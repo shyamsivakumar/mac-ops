@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -70,14 +71,14 @@ def ci_contexts():
 
 
 def fetch_status(repo):
-    result = gh_gateway.run(["gh", "api", f"repos/{repo}/commits/HEAD/status"],
+    result = gh_gateway.run(["gh", "api", f"repos/{repo}/commits/HEAD/status?per_page=100"],
                             timeout=120, limit=gh_gateway.floor(), caller_name="inbox_poll")
     if result.returncode:
         raise RuntimeError(f"gh api exit {result.returncode}")
     data = json.loads(result.stdout)
     if not isinstance(data, dict):
         return data
-    return {"sha": data.get("sha"), "statuses": data.get("statuses")}
+    return {key: data.get(key) for key in ("sha", "statuses", "total_count")}
 
 
 def poll_ci(repos, fetch_status, *, now):
@@ -92,9 +93,14 @@ def poll_ci(repos, fetch_status, *, now):
             print(f"{repo}: fetch returned {type(data).__name__}, not a dict", file=sys.stderr)
             continue
         sha, statuses = data.get("sha"), data.get("statuses")
-        if not isinstance(sha, str) or not isinstance(statuses, list):
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha) \
+                or not isinstance(statuses, list):
             print(f"{repo}: skipped a malformed status reply", file=sys.stderr)
             continue
+        total_count = data.get("total_count")
+        if _int(total_count) and total_count > len(statuses):
+            print(f"{repo}: {total_count} statuses, {len(statuses)} returned; the rest are not polled",
+                  file=sys.stderr)
         contexts = ci_contexts()
         found = False
         with inbox.txn() as conn:
