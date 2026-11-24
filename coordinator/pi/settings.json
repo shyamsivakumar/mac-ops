@@ -40,7 +40,7 @@
       "morph/morph-dsv41flash": {
         "reserveTokens": 32000
       },
-      "zai/glm-5.3": {
+      "zai/glm-5.4": {
         "reserveTokens": 32000
       }
     }
