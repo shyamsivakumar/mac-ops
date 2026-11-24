@@ -995,6 +995,7 @@ def prune_round_caps(snapshot, ledger):
             continue
         value = ledger[key]
         if not isinstance(value, dict):
+            del ledger[key]
             continue
         repo = value.get("repo")
         if repo not in repos or len(repos[repo]["prs"]) >= OPEN_PR_LIMIT:

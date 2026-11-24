@@ -2002,7 +2002,15 @@ def lane_ledger():
     return ledger if isinstance(ledger, dict) else {}
 
 
-ROUND_CAP_FIELDS = ("repo", "pr", "head", "rounds", "at")
+def is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_round_cap(value):
+    return (isinstance(value, dict) and isinstance(value.get("repo"), str)
+            and is_int(value.get("pr")) and is_int(value.get("rounds"))
+            and isinstance(value.get("head"), str)
+            and isinstance(value.get("at"), (int, float)) and not isinstance(value.get("at"), bool))
 
 
 def round_caps(ledger):
@@ -2010,7 +2018,7 @@ def round_caps(ledger):
     for key, value in ledger.items():
         if not key.startswith("roundcap:"):
             continue
-        if not isinstance(value, dict) or any(field not in value for field in ROUND_CAP_FIELDS):
+        if not is_round_cap(value):
             print(f"round caps: {key} is not a round cap entry, skipped", file=sys.stderr)
             continue
         caps.append(value)
