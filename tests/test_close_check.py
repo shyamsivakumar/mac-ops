@@ -311,6 +311,30 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
 
+    def test_a_without_clause_excludes_from_without_on(self):
+        check = close_check()
+        ticket = "In:\n- `src/a.py`: move it without changing its behavior.\n"
+        item = check.item_scope(ticket, ["src/a.py"])
+        self.assertEqual(item["status"], check.PASS)
+
+    def test_a_without_clause_excludes_only_what_it_names(self):
+        check = close_check()
+        ticket = "In: Change src/a.py without changing src/b.py."
+        self.assertEqual(check.scope_tokens(ticket), {"src/a.py"})
+
+    def test_a_prohibition_before_a_without_clause_still_excludes(self):
+        check = close_check()
+        for ticket in ("In: src/b.py. src/a.py must not change.",
+                       "In: src/b.py. Do not touch src/a.py."):
+            self.assertEqual(check.scope_tokens(ticket), {"src/b.py"})
+
+    def test_a_without_clause_inside_an_out_section_stays_excluded(self):
+        check = close_check()
+        ticket = "In: src/a.py.\n\n## Out of scope\n- src/b.py, without changing src/c.py.\n"
+        permission, exclusion = check.scope_texts(ticket)
+        self.assertEqual(check.exclusion_tokens(exclusion), {"src/b.py", "src/c.py"})
+        self.assertEqual(check.scope_tokens(ticket), {"src/a.py"})
+
     def test_a_copied_string_does_not_tie_a_test(self):
         """No string ties a test to a change.
 
