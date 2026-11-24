@@ -24,3 +24,10 @@ PASS gate-round-cap
 PASS decisions-board-guard
 exit 0
 ```
+
+## gate-round-cap from a flat copy of coordinator/ in a temp dir (after merging origin/main 898b247b)
+```
+PASS gate-round-cap
+PASS decisions-board-guard
+exit 0
+```
