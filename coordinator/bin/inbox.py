@@ -1,5 +1,6 @@
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import sqlite3
@@ -191,12 +192,30 @@ def from_journal(conn, row):
     )
 
 
+def apply_journal(conn, row, *, since=None):
+    canonical = json.dumps(
+        json.loads(json.dumps(row, default=str)), sort_keys=True, separators=(",", ":")
+    )
+    key = "line:" + hashlib.sha256(canonical.encode()).hexdigest()
+    line = conn.execute("INSERT OR IGNORE INTO seen(key, ts) VALUES (?, ?)", (key, row["ts"]))
+    if line.rowcount == 0:
+        return "skipped"
+    event = from_journal(conn, row)
+    if event is None:
+        return "skipped"
+    if since is not None and row["ts"] < since:
+        conn.execute(
+            "INSERT OR IGNORE INTO seen(key, ts) VALUES (?, ?)", (event["key"], event["ts"])
+        )
+        return "seen_only"
+    queued = _insert(conn, event.pop("kind"), event.pop("key"), **event)
+    return "enqueued" if queued else "skipped"
+
+
 def record_journal(row, *, wait):
     deadline = time.monotonic() + wait
     with txn(deadline) as conn:
-        event = from_journal(conn, row)
-        if event:
-            _insert(conn, event.pop("kind"), event.pop("key"), **event)
+        apply_journal(conn, row)
 
 
 FALLBACK_ID = "fallback"
