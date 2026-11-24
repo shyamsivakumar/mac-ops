@@ -199,6 +199,92 @@ def record_journal(row, *, wait):
             _insert(conn, event.pop("kind"), event.pop("key"), **event)
 
 
+FALLBACK_ID = "fallback"
+
+
+def _fallback_seconds():
+    return float(os.environ.get("COORD_INBOX_FALLBACK_SECONDS") or 7200)
+
+
+def _set_meta(conn, k, v):
+    conn.execute(
+        "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+        (k, v),
+    )
+
+
+def _last_run(conn):
+    row = conn.execute("SELECT v FROM meta WHERE k=?", ("last_run",)).fetchone()
+    return None if row is None else float(row[0])
+
+
+def add_timer(id, *, due_ts, period=None, payload=None):
+    if period is not None and period <= 0:
+        raise ValueError(period)
+    if payload is not None and not isinstance(payload, dict):
+        raise TypeError("timer payload must be a dict")
+    with txn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO timers (id, due_ts, period, payload) VALUES (?,?,?,?)",
+            (id, due_ts, period, None if payload is None else json.dumps(payload)),
+        )
+
+
+def cancel_timer(id):
+    with txn() as conn:
+        conn.execute("DELETE FROM timers WHERE id=?", (id,))
+
+
+def set_last_run(*, now):
+    with txn() as conn:
+        _set_meta(conn, "last_run", now)
+
+
+def ensure_fallback(*, now):
+    with txn() as conn:
+        last = _last_run(conn)
+        secs = _fallback_seconds()
+        conn.execute(
+            "INSERT OR IGNORE INTO timers (id, due_ts, period, payload) VALUES (?,?,?,?)",
+            (FALLBACK_ID, (last if last is not None else now) + secs, secs, None),
+        )
+
+
+def enqueue_due_timers(*, now):
+    count = 0
+    with txn() as conn:
+        last, secs = _last_run(conn), _fallback_seconds()
+        rows = conn.execute(
+            "SELECT id, due_ts, period, payload FROM timers WHERE due_ts <= ? ORDER BY due_ts",
+            (now,),
+        ).fetchall()
+        for row in rows:
+            timer, due_ts, period, payload = row[0], row[1], row[2], row[3]
+            if timer == FALLBACK_ID and last is not None and now - last < secs:
+                conn.execute(
+                    "UPDATE timers SET due_ts=? WHERE id=?", (last + secs, timer)
+                )
+                continue
+            extra = json.loads(payload) if payload else {}
+            if _insert(
+                conn,
+                "timer_due",
+                f"timer_due:{timer}:{due_ts}",
+                source="timer",
+                ts=now,
+                payload={**extra, "timer": timer},
+            ):
+                count += 1
+            if period:
+                conn.execute(
+                    "UPDATE timers SET due_ts=? WHERE id=?",
+                    (due_ts + ((now - due_ts) // period + 1) * period, timer),
+                )
+            else:
+                conn.execute("DELETE FROM timers WHERE id=?", (timer,))
+    return count
+
+
 def claim(session, *, worker, now, lease=900, limit=50, pid=None):
     with txn() as conn:
         ids = [
