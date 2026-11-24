@@ -996,52 +996,65 @@ def head_title(title):
     return match.groups() if match else None
 
 
-def message_scope(item):
-    args = item.get("args") or {}
-    return str(args.get("threadId") or re.sub(r":[0-9a-f]{40}$", "",
-                                              str(args.get("clientRequestId") or "")))
+def older_head_items(queue, title, below=None):
+    """The queued messages that name an older head of the title's pull request.
 
-
-def drop_older_heads(queue, title, target=None, below=None):
-    """Drop queued messages that name an older head of the same ticket.
-
-    A newer head of a ticket supersedes every message queued for an older
-    one: the thread would work the stale head first. Only the messages for
-    the same ticket and the same work are dropped, and only those queued
-    before the newer message, so a message already being sent is untouched.
+    A message the dispatcher has reserved is never one of them, because it may
+    already have reached its thread. With `below`, only items queued before
+    that id count, so a message queued after the title's own is never stale.
     """
     parsed = head_title(title)
     if parsed is None:
-        return 0
-    kept, dropped = [], 0
-    for candidate in queue.get("items") or []:
-        parsed_item = head_title(message_identity(candidate)[0])
-        older = (parsed_item is not None and parsed_item[:2] == parsed[:2]
-                 and parsed_item[3] != parsed[3]
-                 and (target is None or message_scope(candidate) == target)
-                 and (below is None or candidate["id"] < below))
-        if not older:
-            kept.append(candidate)
-            continue
-        release_action_key(queue, candidate)
-        dropped += 1
-    queue["items"] = kept
-    return dropped
+        return []
+    reserved = [str(key) for key in queue.get("reserved") or {}]
+    older = []
+    for item in queue.get("items") or []:
+        named = head_title(message_identity(item)[0])
+        item_id = str(item["id"])
+        if (named is not None and named[:2] == parsed[:2] and named[3] != parsed[3]
+                and (below is None or item["id"] < below)
+                and item_id not in reserved
+                and not any(key.startswith(f"{item_id}:") for key in reserved)):
+            older.append(item)
+    return older
+
+
+def drop_older_heads(queue, title, below=None):
+    """Drop the queued messages for older heads of the title's pull request.
+
+    Each dropped item gives its action key back, as `coordq drop` does.
+    Started records are not items and stay. Returns how many were dropped.
+    """
+    older = older_head_items(queue, title, below)
+    queue["items"] = [item for item in queue.get("items") or [] if item not in older]
+    for item in older:
+        release_action_key(queue, item)
+    return len(older)
 
 
 def current_head(title):
-    """The head a pull request has now, or None when it cannot be read."""
+    """The head the title's pull request has on GitHub now, or None.
+
+    None when the key does not name exactly one repo or GitHub cannot say, so
+    the caller drops nothing and the start is never failed by this read. The
+    read is fresh: a cached older head would make a delayed start for an old
+    head look current.
+    """
     parsed = head_title(title)
     if parsed is None or not os.path.exists(TICKETS_CONFIG):
         return None
     key, number = parsed[:2]
-    with open(TICKETS_CONFIG) as f:
-        config = json.load(f)
-    repos = [r for r, s in (config.get("repos") or {}).items() if s.get("key") == key]
-    if len(repos) != 1:
+    try:
+        with open(TICKETS_CONFIG) as f:
+            config = json.load(f)
+        repos = [r for r, s in config["repos"].items() if s.get("key") == key]
+        if len(repos) != 1:
+            return None
+        run = gh_gateway.run(["gh", "api", f"repos/{repos[0]}/pulls/{number}"], timeout=40, fresh=True)
+        return json.loads(run.stdout)["head"]["sha"] if run.returncode == 0 else None
+    except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, TypeError, AttributeError,
+            gh_gateway.ApiBudgetExhausted):
         return None
-    run = gh_gateway.run(["gh", "api", f"repos/{repos[0]}/pulls/{number}"], timeout=40)
-    return json.loads(run.stdout)["head"]["sha"] if run.returncode == 0 else None
 
 
 def cmd_start(a):
@@ -1069,10 +1082,11 @@ def cmd_start(a):
     # under it would hold every other start for its length. The started-message
     # records it speaks for are snapshotted first, because a record added since
     # then cannot be judged by it.
-    started_before = started_snapshot(load())
+    before = load()
+    started_before = started_snapshot(before)
     live = live_thread_ids() if started_before else None
     requested_title = a.title or args.get("title") or ""
-    fresh = current_head(requested_title)
+    fresh = current_head(requested_title) if older_head_items(before, requested_title) else None
     with Lock(True):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
@@ -1113,7 +1127,7 @@ def cmd_start(a):
             heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
         parsed = head_title(explicit)
         if parsed:
-            dropped = (drop_older_heads(queue, explicit, message_scope(item), item["id"])
+            dropped = (drop_older_heads(queue, explicit, item["id"])
                        if fresh == parsed[3] else 0)
         save(queue)
         if parsed:
