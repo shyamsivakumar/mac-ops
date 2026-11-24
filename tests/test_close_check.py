@@ -541,6 +541,34 @@ class ScopeTest(unittest.TestCase):
                                 ["coordinator/overnight/lane_driver.py"])
         self.assertEqual(item["status"], check.FAIL)
 
+    def test_a_dockerfile_variant_is_a_file_token(self):
+        check = close_check()
+        body = "In: the dashboard image copies the new module. Files: Dockerfile.dashboard"
+        tokens = check.scope_tokens(body)
+        self.assertIn("Dockerfile.dashboard", tokens)
+        ok, _ = check.in_scope("Dockerfile.dashboard", tokens)
+        self.assertTrue(ok)
+        self.assertTrue(check.names_a_scope(tokens))
+
+    def test_the_base_dockerfile_does_not_cover_a_variant(self):
+        check = close_check()
+        ok, _ = check.in_scope("Dockerfile.dashboard", {"Dockerfile"})
+        self.assertFalse(ok)
+
+    def test_an_excluded_dockerfile_variant_is_not_a_permission(self):
+        check = close_check()
+        ticket = "In: `close_check.py`. Out of scope: `Dockerfile.dashboard`."
+        self.assertNotIn("Dockerfile.dashboard", check.scope_tokens(ticket))
+
+    def test_a_dockerfile_path_stays_one_path(self):
+        check = close_check()
+        self.assertEqual(check.scope_tokens("In: docker/Dockerfile.web"),
+                         {"docker/Dockerfile.web"})
+
+    def test_a_name_that_ends_in_dockerfile_is_untouched(self):
+        check = close_check()
+        self.assertEqual(check.scope_tokens("In: MyDockerfile.py"), {"MyDockerfile.py"})
+
 
 class DiffValuesTest(unittest.TestCase):
     """The values a change sets come from its own added lines."""
