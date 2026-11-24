@@ -1,15 +1,26 @@
-# MO-932 runs (review round at 40c0bc033c465e1bd24d0980aad6085cd4b9bcb8)
+# MO-932 runs at code commit a49286766b62db8217c34aeb61ee24fc16dd3711 (merged with origin/main adc3269b)
 
-## Ticket proof command
-Red on origin/main: ModuleNotFoundError: No module named 'inbox_replay' (exit 1).
-Green on the head: exit 0.
+## 1. Ticket proof command on origin/main (red)
+```
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'inbox_replay'
+exit 1
+```
+## 2. Ticket proof command on the head (green)
+```
 
-## inbox eval (replay_cases) with the review cases
-Red, previous inbox_replay.py (ec4370f2) with the new selftest, exit 1:
+exit 0
 ```
-TypeError: '<' not supported between instances of 'str' and 'float'   (row {"ts":"x","event":"merged"} aborts replay)
+## 3. inbox eval with the previous inbox_replay.py (fc941d8b) and the new selftest (red)
 ```
-Green on 40c0bc033c465e1bd24d0980aad6085cd4b9bcb8, exit 0:
+  File "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.ZShjnipIMR/coordinator/bin/inbox.py", line 147, in _insert
+    conn.execute(
+OverflowError: Python int too large to convert to SQLite INTEGER
+exit 1
+```
+## 4. inbox eval on the head (green)
 ```
 inbox eval ok
+exit 0
 ```
