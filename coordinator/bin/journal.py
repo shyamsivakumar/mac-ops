@@ -115,6 +115,8 @@ def emit(event, actor, **fields):
     row["data"] = {**(fields.pop("data", None) or {}), **fields}
     row["data"]["sha"] = installed_sha()
     row["data"]["manifest"] = installation_receipt().get("manifest", {}).get(row["arm"] or "control")
+    if os.environ.get("COORD_TICK_RUN"):
+        row["data"]["via_tick"] = True
     line = json.dumps(row, default=str, separators=(",", ":")) + "\n"
     try:
         os.makedirs(journal_dir(), exist_ok=True)

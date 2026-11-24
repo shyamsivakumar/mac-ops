@@ -18,6 +18,11 @@ Environment knobs, all optional:
   COORD_TICK_LOCK             lock file (default ~/.local/state/mac-ops/coord-tick.lock)
   COORD_TICK_TIMEOUT          seconds before a run is killed (default 600)
   COORD_TICK_MODEL            model id (default morph/morph-dsv41flash)
+  COORD_TICK_PRECHECK         "on" skips a tick with no wake-class event since the mark
+  COORD_TICK_PRECHECK_CAP     seconds a precheck skip may save (default 7200)
+  COORD_TICK_MARK             mark file (default ~/.local/state/mac-ops/coord-tick.mark)
+  COORD_TICK_WAKE_EVENTS      journal events that force a tick (default alarm_raised,
+                              round_cap,merge_held,close_failed,launch_failed,recut)
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +50,13 @@ LOG_PATH = Path(
 )
 MODEL = os.environ.get("COORD_TICK_MODEL", "morph/morph-dsv41flash")
 TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
+WAKE_EVENTS = tuple(
+    os.environ.get(
+        "COORD_TICK_WAKE_EVENTS",
+        "alarm_raised,round_cap,merge_held,close_failed,launch_failed,recut",
+    ).split(",")
+)
+WAKE_TAIL_BYTES = 1 << 20
 # The model check is an external call of its own. It gets a bound and a
 # process group, so a check that hangs is killed and named in the tick log
 # instead of holding the tick past the budget the tick has.
@@ -102,6 +115,7 @@ def child_env() -> dict:
     env.update(
         {
             "PI_CODING_AGENT_DIR": str(PI_DIR),
+            "COORD_TICK_RUN": "1",
             # One-shot run: the wake timer has nothing to wake.
             "COORD_WAKE": "0",
             "HOME": str(HOME),
@@ -329,7 +343,79 @@ def take_lock() -> int:
     return fd
 
 
+def mark_path() -> Path:
+    override = os.environ.get("COORD_TICK_MARK")
+    return Path(override) if override else HOME / ".local/state/mac-ops/coord-tick.mark"
+
+
+def write_mark(started: float) -> None:
+    path = mark_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(json.dumps({"started": started, "ran": time.time()}))
+    os.replace(temp, path)
+
+
+def events_quiet(started: float, now: float) -> bool:
+    override = os.environ.get("COORD_JOURNAL_DIR")
+    directory = Path(override) if override else HOME / ".local/state/coordinator/journal"
+    last = time.gmtime(now)
+    year, month = time.gmtime(started)[:2]
+    while (year, month) <= (last.tm_year, last.tm_mon):
+        path = directory / f"events-{year:04d}-{month:02d}.jsonl"
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        try:
+            with open(path, "rb") as stream:
+                size = stream.seek(0, os.SEEK_END)
+                stream.seek(max(0, size - WAKE_TAIL_BYTES))
+                tail = stream.read()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        lines = tail.split(b"\n")[:-1]
+        truncated = size > WAKE_TAIL_BYTES
+        seen_older = False
+        for line in lines[1:] if truncated else lines:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                return False
+            ts = row.get("ts") if isinstance(row, dict) else None
+            if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+                return False
+            if ts <= started:
+                seen_older = True
+            elif row.get("event") in WAKE_EVENTS:
+                data = row.get("data")
+                if not (isinstance(data, dict) and data.get("via_tick")):
+                    return False
+        if truncated and not seen_older:
+            return False
+    return True
+
+
+def skip_reason(now: float) -> str | None:
+    if os.environ.get("COORD_TICK_PRECHECK") != "on":
+        return None
+    try:
+        started = json.loads(mark_path().read_text()).get("started")
+        cap = int(os.environ.get("COORD_TICK_PRECHECK_CAP", "7200"))
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(started, bool) or not isinstance(started, (int, float)):
+        return None
+    if not 0 <= now - started < cap or not events_quiet(started, now):
+        return None
+    since = datetime.fromtimestamp(started).astimezone().strftime("%H:%M %Z")
+    due = datetime.fromtimestamp(started + cap).astimezone().strftime("%H:%M %Z")
+    return f"no wake-class journal event since {since}; full tick due by {due}"
+
+
 def main() -> int:
+    started = time.time()
     alarm = tick_alarm()
     if alarm:
         print(alarm, flush=True)
@@ -344,11 +430,18 @@ def main() -> int:
         log("skipped: another tick holds the lock")
         return 0
     try:
+        reason = skip_reason(started)
+        if reason:
+            log(f"skip: {reason}")
+            return 0
         log(f"overnight selftest: {tick_selftest()}")
         if not model_available(env):
             log(f"WAITING: {MODEL} is not available on the provider")
             return 75
-        return run_tick(env, lock_fd)
+        code = run_tick(env, lock_fd)
+        if code == 0:
+            write_mark(started)
+        return code
     except OSError as exc:
         log(f"tick failed: {exc}")
         return 1
