@@ -380,9 +380,14 @@ FAIL on a PR's newest head has waited through all of them. Both ship off:
 `COORD_STOP_RULES=on` turns them on, and any other value reads no file and
 prints nothing. A limit that is unset, empty, zero, negative or not a number
 uses the default.
-A merge or close that the journal does not record keeps alarming until the
-7-day stop (the journal has no row for a PR closed unmerged, and some merges
-have no `merged` row). Fix that before `COORD_STOP_RULES=on`.
+Before a PR is named, the rules read it once through `gh_gateway` (`repos/<repo>/pulls/<n>`)
+and drop it when it is closed, merged or on another head than the alarmed one
+(MO-1272, mac-ops #979). A PR whose state could not be read (failed or bad answer,
+invalid repo name, exhausted budget, no `gh`) stays in the alarm with
+`(state not read)`. One call reads at most 10 PRs, each with a 10 second timeout and
+30 seconds in all; the rest stay as not read. A read answered from the gateway
+cache can be up to 2 minutes old (`LIST_TTL`), so a PR merged in the last 2 minutes can alarm
+once more. With the switch off nothing is read and `gh_gateway` is not imported.
 
 ## Agent session traces (MO-124)
 
