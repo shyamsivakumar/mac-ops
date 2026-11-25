@@ -1321,6 +1321,22 @@ def lane_candidates(rows, occupied, pr_refs=None, build_here=()):
     return selected
 
 
+class Candidates(list):
+    def __init__(self, selected, rows, build_here):
+        super().__init__(selected)
+        self.rows = rows
+        self.build_here = build_here
+
+
+def empty_board_reason(rows, build_here):
+    waiting = sum(1 for row in rows
+                  if stage_todo(row) and row["repository"]["nameWithOwner"] not in build_here)
+    if not waiting:
+        return "refill stopped: the board has no open stage:todo ticket"
+    return (f"refill stopped: {waiting} open stage:todo ticket{'s' if waiting != 1 else ''} "
+            "waiting, and their repos are busy")
+
+
 def board_candidates():
     with open(TICKETS_CONFIG) as f:
         cfg = json.load(f)
@@ -1342,7 +1358,7 @@ def board_candidates():
     for row in stale_started(rows, occupied, pr_refs):
         log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
     build_here = {repo for repo, entry in cfg["repos"].items() if entry.get("build") == "here"}
-    return lane_candidates(rows, occupied, pr_refs, build_here)
+    return Candidates(lane_candidates(rows, occupied, pr_refs, build_here), rows, build_here)
 
 
 def ticket_start(repo, number, dry_run):
@@ -1490,7 +1506,7 @@ def refill(a):
             log(f"refill stopped: {e}")
             return
         if not candidates:
-            log("refill stopped: the board has no open stage:todo ticket")
+            log(empty_board_reason(getattr(candidates, "rows", []), getattr(candidates, "build_here", ())))
             return
         deadline = time.time() + REFILL_BUDGET
         state = load_refill_state()
