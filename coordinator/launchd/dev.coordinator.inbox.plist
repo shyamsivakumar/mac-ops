@@ -15,6 +15,10 @@
     <true/>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>COORD_INBOX_POLL_EVERY</key>
+        <string>300</string>
+        <key>COORD_INBOX_REPOS</key>
+        <string>shyamsivakumar/mac-ops,shyamsivakumar/strategy-replay-workbench</string>
         <key>COORD_INBOX_SHADOW</key>
         <string>1</string>
         <key>PATH</key>
