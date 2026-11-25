@@ -24,8 +24,8 @@ class CapacityTests(unittest.TestCase):
              "priority": 0, "title": "queued"}]})
 
     def refill(self):
-        candidates = [{"repository": {"nameWithOwner": "o/r"},
-                       "number": n, "title": str(n)} for n in range(10)]
+        candidates = self.q.Candidates([{"repository": {"nameWithOwner": "o/r"},
+                                         "number": n, "title": str(n)} for n in range(10)], [], (), {}, {"o/r": 10})
         with patch.object(self.q, "board_candidates", return_value=candidates), patch.object(
                 self.q, "ticket_start", return_value=(0, "started")) as start:
             self.q.refill(argparse.Namespace(dry_run=False))

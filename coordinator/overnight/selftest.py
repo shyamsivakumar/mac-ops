@@ -161,7 +161,7 @@ def start_routing():
                 stack.enter_context(patch.object(ticket, name, return_value=value))
             stack.enter_context(patch.object(ticket, "run", launch))
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
-                                       print_brief=False, dry_run=False))
+                                       print_brief=False, dry_run=False, alongside=False))
         exact(len(commands), 1)
     # A ticket labelled before the router entry existed still starts.
     exact(ticket.builder_alias("kimi"), "router")
@@ -2796,18 +2796,50 @@ def refill_busy():
             config.write_text(json.dumps({"repos": {repo: {}}}))
             with patch.object(coordq, "DIR", scratch), patch.object(coordq, "TICKETS_CONFIG", str(config)), \
                  patch.object(coordq, "live_lane_repositories", return_value=occupied), \
-                 patch.object(coordq, "open_pr_refs", return_value=refs), \
+                 patch.object(coordq, "open_pr_refs", return_value=(refs, {})), \
                  patch.object(coordq.gh_gateway, "run", return_value=SimpleNamespace(returncode=0, stdout=json.dumps([page]))):
                 picked = [row["number"] for row in coordq.board_candidates()]
             log = Path(scratch, "dispatch.log")
             lines = [line.split(" ", 2)[2] for line in log.read_text().splitlines()] if log.exists() else []
             return picked, lines
     picked, lines = candidates(set(), {533, 514, 548, 576, 504, 505, 596, 662, 663, 671})
-    exact(picked, [673])
+    exact(picked, list(range(673, 682)))
     exact(lines, [f"refill: #{number} is stage:started with no live thread or open PR" for number in started])
     exact(candidates({repo}, set())[0], [])
     exact(candidates(set(), {675})[0], [])
     todo = {"number": 1, "labels": [{"name": "stage:todo"}], "repository": {"nameWithOwner": "o/r"}}
+    rows = [{**todo, "number": n, "title": f"SRW-{n} x"} for n in (1, 2, 3)] + [{**todo, "number": 4, "repository": {"nameWithOwner": "o/s"}}]
+    picked = lambda *args: [row["number"] for row in coordq.lane_candidates(rows, *args)]
+    exact(picked(set(), {}, (), {}, {"o/r": 2}), [1, 4, 2, 3])
+    exact(picked({"o/r#1", "o/r#pr9", "o/r#SRW-1"}, {}, (), {"o/r": {9: {1}}}, {"o/r": 2}), [2, 4, 3])
+    exact(picked({"o/r#1", "o/r#SRW-2"}, {}, (), {}, {"o/r": 2}), [4])
+    exact(picked(set(), {"o/r": {1, 2}}, (), {"o/r": {5: {1, 2}}}, {"o/r": 2}), [3, 4])
+    def refill_calls(limits, answer):
+        calls = []
+        three = coordq.Candidates([{**todo, "number": n, "title": str(n)} for n in (1, 2, 3)], [], (), {}, limits)
+        with tempfile.TemporaryDirectory() as scratch, patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "board_candidates", return_value=three), patch.object(coordq, "used_slots", return_value=0), \
+             patch.object(coordq, "cap", return_value=9), patch.object(coordq, "last_refill", return_value=None), \
+             patch.object(coordq, "ticket_start", side_effect=lambda *args: calls.append(args) or answer):
+            coordq.refill(SimpleNamespace(dry_run=False))
+        return [call[1:] for call in calls]
+    exact(refill_calls({"o/r": 1}, (1, "receipt comment failed")), [(1, False, False)])
+    exact(refill_calls({"o/r": 1}, (0, "started")), [(1, False, False)])
+    exact(refill_calls({"o/r": 2}, (0, "started")), [(1, False, False), (2, False, True)])
+    exact(len(refill_calls({}, (2, "refused: no"))), 3)
+    started = [{**todo, "number": n, "labels": [{"name": "stage:started"}]} for n in (5, 6, 7)]
+    exact([row["number"] for row in coordq.stale_started(started, {"o/r#5", "o/r#pr9"}, {}, {"o/r": {9: {7}}})], [6])
+    def limit(value):
+        with tempfile.TemporaryDirectory() as scratch:
+            config = Path(scratch, "tickets.json")
+            config.write_text(json.dumps({"repos": {repo: {"lanes": value}}}))
+            with patch.object(coordq, "DIR", scratch), patch.object(coordq, "TICKETS_CONFIG", str(config)), \
+                 patch.object(coordq, "live_lane_repositories", return_value=set()), \
+                 patch.object(coordq, "open_pr_refs", return_value=(set(), {})), \
+                 patch.object(coordq.gh_gateway, "run", return_value=SimpleNamespace(returncode=0, stdout="[[]]")):
+                return coordq.board_candidates().limits[repo]
+    exact([limit(value) for value in (None, 0, -1, True, "2", 2)], [1, 1, 1, 1, 1, 2])
+    exact(coordq.candidate_state(todo, {"a"}) == coordq.candidate_state(todo, {"b"}), False)
     exact(coordq.empty_board_reason([], ()), "refill stopped: the board has no open stage:todo ticket")
     exact(coordq.empty_board_reason([todo], ()), "refill stopped: 1 open stage:todo ticket waiting, and their repos are busy")
     exact(coordq.empty_board_reason([todo, {**todo, "number": 2}], ()).split(" ")[2], "2")
