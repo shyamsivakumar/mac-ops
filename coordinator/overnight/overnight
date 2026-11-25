@@ -4238,11 +4238,12 @@ def collect_items(
             verdict = "absent"
         if status == "running" and gate.get("threadId") not in live["ids"]:
             verdict = "none"
-        if checks.get((repo, number), ([], ""))[1]:
+        unread = checks.get((repo, number), ([], ""))[1]
+        if unread:
             pull["body"] = re.sub(r"(?m)^Builder check: PASS .*?$", "", pull.get("body") or "")
             pull["statusCheckRollup"] = []
         state, action = lane_driver.pr_action(pull, builder, verdict,
-            gate_live=gate.get("threadId") in live["ids"], builder_live=builder in live["ids"], repo=repo)
+            gate_live=gate.get("threadId") in live["ids"], builder_live=builder in live["ids"], repo=None if unread else repo)
         if verdict == "FAIL" and action == "fix":
             item.update(state=state, updatedAt=pull.get("updatedAt") or "",
                         builderLive=builder in live["ids"], gateThreadLive=gate.get("threadId") in live["ids"])

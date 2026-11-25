@@ -2305,6 +2305,10 @@ def publisher_status_outcomes():
                  patch.object(lane, "send", lambda *a, **k: sent.append(a[1]) or "sent"), \
                  patch.object(lane, "merge_passed_pr", lambda *a: merges.append(a[2]) or "merged"):
                 lane.act_on_pr(repo, 20, {})
+            if repo == srw and state == "missing" and not body_line:
+                bare = {**row, "body": "Refs #10"}
+                exact(lane.pr_action(bare, "builder", repo=None), ("check-missing", "check"))
+                exact(lane.pr_action(bare, "builder", repo=srw), ("check-missing", "none"))
             exact((bool(merges), len(sent)), (gated, int(publisher and state == "failure" or not publisher and not body_line)))
 
 
@@ -2448,8 +2452,9 @@ def gatekeep_round_cap():
             failed.returncode = 1
             failed.stderr = "gh: Not Found (HTTP 404)"
             return failed
-        if endpoint == f"repos/{repo}/commits/{'e' * 40}/statuses?per_page=100":
-            return Run("[[]]")
+        if endpoint in (f"repos/{repo}/commits/{'d' * 40}/statuses?per_page=100",
+                        f"repos/{repo}/commits/{'e' * 40}/statuses?per_page=100"):
+            return Run(json.dumps([[{"context": "srw/agent-check", "state": "success"}]]))
         if endpoint.endswith("/files?per_page=100"):
             return Run("[[]]")
         raise AssertionError(f"unexpected read: {endpoint}")
