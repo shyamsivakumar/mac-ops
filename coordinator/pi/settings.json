@@ -54,7 +54,7 @@
     "npm:pi-background-monitor@1.0.1",
     "npm:pi-checklist@3.3.0",
     "npm:pi-subagent-manager@1.9.0",
-    "git:github.com/zacbemis/pi-antigravity-acp-provider@v0.1.22",
+    "git:github.com/shyamsivakumar/pi-antigravity-acp-provider@v0.1.22-shyam.1",
     "git:github.com/zacbemis/pi-cursor-acp-provider@v0.1.4"
   ],
   "lastChangelogVersion": "1.5.2"
