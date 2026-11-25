@@ -91,8 +91,17 @@ for line, left in (("present", "listed"), ("present", "empty"), ("present", "non
 print("repeated cmd_close x3 (present, listed) ->", close_row("present", "listed", 3))
 calls = Calls("present", "listed")
 calls.issue["state"] = "CLOSED"
-print("closed issue ->", end=" ")
-with patch.object(ticket, "gh_json", calls.gh_json), patch.object(ticket, "gh", calls.gh):
+print("closed by a Closes keyword at merge, no record yet ->", end=" ")
+with patch.object(ticket, "gh_json", calls.gh_json), patch.object(ticket, "gh", calls.gh), \
+     patch.object(ticket.journal, "emit", lambda *a, **k: calls.log.append(["journal", a[0]])):
     ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, HEAD, "m", "x")
-print(calls.log)
+    ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, HEAD, "m", "x")
+print(calls.log, "(second call recorded nothing)")
+print("marker spellings ->", [gate_policy.partial_claim(t) for t in (
+    "- Partial: yes.\r\n### Left for later:\r\n- x", "> **Partial: yes**\n## Left for later\nx", "Partial: yes")])
+calls = Calls("present", "listed")
+calls.issue["labels"] = [{"name": "stage:todo"}]
+with patch.object(ticket, "gh_json", calls.gh_json), patch.object(ticket, "gh", calls.gh), patch.object(ticket.journal, "emit", lambda *a, **k: None):
+    ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, HEAD, "m", "x")
+print("stage:todo ticket ->", calls.log, calls.issue["labels"])
 print("decisions items on the board:", [i["id"] for i in json.load(open(DECISIONS))["items"]])

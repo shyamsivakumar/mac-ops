@@ -87,10 +87,14 @@ fenced   listed  -> (1, 0, 0, 0)
 closed shyamsivakumar/mac-ops#7 via mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
 absent   none    -> (1, 0, 0, 0)
 kept shyamsivakumar/mac-ops#7 open: #8 is partial
-shyamsivakumar/mac-ops#7 is already closed or recorded as partial; nothing to do
-shyamsivakumar/mac-ops#7 is already closed or recorded as partial; nothing to do
+shyamsivakumar/mac-ops#7 already has the partial record for #8; nothing to do
+shyamsivakumar/mac-ops#7 already has the partial record for #8; nothing to do
 repeated cmd_close x3 (present, listed) -> (0, 1, 1, 1)
-closed issue -> shyamsivakumar/mac-ops#7 is already closed or recorded as partial; nothing to do
-[]
+closed by a Closes keyword at merge, no record yet -> kept shyamsivakumar/mac-ops#7 open: #8 is partial
+shyamsivakumar/mac-ops#7 already has the partial record for #8; nothing to do
+[['issue', 'reopen'], ['issue', 'edit'], ['issue', 'comment'], ['journal', 'partial_merged']] (second call recorded nothing)
+marker spellings -> ['- x', 'x', '']
+kept shyamsivakumar/mac-ops#7 open: #8 is partial
+stage:todo ticket -> [['issue', 'edit'], ['issue', 'comment']] [{'name': 'stage:backlog'}]
 decisions items on the board: ['partial-mac-ops-7-8']
 ```
