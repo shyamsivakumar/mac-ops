@@ -369,6 +369,21 @@ tick reply are sent to the live pi coordinator terminal; a `NOOP` reply sends
 nothing. `coord-pi` exports `COORD_WAKE=0`, so the coordinator session's own
 30-minute wake stays off and `/tick` and `/wake on` remain for manual use.
 
+Two stop rules in `coordinator/bin/tick_health.py` (MO-1270, mac-ops #971) add
+alarm lines to `tick_alarm()`, so `coord-tick`, `coordq status` and the shift
+show them. A held-approval alarm names each PR whose newest `loop code hold` or
+`prompt hold` on its newest head is older than `COORD_HELD_HOURS` (default 6)
+with no later `merged` or `merged_outside_lane`; it stops after 7 days. An
+idle alarm fires when the last `COORD_IDLE_TICKS` (default 8) finished ticks
+(`exit=0` in `tick.log`) left no journal row with `data.via_tick` and a gate
+FAIL on a PR's newest head has waited through all of them. Both ship off:
+`COORD_STOP_RULES=on` turns them on, and any other value reads no file and
+prints nothing. A limit that is unset, empty, zero, negative or not a number
+uses the default.
+A merge or close that the journal does not record keeps alarming until the
+7-day stop (the journal has no row for a PR closed unmerged, and some merges
+have no `merged` row). Fix that before `COORD_STOP_RULES=on`.
+
 ## Agent session traces (MO-124)
 
 Read-only traces of every T3 build-session run on this Mac, scrubbed and stored
