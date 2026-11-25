@@ -74,6 +74,7 @@ TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.
 REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
 REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
 REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
+REPO_TRIES = 5
 REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "1000"))
 # The file that holds the refusals of the earlier passes. A candidate whose
 # board state has not changed since its last refusal is skipped, so the scan
@@ -1345,6 +1346,18 @@ def stage_todo(candidate):
     return [name for name in names if name.startswith("stage:")] == [STAGE]
 
 
+def thread_lane(repo, settings, identities, title, thread_id):
+    for key in identities:
+        match = re.match(r"(ticket|gate):" + re.escape(repo) + r"#(\d+):", key)
+        if match:
+            return f"{repo}#{'pr' if match[1] == 'gate' else ''}{match[2]}"
+    prefix = settings.get("key", "") + "-"
+    if settings.get("key") and title.startswith(prefix):
+        key = re.match(re.escape(prefix) + r"\d+", title)
+        return f"{repo}#{key[0]}" if key else f"{repo}#thread:{thread_id}"
+    return None
+
+
 def live_lane_repositories(config):
     occupied = set()
     try:
@@ -1352,6 +1365,12 @@ def live_lane_repositories(config):
             receipts = json.load(f)
     except FileNotFoundError:
         receipts = {}
+    for item in load()["items"]:
+        queued = re.match(r"ticket:(.+)#(\d+):", str(item["args"].get("clientRequestId", "")))
+        if queued and queued[1] in config["repos"]:
+            occupied.add(f"{queued[1]}#{queued[2]}")
+    if dispatch_stopped():
+        raise RuntimeError("cannot read the queued starts")
     cursor = None
     while True:
         args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES,
@@ -1367,12 +1386,10 @@ def live_lane_repositories(config):
                           if value == thread["threadId"]]
             identities.append(str(thread.get("clientRequestId") or ""))
             for repo, settings in config["repos"].items():
-                title = str(thread.get("title") or "")
-                prefix = settings.get("key", "") + "-"
-                if (any(re.match(r"(?:ticket|gate):" + re.escape(repo) + r"#\d+:", key)
-                        for key in identities)
-                        or (settings.get("key") and title.startswith(prefix))):
-                    occupied.add(repo)
+                lane = thread_lane(repo, settings, identities, str(thread.get("title") or ""),
+                                   thread["threadId"])
+                if lane:
+                    occupied.add(lane)
         next_cursor = result.get("nextCursor")
         if next_cursor is None:
             return occupied
@@ -1393,7 +1410,8 @@ PR_PAGE = 100
 
 
 def open_pr_refs(repo):
-    """The ticket numbers the open, non-draft pull requests of one repo ref.
+    """The ticket numbers the open, non-draft pull requests of one repo ref,
+    and each open pull request's refs.
 
     One read per repo per pass, through the gateway like the issue read, so
     the refill's GitHub budget stays known. The read is fresh: a pull request
@@ -1411,11 +1429,13 @@ def open_pr_refs(repo):
     if len(pulls) >= PR_PAGE:
         raise RuntimeError(f"open pull request list is longer than one page for {repo}")
     refs = set()
+    by_pull = {}
     for pull in pulls:
-        if pull.get("draft"):
-            continue
-        refs.update(int(number) for number in PR_REF.findall(str(pull.get("body") or "")))
-    return refs
+        found = {int(number) for number in PR_REF.findall(str(pull.get("body") or ""))}
+        by_pull[pull["number"]] = found
+        if not pull.get("draft"):
+            refs.update(found)
+    return refs, by_pull
 
 
 def stale_started(rows, occupied, pr_refs):
@@ -1439,14 +1459,46 @@ def stale_started(rows, occupied, pr_refs):
     return stale
 
 
-def lane_candidates(rows, occupied, pr_refs=None, build_here=()):
-    """The stage:todo tickets the refill may start, in board order.
+def lane_limit(entry):
+    lanes = entry.get("lanes")
+    return lanes if type(lanes) is int and lanes > 0 else 1
 
-    A repo is busy when a live lane thread works it, or when an open,
-    non-draft pull request refs one of its open tickets. A `stage:started`
-    label alone is not evidence of a builder in flight, so a stale label no
-    longer makes its repo busy.
-    """
+
+def active_lanes(rows, occupied, pr_refs, prs):
+    parent = {}
+
+    def find(lane):
+        while parent.setdefault(lane, lane) != lane:
+            lane = parent[lane]
+        return lane
+
+    def resolve(lane):
+        repo, _, tail = lane.partition("#")
+        if tail.startswith("pr") and tail[2:].isdigit():
+            refs = prs.get(repo, {}).get(int(tail[2:]))
+            return f"{repo}#{min(refs)}" if refs else lane
+        if re.fullmatch(r"\w+-\d+", tail):
+            number = next((row["number"] for row in rows
+                           if row["repository"]["nameWithOwner"] == repo
+                           and re.match(re.escape(tail) + r"(?!\d)", row.get("title") or "")), None)
+            return f"{repo}#{number}" if number else lane
+        return lane
+
+    for repo, by_pull in prs.items():
+        for refs in by_pull.values():
+            for number in refs:
+                parent[find(f"{repo}#{number}")] = find(f"{repo}#{min(refs)}")
+    lanes = set(occupied)
+    lanes.update(f"{row['repository']['nameWithOwner']}#{row['number']}" for row in rows
+                 if row["number"] in pr_refs.get(row["repository"]["nameWithOwner"], ()))
+    active = {}
+    for lane in lanes:
+        active.setdefault(lane.partition("#")[0], set()).add(find(resolve(lane)))
+    covered = {lane for lane in list(parent) if find(lane) in active.get(lane.partition("#")[0], ())}
+    return active, covered
+
+
+def lane_candidates(rows, occupied, pr_refs=None, build_here=(), prs=None, limits=None):
     def order(row):
         names = [label["name"] if isinstance(label, dict) else str(label)
                  for label in row.get("labels") or []]
@@ -1458,32 +1510,31 @@ def lane_candidates(rows, occupied, pr_refs=None, build_here=()):
         return (min(priorities, default=999), tuple(blockers), row["number"],
                 row["repository"]["nameWithOwner"])
 
-    pr_refs = pr_refs or {}
-    busy = set(occupied)
-    for row in rows:
-        repo = row["repository"]["nameWithOwner"]
-        if row["number"] in pr_refs.get(repo, ()):
-            busy.add(repo)
+    active, covered = active_lanes(rows, occupied, pr_refs or {}, prs or {})
     selected = []
+    ranks = {}
     skipped = {}
     for row in sorted(rows, key=order):
         repo = row["repository"]["nameWithOwner"]
         if repo in build_here:
             skipped[repo] = skipped.get(repo, 0) + stage_todo(row)
-        elif repo not in busy and stage_todo(row):
-            selected.append(row)
-            busy.add(repo)
+        elif (stage_todo(row) and len(active.get(repo, ())) < (limits or {}).get(repo, 1)
+                and f"{repo}#{row['number']}" not in covered):
+            selected.append((ranks.get(repo, 0), len(selected), row))
+            ranks[repo] = ranks.get(repo, 0) + 1
     for repo, count in skipped.items():
         if count:
             log(f"refill: skipped {count} build-here tickets in {repo}")
-    return selected
+    return [row for _, _, row in sorted(selected, key=lambda item: item[:2])]
 
 
 class Candidates(list):
-    def __init__(self, selected, rows, build_here):
+    def __init__(self, selected, rows, build_here, active=None, limits=None):
         super().__init__(selected)
         self.rows = rows
         self.build_here = build_here
+        self.active = active or {}
+        self.limits = limits or {}
 
 
 def empty_board_reason(rows, build_here):
@@ -1501,6 +1552,7 @@ def board_candidates():
     occupied = live_lane_repositories(cfg)
     rows = []
     pr_refs = {}
+    prs = {}
     for repo in cfg["repos"]:
         run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
                               f"repos/{repo}/issues?state=open&per_page=100"],
@@ -1512,14 +1564,16 @@ def board_candidates():
                 if "pull_request" not in row:
                     rows.append({**row, "repository": {"nameWithOwner": repo},
                                  "updatedAt": row["updated_at"]})
-        pr_refs[repo] = open_pr_refs(repo)
+        pr_refs[repo], prs[repo] = open_pr_refs(repo)
     for row in stale_started(rows, occupied, pr_refs):
         log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
     build_here = {repo for repo, entry in cfg["repos"].items() if entry.get("build") == "here"}
-    return Candidates(lane_candidates(rows, occupied, pr_refs, build_here), rows, build_here)
+    limits = {repo: lane_limit(entry) for repo, entry in cfg["repos"].items()}
+    return Candidates(lane_candidates(rows, occupied, pr_refs, build_here, prs, limits), rows, build_here,
+                      active_lanes(rows, occupied, pr_refs, prs)[0], limits)
 
 
-def ticket_start(repo, number, dry_run):
+def ticket_start(repo, number, dry_run, alongside=False):
     """Run the ticket CLI on one ticket. A refused ticket exits non-zero and
     changes nothing, so a refusal is a skip and not a start. The ticket CLI
     exits 2 for a refusal and for a usage error, and 1 for a failed check,
@@ -1532,6 +1586,8 @@ def ticket_start(repo, number, dry_run):
     command = [TICKET_BIN, "start", f"{repo}#{number}"]
     if dry_run:
         command.append("--dry-run")
+    if alongside:
+        command.append("--alongside")
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
@@ -1591,13 +1647,13 @@ def candidate_key(candidate):
     return f"{candidate['repository']['nameWithOwner']}#{candidate['number']}"
 
 
-def candidate_state(candidate):
+def candidate_state(candidate, lanes=()):
     """The state of a candidate as the board shows it: when it last changed,
     what it is called and which labels it carries. A refusal is worth
     retrying when this differs from the state the refusal was made on."""
     labels = sorted(label["name"] if isinstance(label, dict) else str(label)
                     for label in candidate.get("labels") or [])
-    return json.dumps([candidate.get("updatedAt"), candidate.get("title"), labels])
+    return json.dumps([candidate.get("updatedAt"), candidate.get("title"), labels, sorted(lanes)])
 
 
 def unchanged_refusal(refusals, key, state, now):
@@ -1671,6 +1727,8 @@ def refill(a):
         pass_no = state["passes"] + 1
         refusals = state["refusals"]
         filled = 0
+        started = {}
+        tries = {}
         attempted = 0
         skipped = 0
         examined = 0
@@ -1683,8 +1741,13 @@ def refill(a):
             if time.time() > deadline:
                 log("refill stopped: the refill budget is spent")
                 break
+            repo = candidate["repository"]["nameWithOwner"]
+            active = candidates.active.get(repo, ())
+            lanes = candidates.limits.get(repo, 1)
+            if started.get(repo, 0) >= lanes - len(active) or tries.get(repo, 0) >= REPO_TRIES:
+                continue
             key = candidate_key(candidate)
-            board_state = candidate_state(candidate)
+            board_state = candidate_state(candidate, active if lanes > 1 else ())
             prior = unchanged_refusal(refusals, key, board_state, time.time())
             if prior:
                 skipped += 1
@@ -1701,10 +1764,10 @@ def refill(a):
             if used >= limit:
                 log(f"refill stopped: the slots are full ({used}/{limit})")
                 break
-            repo = candidate["repository"]["nameWithOwner"]
             number = candidate["number"]
-            code, out = ticket_start(repo, number, a.dry_run)
+            code, out = ticket_start(repo, number, a.dry_run, bool(active) or started.get(repo, 0) > 0)
             attempted += 1
+            tries[repo] = tries.get(repo, 0) + 1
             examined += 1
             if code != 0:
                 if is_refusal(code, out):
@@ -1719,6 +1782,7 @@ def refill(a):
                     log(f"refill could not check {key}: {one_line(out)[:200]}")
                 continue
             filled += 1
+            started[repo] = started.get(repo, 0) + 1
             refusals.pop(key, None)
             if a.dry_run:
                 log(f"refill would start {key}")

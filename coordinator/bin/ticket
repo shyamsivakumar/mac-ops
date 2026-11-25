@@ -96,6 +96,7 @@ GATE_PRIORITY = 400
 GATE_CHECK_CONTEXT = "srw/agent-check"
 GATE_PUBLISHER_REPO = "shyamsivakumar/strategy-replay-workbench"
 ASCEND_MARKERS = ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni")
+LIST_LIMIT = 100
 
 
 class Refuse(Exception):
@@ -1264,17 +1265,27 @@ def ledger_of(issue, login):
     return entries
 
 
-def scope_overlap(repo, issue):
+def scope_overlap(repo, issue, alongside=False):
     own = scope_files(issue["body"])
     if not own:
+        if alongside:
+            raise Refuse("--alongside needs a Scope In that names a readable file")
         return []
     started = gh_json(["issue", "list", "-R", repo, "--label", STARTED_LABEL, "--state", "open",
-                       "--json", "number,body"])
-    prs = gh_json(["pr", "list", "-R", repo, "--state", "open", "--json", "number,body,files"])
+                       "--json", "number,body", "--limit", str(LIST_LIMIT)], fresh=alongside)
+    if len(started) >= LIST_LIMIT:
+        raise Refuse(f"{repo} issue list reached the limit of {LIST_LIMIT}")
+    prs = gh_json(["pr", "list", "-R", repo, "--state", "open", "--json", "number,body,files",
+                   "--limit", str(LIST_LIMIT)], fresh=alongside)
+    if len(prs) >= LIST_LIMIT:
+        raise Refuse(f"{repo} pull request list reached the limit of {LIST_LIMIT}")
     hits = set()
     for other in started:
         if other["number"] != issue["number"]:
-            hits.update((other["number"], p) for p in scope_files(other.get("body") or "") if p in own)
+            files = scope_files(other.get("body") or "")
+            if alongside and not files and not any(references_issue(p.get("body"), other["number"], repo) for p in prs):
+                raise Refuse(f"#{other['number']} is started and names no files and has no open pull request")
+            hits.update((other["number"], p) for p in files if p in own)
     for pull in prs:
         if references_issue(pull.get("body"), issue["number"], repo):
             continue
@@ -1282,7 +1293,7 @@ def scope_overlap(repo, issue):
     return sorted(hits)
 
 
-def validate_start(cfg, repo, issue, check_text=True):
+def validate_start(cfg, repo, issue, check_text=True, alongside=False):
     rcfg = repo_config(cfg, repo)
     t = parse_ticket(cfg, repo, issue)
     # The pull request guard comes before the other checks so the refusal
@@ -1337,7 +1348,7 @@ def validate_start(cfg, repo, issue, check_text=True):
         raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers) + suffix)
     if reasons:
         raise Refuse("text blockers: " + "; ".join(reasons))
-    overlaps = scope_overlap(repo, issue)
+    overlaps = scope_overlap(repo, issue, alongside=alongside)
     if overlaps:
         raise Overlap(overlaps)
     builder, reviewer = resolve_models(cfg, t)
@@ -1526,7 +1537,8 @@ def cmd_start(a):
         issue = fetch_issue(repo, n)
         refusal = None
         try:
-            t = validate_start(cfg, repo, issue, check_text=not a.force_text_blockers)
+            t = validate_start(cfg, repo, issue, check_text=not a.force_text_blockers,
+                               alongside=a.alongside)
         except Refuse as e:
             refusal = e
             t = parse_ticket(cfg, repo, issue)
@@ -2182,6 +2194,7 @@ def main():
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--force-text-blockers", action="store_true",
                    help="skip the text blocker checks (native blockers still apply)")
+    s.add_argument("--alongside", action="store_true")
     s.add_argument("--print-brief", action="store_true",
                    help="print the brief this start would send, then stop without starting")
     s.set_defaults(fn=cmd_start)
