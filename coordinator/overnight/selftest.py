@@ -2256,60 +2256,64 @@ def publisher_status_outcomes():
         def __init__(self, stdout=""):
             self.stdout, self.stderr, self.returncode = stdout, "", 0
 
+    def case(repo, key, state, body_line):
+        body = "Refs #10\n" + (line if body_line else "")
+        pr = {"draft": False, "number": 20, "head": {"sha": head}, "body": body,
+              "changed_files": 1, "base": {"ref": "main"}}
+        statuses = [] if state == "missing" else [{"context": "srw/agent-check", "state": state}]
+
+        def run(argv, **kwargs):
+            endpoint = argv[-1]
+            if argv[:3] == ["gh", "api", "user"]:
+                return Run("me\n")
+            if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+                return Run(json.dumps([[pr]]))
+            if endpoint == f"repos/{repo}/commits/{head}/statuses?per_page=100":
+                return Run(json.dumps([statuses]))
+            if endpoint == f"repos/{repo}/issues/10/comments?per_page=100" or endpoint.endswith("/files?per_page=100"):
+                return Run("[[]]")
+            raise AssertionError(f"unexpected read: {endpoint}")
+
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "load_receipts", lambda: {}), \
+             patch.object(coordq, "builder_thread_for_issue", return_value=None), \
+             patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
+             patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
+             patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
+             patch.object(coordq, "gate_args", return_value={"modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t"}), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             contextlib.redirect_stderr(io.StringIO()):
+            events = [e["kind"] for e in coordq.gate_candidates({"repos": {repo: {"key": key, "projectId": "fixture"}}}, {})]
+        publisher = repo == srw or bool(statuses)
+        gated = state == "success" if publisher else body_line
+        exact(events, ["candidate"] if gated else (["skip"] if repo == srw else []))
+
+        rollup = [{"context": "srw/agent-check", "state": state.upper()}] if statuses else []
+        row = dict(number=20, state="OPEN", headRefOid=head, headRefName="builder/x", baseRefName="main",
+                   labels=[], mergeable="MERGEABLE", body=body, statusCheckRollup=rollup)
+        sent, merges = [], []
+        with patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
+             patch.object(lane, "SNAPSHOT", {"repos": {repo: {"prs": [row], "issues": []}}}), \
+             patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+             patch.object(lane, "superseded_by", return_value=False), \
+             patch.object(lane, "issue_record", return_value={}), patch.object(lane, "issue_held", return_value=False), \
+             patch.object(lane, "gate_verdict", return_value=("PASS", {"threadId": "gate"}, "VERDICT: PASS")), \
+             patch.object(lane, "read_json", pr_reads(lane, row)), \
+             patch.object(lane, "send", lambda *a, **k: sent.append(a[1]) or "sent"), \
+             patch.object(lane, "merge_passed_pr", lambda *a: merges.append(a[2]) or "merged"):
+            lane.act_on_pr(repo, 20, {})
+        if repo == srw and state == "missing" and not body_line:
+            bare = {**row, "body": "Refs #10"}
+            exact(lane.pr_action(bare, "builder", repo=None), ("check-missing", "check"))
+            exact(lane.pr_action(bare, "builder", repo=srw), ("check-missing", "none"))
+        exact((bool(merges), len(sent)), (gated, int(publisher and state == "failure" or not publisher and not body_line)))
+
     for repo, key in ((srw, "SRW"), (other, "FIX")):
-        for state, body_line in [(state, line) for state in states for line in (True, False)]:
-            body = "Refs #10\n" + (line if body_line else "")
-            pr = {"draft": False, "number": 20, "head": {"sha": head}, "body": body,
-                  "changed_files": 1, "base": {"ref": "main"}}
-            statuses = [] if state == "missing" else [{"context": "srw/agent-check", "state": state}]
-
-            def run(argv, **kwargs):
-                endpoint = argv[-1]
-                if argv[:3] == ["gh", "api", "user"]:
-                    return Run("me\n")
-                if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
-                    return Run(json.dumps([[pr]]))
-                if endpoint == f"repos/{repo}/commits/{head}/statuses?per_page=100":
-                    return Run(json.dumps([statuses]))
-                if endpoint == f"repos/{repo}/issues/10/comments?per_page=100" or endpoint.endswith("/files?per_page=100"):
-                    return Run("[[]]")
-                raise AssertionError(f"unexpected read: {endpoint}")
-
-            with tempfile.TemporaryDirectory() as scratch, \
-                 patch.object(coordq, "DIR", scratch), \
-                 patch.object(coordq, "load_receipts", lambda: {}), \
-                 patch.object(coordq, "builder_thread_for_issue", return_value=None), \
-                 patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
-                 patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
-                 patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
-                 patch.object(coordq, "gate_args", return_value={"modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t"}), \
-                 patch.object(coordq.gh_gateway, "run", run), \
-                 patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
-                 contextlib.redirect_stderr(io.StringIO()):
-                events = [e["kind"] for e in coordq.gate_candidates({"repos": {repo: {"key": key, "projectId": "fixture"}}}, {})]
-            publisher = repo == srw or bool(statuses)
-            gated = state == "success" if publisher else body_line
-            exact(events, ["candidate"] if gated else (["skip"] if repo == srw else []))
-
-            rollup = [{"context": "srw/agent-check", "state": state.upper()}] if statuses else []
-            row = dict(number=20, state="OPEN", headRefOid=head, headRefName="builder/x", baseRefName="main",
-                       labels=[], mergeable="MERGEABLE", body=body, statusCheckRollup=rollup)
-            sent, merges = [], []
-            with patch.object(lane, "CFG", {repo: dict(key=key, projectId="fixture")}), \
-                 patch.object(lane, "SNAPSHOT", {"repos": {repo: {"prs": [row], "issues": []}}}), \
-                 patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
-                 patch.object(lane, "superseded_by", return_value=False), \
-                 patch.object(lane, "issue_record", return_value={}), patch.object(lane, "issue_held", return_value=False), \
-                 patch.object(lane, "gate_verdict", return_value=("PASS", {"threadId": "gate"}, "VERDICT: PASS")), \
-                 patch.object(lane, "read_json", pr_reads(lane, row)), \
-                 patch.object(lane, "send", lambda *a, **k: sent.append(a[1]) or "sent"), \
-                 patch.object(lane, "merge_passed_pr", lambda *a: merges.append(a[2]) or "merged"):
-                lane.act_on_pr(repo, 20, {})
-            if repo == srw and state == "missing" and not body_line:
-                bare = {**row, "body": "Refs #10"}
-                exact(lane.pr_action(bare, "builder", repo=None), ("check-missing", "check"))
-                exact(lane.pr_action(bare, "builder", repo=srw), ("check-missing", "none"))
-            exact((bool(merges), len(sent)), (gated, int(publisher and state == "failure" or not publisher and not body_line)))
+        for state in states:
+            for body_line in (True, False):
+                case(repo, key, state, body_line)
 
 
 def gatekeep_retarget():
