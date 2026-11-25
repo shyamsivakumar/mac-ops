@@ -2922,6 +2922,38 @@ def refill_busy():
     exact(coordq.empty_board_reason([todo], ()), "refill stopped: 1 open stage:todo ticket waiting, and their repos are busy")
     exact(coordq.empty_board_reason([todo, {**todo, "number": 2}], ()).split(" ")[2], "2")
     exact(coordq.empty_board_reason([todo], {"o/r"}), coordq.empty_board_reason([], ()))
+    ticket = load_ticket()
+    scope = lambda *lines: "In:\n" + "\n".join(lines) + "\nOut: y\n"
+    def overlap(own, others=(), pulls=(), alongside=True):
+        listing = lambda args, **kwargs: [{"number": n, "body": b} for n, b in others] if args[0] == "issue" else \
+            [{"number": n, "body": "", "files": [{"path": f} for f in files]} for n, files in pulls]
+        with patch.object(ticket, "gh_json", listing):
+            return ticket.scope_overlap("o/r", {"number": 1, "body": own}, alongside)
+    proof = scope("- `scripts/a_proof.cjs`: x")
+    exact(overlap(proof, [(2, proof)]), [(2, "scripts/a_proof.cjs")])
+    exact(overlap(proof, [(2, proof)], alongside=False), [])
+    exact(overlap(scope("- `a.py`, `b.py`, `c.py`: x"), [(2, scope("- `x.py`, `c.py`: y"))]), [(2, "c.py")])
+    exact(overlap(scope("- `./a.py`: x"), [(2, scope("- `a.py`: y"))]), [(2, "a.py")])
+    exact(overlap(scope("- `d/`: x"), [(2, scope("- `d/x.py`: y"))]), [(2, "d/x.py")])
+    exact(overlap(scope("- `d/x.py`: x"), [(2, scope("- `d/`: y"))]), [(2, "d/")])
+    exact(overlap(scope("- `d/x.py`: x"), [], [(9, ["d/x.py", "z.py"])]), [(9, "d/x.py")])
+    exact(overlap(scope("- `a.py`: `runDrill()`, `--flag`, `stage:todo`, not `b.py`"), [(2, scope("- `b.py`: x"))]), [])
+    exact(overlap(scope("- `a.py`: leaves `b.py` alone"), [(2, scope("- `b.py`: x"))]), [])
+    exact(overlap(scope("- `a.py`, `evidence/MO-1/runs.md`: x"), [(2, scope("- `evidence/MO-1/runs.md`, `q.py`: y"))]), [])
+    exact(ticket.scope_files(scope("- `a.py`, `b.py`: x", "- `x_proof.py`: y")), ["a.py"])
+    exact(ticket.scope_files(scope("- `./a.py`: x")), ["./a.py"])
+    try:
+        overlap(scope("- `evidence/MO-1/runs.md`: x"))
+    except ticket.Refuse as refused:
+        exact(str(refused), "--alongside needs a Scope In that names a readable file")
+    else:
+        raise AssertionError("an evidence-only ticket must refuse")
+    try:
+        overlap(proof, [(2, "no names here")])
+    except ticket.Refuse as refused:
+        exact(str(refused), "#2 is started and names no files and has no open pull request")
+    else:
+        raise AssertionError("a started ticket with no names and no pull request must refuse")
 
 
 def root_workspace():

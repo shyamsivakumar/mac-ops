@@ -805,7 +805,7 @@ def body_section(body, name):
     return None
 
 
-def scope_files(body):
+def scope_files(body, wide=False):
     lines = body.splitlines()
     start = next((i for i, line in enumerate(lines) if line.strip() == "In:"), None)
     files = []
@@ -814,12 +814,20 @@ def scope_files(body):
     for line in lines[start + 1:]:
         if line.startswith(("Out:", "Size:", "#")):
             break
-        for token in re.findall(r"^- `([^`\s]+)`", line):
+        if wide and line.startswith("- `"):
+            found = re.findall(r"`([^`\s]+)`", line.split(": ", 1)[0])
+        else:
+            found = re.findall(r"^- `([^`\s]+)`", line)
+        for token in found:
+            if wide:
+                token = token.removeprefix("./")
+                if token.startswith("-"):
+                    continue
             if not ("/" in token or re.search(r"\.\w+$", token)):
                 continue
             if token.startswith(("evidence/", "docs/", "evals/harbor/tasks/")) or token.endswith(".md"):
                 continue
-            if "fixtures" in token.split("/") or "proof" in token.rsplit("/", 1)[-1]:
+            if not wide and ("fixtures" in token.split("/") or "proof" in token.rsplit("/", 1)[-1]):
                 continue
             if token not in files:
                 files.append(token)
@@ -1265,7 +1273,11 @@ def ledger_of(issue, login):
 
 
 def scope_overlap(repo, issue, alongside=False):
-    own = scope_files(issue["body"])
+    def matches(name, other):
+        return name == other or alongside and (name.endswith("/") and other.startswith(name)
+                                               or other.endswith("/") and name.startswith(other))
+
+    own = scope_files(issue["body"], alongside)
     if not own:
         if alongside:
             raise Refuse("--alongside needs a Scope In that names a readable file")
@@ -1279,14 +1291,15 @@ def scope_overlap(repo, issue, alongside=False):
     hits = set()
     for other in started:
         if other["number"] != issue["number"]:
-            files = scope_files(other.get("body") or "")
+            files = scope_files(other.get("body") or "", alongside)
             if alongside and not files and not any(references_issue(p.get("body"), other["number"], repo) for p in prs):
                 raise Refuse(f"#{other['number']} is started and names no files and has no open pull request")
-            hits.update((other["number"], p) for p in files if p in own)
+            hits.update((other["number"], p) for p in files if any(matches(p, o) for o in own))
     for pull in prs:
         if references_issue(pull.get("body"), issue["number"], repo):
             continue
-        hits.update((pull["number"], f["path"]) for f in pull.get("files") or [] if f["path"] in own)
+        paths = [f["path"] for f in pull.get("files") or []]
+        hits.update((pull["number"], p) for p in paths if any(matches(p, o) for o in own))
     return sorted(hits)
 
 
