@@ -2744,6 +2744,14 @@ def gate_candidates(config, rounds=None):
             if gated_key in queue.get("gatedHeads", {}) or lane_gated(receipts, gated_key):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
                     continue
+            if settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench"):
+                state = publisher_state(publisher_checks(repo, head))
+                if state != "success":
+                    print(stamped(f"skip {repo}#{number}: srw/agent-check is {state}, no gate queued"),
+                          file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                           "reason": f"srw/agent-check is {state}, no gate queued"}
+                    continue
             body = pr.get("body") or ""
             refs = pr_ticket_refs(pr.get("title") or "", body, repo)
             for issue in dict.fromkeys(refs):
@@ -2801,11 +2809,10 @@ def gate_candidates(config, rounds=None):
                                       f"{model['instanceId']} {model['model']}"), file=sys.stderr)
                         noted.add((repo, number))
                 # The gatekeep scan is optional polling: the floor applies.
-                statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
-                checks = [x for x in statuses if x["context"] == "srw/agent-check"]
+                checks = publisher_checks(repo, head)
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
                 if publisher:
-                    passed = bool(checks) and checks[0]["state"] == "success"
+                    passed = publisher_state(checks) == "success"
                 else:
                     passed = f"Builder check: PASS {head}" in body.splitlines()
                 if not passed:
@@ -3129,19 +3136,28 @@ def backstop_model(thread, runs):
     return reviewer_model([])
 
 
-def check_names_head(body, head, publisher, checks):
-    """Return True when the builder's check names this head.
+def publisher_checks(repo, head, optional=True, fresh=False):
+    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
+                       optional=optional, fresh=fresh)
+    return [x for x in statuses if x.get("context") == "srw/agent-check"]
 
-    The check is the line the builder wrote in the pull request body,
-    `Builder check: PASS <head>`, or the agent check the repository
-    publishes on the head. A trailing note after the head (the command
-    that produced it) does not change the verdict."""
-    for line in (body or "").splitlines():
-        if re.match(rf"^Builder check: PASS {re.escape(head)}(?:\s|$)", line.strip()):
-            return True
+
+def publisher_state(checks):
+    return (checks[0].get("state") or "missing") if checks else "missing"
+
+
+def check_names_head(body, head, publisher, checks):
+    """Return True when the check names this head.
+
+    A repository that publishes the agent check is judged by that status
+    alone. Any other repository is judged by the line the builder wrote in
+    the pull request body, `Builder check: PASS <head>`. A trailing note
+    after the head (the command that produced it) does not change the
+    verdict."""
     if publisher:
-        return bool(checks) and checks[0]["state"] == "success"
-    return False
+        return publisher_state(checks) == "success"
+    return any(re.match(rf"^Builder check: PASS {re.escape(head)}(?:\s|$)", line.strip())
+               for line in (body or "").splitlines())
 
 
 def gate_request(repo, pr, settings, config, receipts, login, optional=True,
@@ -3162,9 +3178,7 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
         model = reviewer_model(builder_models(thread, runs))
         if model is None:
             return None
-        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
-                           optional=optional, fresh=fresh)
-        checks = [x for x in statuses if x["context"] == "srw/agent-check"]
+        checks = publisher_checks(repo, head, optional, fresh)
         publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
         if not check_names_head(body, head, publisher, checks):
             return None
@@ -3178,9 +3192,7 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
                                prompt=prompt == prompt_paths.HOLD,
                                base=(pr.get("base") or {}).get("ref") or "main"), builder_models(thread, runs)
-    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
-                       optional=optional, fresh=fresh)
-    checks = [x for x in statuses if x["context"] == "srw/agent-check"]
+    checks = publisher_checks(repo, head, optional, fresh)
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
         return None
@@ -3254,6 +3266,10 @@ def cmd_gate(a):
     if found is DEFER:
         die(f"refused: the changed files of {repo}#{number} could not be read, and a gate "
             "that cannot read them might order a merge of prompt text. Retry the gate.")
+    if not found and settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench"):
+        die(f"refused: {repo}#{number} publishes its own status and srw/agent-check is "
+            f"{publisher_state(publisher_checks(repo, head, optional=False, fresh=True))} on head {head}. "
+            "Wait for the publisher to report success.")
     if not found:
         die(
             f"refused: no passing builder check of {repo}#{number} names the "
