@@ -76,4 +76,4 @@ COORD_INBOX_DIR pointing at a file: `rc=1`, stderr `inbox shadow pass failed: Fi
 | wake-tier rows | 0 |
 | log lines | `shyamsivakumar/mac-ops: no Mac-published status` (one line per poll while that repo has no `srw/agent-check` status: 288 a day) |
 
-Cost at 300 s: 12 polls an hour, 48 gh calls an hour (24 graphql, 24 core), 576 gh calls a day... per hour 24 graphql points-bearing list calls and 24 core calls.
+Cost at 300 s: 12 polls an hour, 48 gh calls an hour (24 graphql `pr list`, 24 core status reads), 1152 a day.
