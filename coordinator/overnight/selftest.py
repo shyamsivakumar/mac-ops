@@ -5132,6 +5132,73 @@ def replay_cases():
             exact(alarms(), ["alarm:x-1:0", "alarm:x-1:1"])
 
 
+def disagreement_cases():
+    source = ROOT.parent / "evals" / "hillclimb"
+    spec = importlib.util.spec_from_file_location("burst_disagreements", source / "burst.py")
+    sys.path.insert(0, str(source))
+    burst = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(burst)
+
+    def v(ts, head, verdict, pr=1, **data):
+        return {"ts": ts, "event": "gate_verdict", "repo": "o/r", "pr": pr, "head": head * 40, "data": {"verdict": verdict, **data}}
+
+    def pair(rows):
+        return [(r["round1_verdict"], r["round3_verdict"]) for r in burst.disagreements(rows)]
+
+    exact(pair([v(1, "a", "FAIL", **{"class": "logic"}), v(2, "b", "FAIL"), v(3, "c", "PASS")]), [("FAIL", "PASS")])
+    exact(pair([v(1, "a", "PASS"), v(2, "b", "PASS"), v(3, "c", "FAIL")]), [("PASS", "FAIL")])
+    exact(pair([v(1, "a", "FAIL"), v(2, "b", "PASS"), v(3, "c", "FAIL")]), [])
+    exact(pair([v(1, "a", "FAIL"), v(2, "a", "PASS")]), [])
+    exact(pair([v(3, "c", "PASS"), v(1, "a", "FAIL"), v(2, "b", "FAIL")]), [("FAIL", "PASS")])
+    exact(pair([v(1, "a", "FAIL"), v(2, "a", "PASS"), v(3, "b", "PASS"), v(4, "c", "PASS")]), [])
+    exact(pair([v(1, "a", "FAIL"), v(2, "a", "PASS"), v(3, "b", "FAIL"), v(4, "c", "FAIL"), v(5, "a", "FAIL")]), [])
+    exact(pair([v(1, "a", "FAIL"), v(2, "b", "FAIL"), v(3, "c", "SPLIT"), v(4, "c", "PASS")]), [("FAIL", "PASS")])
+    exact(pair([v(1, "a", "FAIL"), v(2, "b", "FAIL"), v(3, "c", "SPLIT")]), [])
+    exact(pair([v(1, "a", "FAIL"), v(2, "b", "FAIL"), v(3, "c", "FAIL"), v(4, "d", "PASS")]), [])
+    exact(pair([v(1, "a", "FAIL", pr=1), v(2, "b", "FAIL", pr=2), v(3, "c", "PASS", pr=1), v(4, "d", "PASS", pr=1)]), [("FAIL", "PASS")])
+    junk = [None, 7, {}, {"event": "gate_verdict"}, dict(v(9, "z", "PASS"), pr=None), dict(v(9, "z", "PASS"), ts="x"), dict(v(9, "z", "PASS"), ts=float("nan")), dict(v(9, "z", "PASS"), head=""), dict(v(9, "z", "PASS"), data=[1]), dict(v(9, "z", "PASS"), pr=True)]
+    exact(pair(junk + [v(1, "a", "FAIL"), v(2, "b", "FAIL"), v(3, "c", "PASS")]), [("FAIL", "PASS")])
+    record = burst.disagreements([v(1, "a", "FAIL", **{"class": "logic"}), v(2, "b", "FAIL"), v(3, "c", "PASS")])[0]
+    exact((record["round1_class"], record["round1_ts"], record["round3_ts"], record["round1_head"], record["round3_head"]), ("logic", 1, 3, "a" * 40, "c" * 40))
+
+    work = Path(tempfile.mkdtemp(prefix="selftest-disagree-"))
+    log = work / "gate_disagreements.jsonl"
+    rows = [v(1, "a", "FAIL"), v(2, "b", "FAIL"), v(3, "c", "PASS")]
+    exact(len(burst.log_disagreements(rows, log)), 1)
+    first = log.read_bytes()
+    exact(burst.log_disagreements(rows, log), [])
+    exact(log.read_bytes(), first)
+    log.write_bytes(b"not json\n[1]\n" + first + b'{"repo":"o/r","pr":2,"round3_he')
+    exact(len(burst.log_disagreements(rows + [v(4, "d", "PASS", pr=2), v(5, "e", "PASS", pr=2), v(6, "f", "FAIL", pr=2)], log)), 1)
+    lines = log.read_bytes().split(b"\n")
+    exact([json.loads(x)["pr"] for x in lines if x.startswith(b'{"pr"') or x.startswith(b'{"round')], [1, 2])
+    exact(log.read_bytes().endswith(b"\n"), True)
+
+    jdir = work / "journal"
+    jdir.mkdir()
+    (jdir / "events-2026-10.jsonl").write_text(json.dumps(v(1, "a", "FAIL")) + "\nnot json\n")
+    (jdir / "events-2026-11.jsonl").write_text(json.dumps(v(2, "b", "FAIL")) + "\n")
+    (jdir / "events-backfill.jsonl").write_text(json.dumps(v(3, "c", "PASS")) + "\n")
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": str(jdir)}):
+        exact(pair(burst.journal_rows()), [("FAIL", "PASS")])
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": str(work / "missing")}):
+        exact(burst.journal_rows(), [])
+
+    copy = work / "hillclimb"
+    copy.mkdir()
+    sentinels = {"labels.jsonl": b'{"id":"x"}\n', "split.json": b"{}", "score.lock": b"lock", "burst_queue.jsonl": b'{"id":"q"}\n'}
+    for name in ("burst.py", "build_labels.py"):
+        (copy / name).write_bytes((source / name).read_bytes())
+    for name, body in sentinels.items():
+        (copy / name).write_bytes(body)
+    env = {**os.environ, "COORD_JOURNAL_DIR": str(jdir), "HOME": str(work / "home")}
+    for _ in range(2):
+        done = subprocess.run([sys.executable, str(copy / "burst.py"), "--log-disagreements"], env=env, capture_output=True, text=True)
+        exact(done.returncode, 0)
+    exact({n: (copy / n).read_bytes() for n in sentinels}, sentinels)
+    exact(len((copy / "gate_disagreements.jsonl").read_text().splitlines()), 1)
+
+
 def timer_cases():
     import inbox as store
 
@@ -5735,6 +5802,7 @@ def inbox():
         lock.close()
         exact((lines, err.count("\n"), time.monotonic() - began < 2), (1, 1, True))
     replay_cases()
+    disagreement_cases()
     outbox_cases()
     timer_cases()
     inbox_poll_cases()
