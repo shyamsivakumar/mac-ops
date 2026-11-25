@@ -12,7 +12,9 @@ import sys
 
 sys.argv = sys.argv[:1] + sys.argv[1:2]
 src = open(__file__.replace("t0_replay.py", "replay_wakes.py")).read().split("fs = facts()")[0]
-exec(src)
+wakes = {}
+exec(src, wakes)
+facts, URGENT, ALL5 = wakes["facts"], wakes["URGENT"], wakes["ALL5"]
 
 TICK, CAP, EST_H = 1800, 7200, -5
 fs = facts()

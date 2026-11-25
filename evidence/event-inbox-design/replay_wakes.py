@@ -8,7 +8,6 @@ only when no run happened for 7200 s.
 """
 import collections
 import json
-import statistics
 import sys
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/Users/shyamsivakumar/.local/state/coordinator/journal/events-2026-11.jsonl"
@@ -56,11 +55,9 @@ def facts():
 def simulate(facts_, wake_pred):
     wake_ts = [r["ts"] for r in facts_ if wake_pred(r)]
     all_ts = [r["ts"] for r in facts_]
-    runs, i, last = [], 0, None
+    runs = []
     t_end = all_ts[-1]
-    now = all_ts[0]
     while True:
-        pending = [t for t in wake_ts if t > (runs[-1] if runs else 0) and t <= t_end]
         nxt_wake = next((t for t in wake_ts if t > (runs[-1] if runs else 0)), None)
         due_fb = (runs[-1] if runs else all_ts[0]) + FALLBACK
         cand = []

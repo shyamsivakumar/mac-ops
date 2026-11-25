@@ -26,4 +26,5 @@
   (literal "/Users/shyamsivakumar/.claude/settings.json")
   (literal "/Users/shyamsivakumar/.claude/CLAUDE.md"))
 (allow file-write*
-  (subpath "/Users/shyamsivakumar/Code/coordinator"))
+  (subpath "/Users/shyamsivakumar/Code/coordinator")
+  (subpath "/Users/shyamsivakumar/.pi/agent/cursor-acp-provider"))

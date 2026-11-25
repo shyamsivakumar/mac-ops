@@ -5,11 +5,11 @@ for l in open('/Users/shyamsivakumar/Code/coordinator/loop/ticks.log',errors='re
     m=re.match(r'(\d{4}-\d\d-\d\d) (\d\d:\d\d) (\w+) \| tick \(launchd\): (.*)',l)
     if not m: continue
     d,t,tz,rest=m.groups()
-    head=re.split(r';|\. Board| Board \d| Jobs alive',rest,1)[0]
+    head=re.split(r';|\. Board| Board \d| Jobs alive',rest,maxsplit=1)[0]
     acted=bool(POS.search(head)) or bool(re.search(r'\b(restored|re-cut|resent)\b',head))
     rows.append((d,t,tz,acted,head[:160]))
 by=collections.defaultdict(lambda:[0,0])
-for d,t,tz,a,h in rows:
+for d,_,_,a,_ in rows:
     by[d][0]+=1; by[d][1]+= (not a)
 tot=0;emp=0
 for d in sorted(by):
