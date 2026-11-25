@@ -22,7 +22,7 @@ def run(label, fn, params):
                 ep[1] = now
             now += 900
         print(f"\n{label} at {p}: {len(episodes)} alert(s)")
-        for key, (a, b, line) in sorted(episodes.items(), key=lambda kv: kv[1][0]):
+        for _key, (a, b, line) in sorted(episodes.items(), key=lambda kv: kv[1][0]):
             print(f"  from {fmt(a)} to {fmt(b)} | {line}")
 run("held", lambda r, tk, now, p: t.held_alarm(r, now=now, hours=p), (4, 6, 12))
 run("idle", lambda r, tk, now, p: t.idle_alarm(r, tk, now=now, count=p), (6, 8, 12))
