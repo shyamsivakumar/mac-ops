@@ -5021,6 +5021,80 @@ def stop_rules():
         exact(idle(waiting, ticks, now=now, count=bad) != "", True)
         exact(idle(waiting, ticks[1:], now=now, count=bad), "")
 
+    exact("o/r#7" in held([hold()], now=7 * hour, hours=6, state=lambda *a: "live"), True)
+    exact(held([hold()], now=7 * hour, hours=6, state=lambda *a: "stale"), "")
+    exact("o/r#7" in held([hold()], now=7 * hour, hours=6, state=lambda *a: "unknown"), True)
+    exact("not read" in held([hold()], now=7 * hour, hours=6, state=lambda *a: "unknown"), True)
+    exact("not read" in held([hold()], now=7 * hour, hours=6, state=lambda *a: "live"), False)
+    asked = []
+    held([hold(), hold(pr=8, ts=0), hold(9 * hour, pr=9), hold(ts=0, pr=10, reason="manual repo")], now=7 * hour, hours=6,
+         state=lambda *a: asked.append(a) or "live")
+    exact(sorted(asked), [("o/r", 7, "a" * 40), ("o/r", 8, "a" * 40)])
+    two = [verdict(50 * hour), verdict(50 * hour, pr=10)]
+    stale_nine = lambda repo, pr, head: "stale" if pr == 9 else "live"
+    got = idle(two, ticks, now=now, count=8, state=stale_nine)
+    exact(("o/r#10" in got, "o/r#9" in got), (True, False))
+    exact(idle(two, ticks, now=now, count=8, state=lambda *a: "stale"), "")
+    exact("o/r#9 (state not read)" in idle(waiting, ticks, now=now, count=8, state=lambda *a: "unknown"), True)
+    exact(idle([{**verdict(50 * hour), "head": None}], ticks, now=now, count=8, state=lambda *a: "live") != "", True)
+    headless = verdict(50 * hour)
+    del headless["head"]
+    seen = []
+    idle([headless], ticks, now=now, count=8, state=lambda *a: seen.append(a) or "live")
+    exact(seen, [("o/r", 9, None)])
+    exact(idle(waiting, ticks, now=now, count=8, state=lambda *a: "stale"), "")
+
+    import gh_gateway
+
+    def pull(state="open", sha="a" * 40):
+        return json.dumps({"state": state, "head": {"sha": sha}})
+
+    def reading(*results):
+        calls = []
+
+        def fake(argv, timeout=60, **kwargs):
+            calls.append((argv, timeout, kwargs))
+            result = results[min(len(calls), len(results)) - 1]
+            if isinstance(result, BaseException):
+                raise result
+            return subprocess.CompletedProcess(argv, *result)
+        return fake, calls
+
+    def ask(result, repo="o/r", pr=7, head="a" * 40):
+        fake, calls = reading(result)
+        with patch.object(gh_gateway, "run", fake), patch.object(gh_gateway, "floor", return_value=500):
+            return health.pr_state_reader()(repo, pr, head), calls
+
+    exact(ask((0, pull()))[0], "live")
+    exact(ask((0, pull(sha="A" * 40)))[0], "live")
+    exact(ask((0, pull(sha="b" * 40)))[0], "stale")
+    exact(ask((0, pull("closed")))[0], "stale")
+    exact(ask((0, pull()), head=None)[0], "live")
+    for bad in ((0, "not json"), (0, "[]"), (0, "{}"), (0, json.dumps({"state": "open"})),
+                (0, json.dumps({"state": "open", "head": {"sha": ""}})), (0, json.dumps({"state": "draft", "head": {"sha": "a"}})),
+                (1, "", "gh: Not Found (HTTP 404)"), (0, None), gh_gateway.ApiBudgetExhausted("low"),
+                subprocess.TimeoutExpired("gh", 10), FileNotFoundError("gh"), KeyError("repos"), ValueError("config")):
+        exact(ask(bad)[0], "unknown")
+    answer, calls = ask((0, pull()))
+    exact((calls[0][0], calls[0][1], calls[0][2]["limit"]), (["gh", "api", "repos/o/r/pulls/7"], 10, 500))
+    for repo in ("../x/y", "a/b/../c", "a b/c", "o/r;rm", "o/..", "./r", "o/r\n", "", None, 7):
+        answer, calls = ask((0, pull()), repo=repo)
+        exact((answer, calls), ("unknown", []))
+    exact(ask((0, pull()), pr=True)[1], [])
+    fake, calls = reading((0, pull()))
+    with patch.object(gh_gateway, "run", fake):
+        state = health.pr_state_reader()
+        exact([state("o/r", 7, "a" * 40), state("o/r", 7, "b" * 40), state("o/r", 7, "a" * 40)], ["live", "stale", "live"])
+        exact(len(calls), 1)
+        got = [state("o/r", number, "a" * 40) for number in range(100, 112)]
+        exact((got.count("live"), got.count("unknown"), len(calls)), (9, 3, 10))
+    fake, calls = reading((0, pull()))
+    clock = iter([0.0, 5.0, 12.0, 31.0, 31.0])
+    with patch.object(gh_gateway, "run", fake), patch.object(health.time, "monotonic", lambda: next(clock)):
+        state = health.pr_state_reader()
+        exact([state("o/r", number, "a" * 40) for number in (1, 2, 3)], ["live", "live", "unknown"])
+        exact([call[1] for call in calls], [10, 10])
+
     log = ("2026-03-08 12:00 EDT | tick | exit=0 reply=NOOP\nsecond line\n"
            "2026-03-08 12:30 EDT | tick | exit=1 reply=(empty)\n"
            "2026-03-08 13:00 EDT | tick | tick killed after 600s\n"
@@ -5046,7 +5120,10 @@ def stop_rules():
             os.environ.pop("COORD_STOP_RULES", None)
             exact(health.stop_rules_alarm(), "")
         with patch.dict(os.environ, {**env, "COORD_STOP_RULES": "on"}):
-            exact("o/r#7" in health.stop_rules_alarm(), True)
+            with patch.object(health, "pr_state_reader", return_value=lambda *a: "unknown"):
+                exact("o/r#7 held" in health.stop_rules_alarm(), True)
+            with patch.object(health, "pr_state_reader", return_value=lambda *a: "stale"):
+                exact(health.stop_rules_alarm(), "")
 
 
 def builder_receipt():
