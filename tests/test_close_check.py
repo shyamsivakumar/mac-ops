@@ -593,6 +593,35 @@ class ScopeTest(unittest.TestCase):
         check = close_check()
         self.assertEqual(check.scope_tokens("In: MyDockerfile.py"), {"MyDockerfile.py"})
 
+    def test_a_ticket_can_name_a_swift_file(self):
+        # The shape of the ticket that found this: an iOS ticket declares the
+        # component it changes by its bare name, and the changed path carries
+        # the package directory in front of it.
+        check = close_check()
+        ticket = ("## Scope and non-goals\n\n"
+                  "Change only the platform option list in TRSourceImportSheet.swift and record "
+                  "the deliberate Studio departure in docs/DESIGN.md.")
+        tokens = check.scope_tokens(ticket)
+        self.assertIn("TRSourceImportSheet.swift", tokens)
+        self.assertTrue(check.names_a_scope(tokens))
+        path = ("Packages/TuneriseDesign/Sources/TuneriseDesign/Components/"
+                "TRSourceImportSheet.swift")
+        ok, why = check.in_scope(path, tokens)
+        self.assertTrue(ok, why)
+
+    def test_a_swift_file_the_ticket_never_names_stays_out(self):
+        check = close_check()
+        item = check.item_scope("In: the add-source sheet: TRSourceImportSheet.swift.",
+                                ["App/Shared/HomeView.swift", "TRSourceImportSheet.swift"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("App/Shared/HomeView.swift", item["detail"])
+
+    def test_an_excluded_swift_file_is_not_a_permission(self):
+        check = close_check()
+        ticket = "In: the sheet: TRSourceImportSheet.swift. Out: HomeView.swift."
+        self.assertEqual(check.scope_tokens(ticket), {"TRSourceImportSheet.swift"})
+        self.assertNotIn("HomeView.swift", check.scope_tokens(ticket))
+
 
 class DiffValuesTest(unittest.TestCase):
     """The values a change sets come from its own added lines."""

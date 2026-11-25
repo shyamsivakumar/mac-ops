@@ -50,7 +50,11 @@ _NOT_IN_PATH = r"(?<![A-Za-z0-9_.*~/\\-])"
 # "In: src/" stays "src/" and bounds every path under it.
 PATH_TOKEN = re.compile(_NOT_IN_PATH +
                         r"(?=[A-Za-z0-9_.*-]*/)[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)*/?")
-FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
+# A bare file name is a token only when its extension is one this list
+# knows: the list is what keeps prose such as "3.9" or "e.g." out of the
+# tokens. It carries the document and source extensions a ticket can
+# declare by name, so a new language is one entry here and one test.
+FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css|swift)\b")
 DOCKERFILE_TOKEN = re.compile(_NOT_IN_PATH + r"Dockerfile(?:\.[A-Za-z0-9_-]+)?\b")
 
 PASS = "pass"
