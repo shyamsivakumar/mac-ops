@@ -42,6 +42,27 @@ def verdict(report):
     return match.group(1) if match else None
 
 
+PARTIAL_LINE = re.compile(r"(?im)^[ \t]*Partial:[ \t]*yes[ \t]*$")
+LEFT_HEADING = re.compile(r"(?im)^##[ \t]+Left for later[ \t]*$")
+NEXT_HEADING = re.compile(r"(?m)^#{1,2}[ \t]")
+PARTIAL_ASK = ("This pull request is partial: its body has `Partial: yes` and lists the rest under `## Left for later`. "
+               "Work listed there is no finding; anything missing that the list does not name is. "
+               "The delivered part must be complete, safe and proven on its own. Nothing closes the issue.")
+PARTIAL_PROVIDES = ("Verify only the Provides claims the delivered part makes on head {head}; a claim the left work "
+                    "delivers is not checked. Include the exact line `PROVIDES: PASS {head}` before the final CHECK and "
+                    "VERDICT lines whenever every claim of the delivered part holds, and `PROVIDES: FAIL {head}` with "
+                    "`VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.")
+
+
+def partial_claim(body):
+    from pr_refs import FENCED_BLOCK
+    text = FENCED_BLOCK.sub(" ", body or "")
+    if not PARTIAL_LINE.search(text):
+        return None
+    heading = LEFT_HEADING.search(text)
+    return NEXT_HEADING.split(text[heading.end():], 1)[0].strip() if heading else ""
+
+
 def complete_pass(reply, head, provides=True):
     """True when a gate reply carries every line `ticket close` requires on this head."""
     lines = [line.rstrip() for line in reply.splitlines()]
@@ -129,7 +150,7 @@ def manual_gate_ending():
     return "Do not merge or close; Shyam merges passed PRs himself." + NO_LATER_MERGE
 
 
-def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False):
+def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False, partial=False):
     import proof_file
     mode = merge_mode(repo, settings, ascend_override)
     merge = (PROMPT_NO_MERGE + NO_LATER_MERGE if prompt else
@@ -141,7 +162,8 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
                     f"`VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.")
     lane = mode == "lane" and not prompt
     if lane:
-        merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict." + NO_LATER_MERGE
+        merge = ("Do not merge or fast-forward main: the lane does both on your verdict. Nothing closes the issue." if partial else
+                 "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict.") + NO_LATER_MERGE
     fast_forward = ("" if mode == "ascend" or lane or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
                     "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
@@ -155,8 +177,12 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
              + (f" --issue {issue}" if issue is not None else "") + "` (the coordinator's mac-ops checkout holds it). "
              "If it ends `RESULT: FAIL`, send the work back to the builder with the failing item it names, close nothing, and report the refusal. "
              f"Only after every Provides claim passes on the merge commit and the checklist passes, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
+    if partial and close and not prompt and mode != "ascend":
+        close = " Close nothing: this pull request is partial, so the issue stays open."
     if issue is None:
         close = " No ticket is associated with this PR; close no issue."
+    if partial:
+        provides_ask = PARTIAL_ASK + " " + PARTIAL_PROVIDES.format(head=head)
     check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
              if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
     task = f"https://github.com/{repo}/issues/{issue}" if issue is not None else f"https://github.com/{repo}/pull/{number}"
