@@ -45,6 +45,8 @@ def poll_prs(repos, fetch, *, now):
     for repo in repos:
         try:
             prs = fetch(repo)
+        except gh_gateway.ApiBudgetExhausted:
+            raise
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
             print(f"{repo}: fetch failed: {type(exc).__name__}", file=sys.stderr)
             continue
@@ -86,6 +88,8 @@ def poll_ci(repos, fetch_status, *, now):
     for repo in repos:
         try:
             data = fetch_status(repo)
+        except gh_gateway.ApiBudgetExhausted:
+            raise
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
             print(f"{repo}: fetch failed: {type(exc).__name__}", file=sys.stderr)
             continue

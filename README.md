@@ -331,6 +331,23 @@ this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
 
+The `dev.coordinator.inbox` job (mac-ops #964) runs one shadow pass of the
+event inbox worker (`inbox_worker.py`) every 60 seconds, for the 48-hour shadow run.
+Each pass replays the journal into the inbox database and, when a batch is
+due, writes one `inbox_would_wake` journal row. It sends nothing, calls no
+model and writes nothing to GitHub: the job sets `COORD_INBOX_SHADOW=1` and has
+no journal hook, and the worker refuses to run (exit 2) when shadow mode is
+off. It polls open pull requests and the CI status of mac-ops and
+strategy-replay-workbench with read-only `gh` calls, at most once every 300
+seconds (`COORD_INBOX_POLL_EVERY`); a quota below the gateway floor skips that
+poll with one log line. It logs a line only when a batch ran or a pass
+failed, to `~/Library/Logs/coordinator/inbox.log`. To stop it, run
+`launchctl bootout gui/$(id -u)/dev.coordinator.inbox`, move the installed
+`~/Library/LaunchAgents/dev.coordinator.inbox.plist` out of `LaunchAgents` (launchd
+loads it again at the next login otherwise), and remove
+`coordinator/launchd/dev.coordinator.inbox.plist` from the repo, so the
+installer does not write it again.
+
 The `dev.coordinator.tick` job runs again (MO-250, mac-ops #267): it fires
 the tick every 30 minutes, on DeepSeek, and the installer leaves it alone
 (the retired set is empty). The tick reads the whole board but starts no
