@@ -398,21 +398,40 @@ def builder_thread(repo, body):
     return (refs[0] if refs else None), None
 
 
-def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False):
+def publisher_status(repo, pr):
+    settings = CFG.get(repo, {})
+    checks = [c for c in pr.get("statusCheckRollup") or []
+              if "agent-check" in (c.get("context") or c.get("name") or "")]
+    if settings.get("build") == "here" or not (settings.get("macPublisher", repo == SRW_REPO) or checks):
+        return None
+    if not checks:
+        return "missing"
+    newest = max(checks, key=lambda c: c.get("completedAt") or c.get("startedAt") or "")
+    state = (newest.get("state") or newest.get("conclusion") or "").upper()
+    if state == "SUCCESS":
+        return "success"
+    if state in {"FAIL", "FAILURE"}:
+        return "failure"
+    return "error" if state in {"ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"} else "pending"
+
+
+def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False, repo=None):
     head = pr.get("headRefOid") or ""
     body = pr.get("body") or ""
     checks = pr.get("statusCheckRollup") or []
     failed = any((c.get("conclusion") or c.get("state") or "").upper()
                  in {"FAIL", "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"} for c in checks)
-    agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "")
-                   and (c.get("conclusion") or c.get("state") or "").upper() == "SUCCESS" for c in checks)
-    check_ok = bool(head and re.search(rf"(?m)^Builder check: PASS {re.escape(head)}\s*$", body)) or agent_ok
+    status = publisher_status(repo, pr)
+    check_ok = (status == "success" if status
+                else bool(head and re.search(rf"(?m)^Builder check: PASS {re.escape(head)}\s*$", body)))
     if pr.get("isDraft"):
         state, action = "draft", "finish"
     elif pr.get("mergeable") == "CONFLICTING":
         state, action = "conflict", "rebase"
     elif not re.search(r"\bRefs #\d+", body):
         state, action = "no-ticket-link", "link"
+    elif status in ("missing", "pending", "error"):
+        return f"check-{status}", "none"
     elif failed or not check_ok:
         state, action = ("check-failed" if failed else "check-missing"), "check"
     elif gate_live or verdict == "running":
@@ -1398,6 +1417,9 @@ def superseded_by(repo, number, issue):
 
 
 def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
+    status = publisher_status(repo, pr)
+    if status not in (None, "success"):
+        return f"#{number}: gate PASS, srw/agent-check is {status}, no merge until it is"
     # A prompt, skill or playbook change never auto-merges (Refs #543):
     # the hold comes first, so a prompt PR is written to the board before
     # anything else looks at the merge.
@@ -1667,11 +1689,12 @@ def act_on_pr(repo, number, ledger):
             if reason != "completed":
                 return None
             closed = True
-    agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
-                   for c in pr.get("statusCheckRollup") or [])
-    check_ok = f"Builder check: PASS {head}" in body or agent_ok
+    status = publisher_status(repo, pr)
+    check_ok = status == "success" if status else f"Builder check: PASS {head}" in body
     if closed and (pr.get("mergeable") == "CONFLICTING" or not check_ok):
         return None
+    if status in ("missing", "pending", "error") and pr.get("mergeable") != "CONFLICTING":
+        return f"#{number}: srw/agent-check is {status} on head {head}, waiting, no merge until it is success"
     if pr.get("mergeable") == "CONFLICTING" or not check_ok:
         why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
         if CFG[repo].get("build") == "here":
