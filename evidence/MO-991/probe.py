@@ -41,7 +41,7 @@ def gate_row(line, left, size, mode):
     with patch.object(coordq, "pr_size", lambda *a: {"lines": size}):
         partial = coordq.partial_head(REPOS[mode], 8, pr)
     brief = gate_policy.build_gate_brief({"key": "MO"}, REPOS[mode], 7, 8, HEAD, False, partial=partial)
-    return partial, "partial" in brief and "Nothing closes" in brief, "gh issue close" in brief
+    return partial, "no finding" in brief, "gh issue close" in brief
 
 
 class Calls:
@@ -78,7 +78,7 @@ def close_row(line, left, repeat=1):
     return kinds.count("issue close"), kinds.count("issue comment"), kinds.count("issue edit"), kinds.count("journal partial_merged")
 
 
-print("gate brief: line, left, size, mode -> partial brief, close-nothing text, gh issue close in brief")
+print("gate brief: line, left, size, mode -> partial (None no marker, False marker only, True valid claim), partial text, gh issue close in brief")
 for line, left, size, mode in itertools.product(("present", "absent", "fenced"), ("listed", "empty", "none"), (199, 200, 300, 301), ("lane", "reviewer")):
     if line != "present" and left != "listed" or (line == "absent" and size != 200):
         continue
