@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
-from gate_policy import complete_pass, partial_claim
+from gate_policy import complete_pass, partial_claim, partial_state
 import gh_gateway
 import journal
 from pr_refs import FENCED_BLOCK, references_issue, same_repo
@@ -1924,7 +1924,8 @@ def cmd_gate(a):
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt_hold(repo, number, pull.get("changedFiles"),
                                               base, head),
-                           partial=None if partial_claim(pull.get("body")) is None else False)
+                           partial=partial_state(pull.get("body"), lambda: gh_json(
+                               ["api", f"repos/{repo}/pulls/{number}/files?per_page=100"])))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
@@ -2008,13 +2009,15 @@ def builder_thread(repo, number):
 
 
 def keep_open_partial(repo, number, pr, head, merge, left):
-    issue = gh_json(["issue", "view", str(number), "-R", repo, "--json", "state,labels,comments"])
+    issue = gh_json(["issue", "view", str(number), "-R", repo, "--json", "state,stateReason,labels,comments"])
     marker = f"<!-- partial-merged #{pr} -->"
     if any(marker in (c.get("body") or "") for c in issue["comments"]):
         print(f"{repo}#{number} already has the partial record for #{pr}; nothing to do")
         return
-    if issue["state"] != "OPEN":
+    if issue["state"] == "CLOSED" and issue.get("stateReason") == "COMPLETED":
         gh(["issue", "reopen", str(number), "-R", repo])
+    elif issue["state"] == "CLOSED":
+        print(f"{repo}#{number} was closed as {issue.get('stateReason')}, not by a merge keyword; left closed")
     staged = [label["name"] for label in issue["labels"] if label["name"] in (STARTED_LABEL, "stage:todo")]
     if staged:
         swap_stage(repo, number, staged[0], "stage:backlog")
@@ -2027,7 +2030,7 @@ def keep_open_partial(repo, number, pr, head, merge, left):
         f"Merged via #{pr} ({merge}) as a partial pull request, so this issue stays open.\n\n"
         f"## Left for later\n\n{left or 'The pull request lists nothing.'}\n\n{marker}"])
     journal.emit("partial_merged", "ticket", repo=repo, ticket=number, pr=pr, head=head, merge=merge)
-    print(f"kept {repo}#{number} open: #{pr} is partial")
+    print(f"recorded {repo}#{number}: #{pr} is partial")
 
 
 def cmd_close(a):

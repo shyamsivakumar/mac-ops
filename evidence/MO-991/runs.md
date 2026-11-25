@@ -35,7 +35,7 @@ exit 0
 
 ## Table (python3 evidence/MO-991/probe.py, fakes only, temp COORDQ_DIR, COORD_JOURNAL_DIR and decisions board)
 
-Gate rows (partial: None is no marker, False is a marker without a valid claim, True is a valid claim; a marker of any kind closes nothing, in every brief): the line is `present`, `absent` or `fenced` (inside a code block); the left section is `listed`, `empty` or `none`; `lane` is a lane repo, `reviewer` a reviewer-merge repo. A size of 301 is the recut band: gatekeep queues no gate there, so the marker is ignored, as for a fix round that pushes 280 to 310.
+Every gate row also asserts that `ticket gate` by hand reaches the same value through the shared `partial_state`. Gate rows (partial: None is no marker, False is a marker without a valid claim, True is a valid claim; a marker of any kind closes nothing, in every brief): the line is `present`, `absent` or `fenced` (inside a code block); the left section is `listed`, `empty` or `none`; `lane` is a lane repo, `reviewer` a reviewer-merge repo. A size of 301 is the recut band: gatekeep queues no gate there, so the marker is ignored, as for a fix round that pushes 280 to 310.
 
 cmd_close rows are the counts of: issue close, issue comment, label edit, journal partial_merged. The size does not matter to cmd_close, so the marker on a 40-line PR keeps the issue open too.
 
@@ -76,25 +76,28 @@ fenced   listed  300 reviewer -> partial=None  partial_text=False issue_close=Tr
 fenced   listed  301 lane     -> partial=None  partial_text=False issue_close=False
 fenced   listed  301 reviewer -> partial=None  partial_text=False issue_close=True
 cmd_close: line, left -> issue close, comment, label edit, journal partial_merged (calls)
-kept shyamsivakumar/mac-ops#7 open: #8 is partial
+recorded shyamsivakumar/mac-ops#7: #8 is partial
 present  listed  -> (0, 1, 1, 1)
-kept shyamsivakumar/mac-ops#7 open: #8 is partial
+recorded shyamsivakumar/mac-ops#7: #8 is partial
 present  empty   -> (0, 1, 1, 1)
-kept shyamsivakumar/mac-ops#7 open: #8 is partial
+recorded shyamsivakumar/mac-ops#7: #8 is partial
 present  none    -> (0, 1, 1, 1)
 closed shyamsivakumar/mac-ops#7 via mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
 fenced   listed  -> (1, 0, 0, 0)
 closed shyamsivakumar/mac-ops#7 via mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
 absent   none    -> (1, 0, 0, 0)
-kept shyamsivakumar/mac-ops#7 open: #8 is partial
+recorded shyamsivakumar/mac-ops#7: #8 is partial
 shyamsivakumar/mac-ops#7 already has the partial record for #8; nothing to do
 shyamsivakumar/mac-ops#7 already has the partial record for #8; nothing to do
 repeated cmd_close x3 (present, listed) -> (0, 1, 1, 1)
-closed by a Closes keyword at merge, no record yet -> kept shyamsivakumar/mac-ops#7 open: #8 is partial
+closed by a Closes keyword at merge, no record yet -> recorded shyamsivakumar/mac-ops#7: #8 is partial
 shyamsivakumar/mac-ops#7 already has the partial record for #8; nothing to do
 [['issue', 'reopen'], ['issue', 'edit'], ['issue', 'comment'], ['journal', 'partial_merged']] (second call recorded nothing)
+shyamsivakumar/mac-ops#7 was closed as NOT_PLANNED, not by a merge keyword; left closed
+recorded shyamsivakumar/mac-ops#7: #8 is partial
+closed as not planned -> [['issue', 'edit'], ['issue', 'comment'], ['journal', 'partial_merged']] (no reopen)
 marker spellings -> ['- x', 'x', '']
-kept shyamsivakumar/mac-ops#7 open: #8 is partial
+recorded shyamsivakumar/mac-ops#7: #8 is partial
 stage:todo ticket -> [['issue', 'edit'], ['issue', 'comment']] [{'name': 'stage:backlog'}]
 decisions items on the board: ['partial-mac-ops-7-8']
 ```

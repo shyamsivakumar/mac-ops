@@ -45,6 +45,9 @@ def verdict(report):
 PARTIAL_LINE = re.compile(r"(?im)^[ \t]*(?:[-*>][ \t]+)?\**[ \t]*Partial:\**[ \t]*yes[ \t]*\**[ \t]*\.?[ \t]*$")
 LEFT_HEADING = re.compile(r"(?im)^#{2,3}[ \t]+Left for later[ \t]*:?[ \t]*$")
 NEXT_HEADING = re.compile(r"(?m)^#{1,2}[ \t]")
+SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
+RECUT_LINES = 300
+PARTIAL_MIN_LINES = 200
 PARTIAL_ASK = ("This pull request is partial: its body has `Partial: yes` and lists the rest under `## Left for later`. "
                "Work listed there is no finding; anything missing that the list does not name is. "
                "The delivered part must be complete, safe and proven on its own. Nothing closes the issue.")
@@ -61,6 +64,32 @@ def partial_claim(body):
         return None
     heading = LEFT_HEADING.search(text)
     return NEXT_HEADING.split(text[heading.end():], 1)[0].strip() if heading else ""
+
+
+def counted_code_file(f):
+    name = f["filename"]
+    base = name.rsplit("/", 1)[-1]
+    if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
+        return False
+    if "fixtures" in name.split("/") or "proof" in base:
+        return False
+    is_test = (base.startswith("test_") or base.endswith("_test.py")
+               or "selftest" in name or "tests" in name.split("/"))
+    if f.get("status") != "added" and is_test:
+        return False
+    return True
+
+
+def code_size(files):
+    code = [f for f in files if counted_code_file(f)]
+    return sum(f["additions"] + f["deletions"] for f in code), len(code)
+
+
+def partial_state(body, read_files):
+    claim = partial_claim(body)
+    if claim is None:
+        return None
+    return bool(claim) and PARTIAL_MIN_LINES <= code_size(read_files())[0] <= RECUT_LINES
 
 
 def complete_pass(reply, head, provides=True):

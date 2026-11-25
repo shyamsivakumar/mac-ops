@@ -13,7 +13,7 @@ if _OVERNIGHT_DIR not in sys.path:
     sys.path.append(_OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
-from gate_policy import parse_verdict, verdict
+from gate_policy import RECUT_LINES, code_size, parse_verdict, partial_state, verdict
 import close_check
 import lane_briefs
 from pr_refs import pr_ticket_refs
@@ -2360,31 +2360,10 @@ def unreadable_ticket_reason(error, issue, body, title):
     return reason
 
 
-SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
 OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
-RECUT_LINES = 300
 RECUT_RULE = 2
 GATE_WHOLE_LABEL = "gate:whole"
-
-
-def counted_code_file(f):
-    name = f["filename"]
-    base = name.rsplit("/", 1)[-1]
-    if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
-        return False
-    if "fixtures" in name.split("/") or "proof" in base:
-        return False
-    is_test = (base.startswith("test_") or base.endswith("_test.py")
-               or "selftest" in name or "tests" in name.split("/"))
-    if f.get("status") != "added" and is_test:
-        return False
-    return True
-
-
-def code_size(files):
-    code = [f for f in files if counted_code_file(f)]
-    return sum(f["additions"] + f["deletions"] for f in code), len(code)
 
 
 def gate_whole(pr):
@@ -2407,15 +2386,8 @@ def pr_size(repo, number, pr):
     return {"size": size_class(files, whole), "lines": lines, "files": count, "whole": whole}
 
 
-PARTIAL_MIN_LINES = 200
-
-
 def partial_head(repo, number, pr):
-    from gate_policy import partial_claim
-    claim = partial_claim(pr.get("body"))
-    if claim is None:
-        return None
-    return bool(claim) and PARTIAL_MIN_LINES <= pr_size(repo, number, pr)["lines"] <= RECUT_LINES
+    return partial_state(pr.get("body"), lambda: gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100"))
 
 
 def recut_item(repo_key, repo, number, head, lines, count):
