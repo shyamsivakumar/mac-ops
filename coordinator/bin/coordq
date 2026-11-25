@@ -998,35 +998,33 @@ def head_title(title):
 
 
 MERGE_ACTION = re.compile(r"merge:([^#\s]+)#(\d+):([0-9a-f]{40})", re.IGNORECASE)
-MERGE_TITLE = re.compile(r"([A-Za-z][A-Za-z0-9]*)-(\d+) merge ([0-9a-f]{4,40})", re.IGNORECASE)
+MERGE_TITLE = re.compile(r"([A-Za-z][A-Za-z0-9]*)[-#](\d+) merge (?:on PASS )?([0-9a-f]{4,40})", re.IGNORECASE)
 HOLD_REASONS = ("loop code hold", "prompt hold")
 
 
 def held_merge(action_key, title, rows, keys):
+    by_key = {k.lower(): v for k, v in keys.items()}
+    asks = []
     match = MERGE_ACTION.fullmatch((action_key or "").strip())
-    from_title = match is None
-    if from_title:
-        match = MERGE_TITLE.fullmatch((title or "").strip())
-        if match is None:
-            return None
-        key, number, head = match.groups()
-        repo = {k.lower(): v for k, v in keys.items()}.get(key.lower())
-        if repo is None:
-            return None
-    else:
-        repo, number, head = match.groups()
-    repo = repo.lower()
-    head = head.lower()
-    holds = [row for row in rows
-             if row.get("event") == "merge_held"
-             and isinstance(row.get("repo"), str) and row["repo"].lower() == repo
-             and str(row.get("pr")) == str(int(number))
-             and isinstance(row.get("head"), str)]
-    live = [row for row in holds if row["data"].get("reason") in HOLD_REASONS]
-    hit = next((row for row in live if row["head"].lower().startswith(head)), None)
-    if hit is None and from_title and live and holds[-1] is live[-1]:
-        hit = live[-1]
-    return None if hit is None else (f"{hit['repo']}#{number}", hit["data"]["reason"])
+    if match:
+        asks.append((*match.groups(), False))
+    match = MERGE_TITLE.fullmatch((title or "").strip())
+    if match and match.group(1).lower() in by_key:
+        asks.append((by_key[match.group(1).lower()], *match.groups()[1:], True))
+    for repo, number, head, from_title in asks:
+        repo, head = repo.lower(), head.lower()
+        holds = [row for row in rows
+                 if row.get("event") == "merge_held"
+                 and isinstance(row.get("repo"), str) and row["repo"].lower() == repo
+                 and str(row.get("pr")) == str(int(number))
+                 and isinstance(row.get("head"), str)]
+        live = [row for row in holds if row["data"].get("reason") in HOLD_REASONS]
+        hit = next((row for row in live if row["head"].lower().startswith(head)), None)
+        if hit is None and from_title and live and holds[-1] is live[-1]:
+            hit = live[-1]
+        if hit is not None:
+            return f"{hit['repo']}#{number}", hit["data"]["reason"]
+    return None
 
 
 def journal_rows():
