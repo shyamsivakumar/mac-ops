@@ -335,9 +335,12 @@ The `dev.coordinator.inbox` job (mac-ops #964) runs one shadow pass of the
 event inbox worker (`inbox_worker.py`) every 60 seconds, for the shadow week.
 Each pass replays the journal into the inbox database and, when a batch is
 due, writes one `inbox_would_wake` journal row. It sends nothing, calls no
-model and makes no `gh` call: the job sets `COORD_INBOX_SHADOW=1`, names no
-repository and has no journal hook, and the worker refuses to run (exit 2)
-when shadow mode is off. It logs a line only when a batch ran or a pass
+model and writes nothing to GitHub: the job sets `COORD_INBOX_SHADOW=1` and has
+no journal hook, and the worker refuses to run (exit 2) when shadow mode is
+off. It polls open pull requests and the CI status of mac-ops and
+strategy-replay-workbench with read-only `gh` calls, at most once every 300
+seconds (`COORD_INBOX_POLL_EVERY`); a quota below the gateway floor skips that
+poll with one log line. It logs a line only when a batch ran or a pass
 failed, to `~/Library/Logs/coordinator/inbox.log`. To stop it, run
 `launchctl bootout gui/$(id -u)/dev.coordinator.inbox` and remove
 `coordinator/launchd/dev.coordinator.inbox.plist` from the repo, so the

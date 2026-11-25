@@ -186,6 +186,16 @@ def _running(lock_path, *, now, retry_delay, alarm_seconds, beat_seconds, clock)
             heartbeat(now=clock(), ended=True)
 
 
+def poll_due(*, now):
+    every = _seconds("COORD_INBOX_POLL_EVERY", 0)
+    with inbox.txn() as conn:
+        row = conn.execute("SELECT v FROM meta WHERE k='last_poll'").fetchone()
+        if row is not None and now - float(row[0]) < every:
+            return False
+        inbox._set_meta(conn, "last_poll", str(now))
+    return True
+
+
 def shadow_pass(*, now, runner=shadow_runner, retry_delay=0.2, alarm_seconds=PASS_ALARM,
                 beat_seconds=BEAT, clock=time.time):
     lock_path = os.path.join(os.path.dirname(inbox._db_path()), "inbox.worker.lock")
@@ -199,9 +209,12 @@ def shadow_pass(*, now, runner=shadow_runner, retry_delay=0.2, alarm_seconds=PAS
         inbox_replay.replay()
         import inbox_poll
         repos = inbox_poll.configured_repos()
-        if repos:
-            inbox_poll.poll_prs(repos, inbox_poll.fetch, now=now)
-            inbox_poll.poll_ci(repos, inbox_poll.fetch_status, now=now)
+        if repos and poll_due(now=now):
+            try:
+                inbox_poll.poll_prs(repos, inbox_poll.fetch, now=now)
+                inbox_poll.poll_ci(repos, inbox_poll.fetch_status, now=now)
+            except inbox_poll.gh_gateway.ApiBudgetExhausted:
+                print("inbox poll skipped: GitHub quota is below the floor", file=sys.stderr)
         due, oldest = _due(now)
         if not due:
             return dict(ZEROS)

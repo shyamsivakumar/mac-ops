@@ -59,3 +59,21 @@ One `inbox_would_wake` row (rows=1, lines=1, delay=62.0) landed in the temp jour
 ## A pass that errors
 
 COORD_INBOX_DIR pointing at a file: `rc=1`, stderr `inbox shadow pass failed: FileExistsError` (42 bytes). One line per minute is 60 KB a day. No payload, no journal row.
+
+## Polling (scope change: both repos, every 300 s)
+
+- `configured_repos()` run on the plist's own `COORD_INBOX_REPOS` value returns `['shyamsivakumar/mac-ops', 'shyamsivakumar/strategy-replay-workbench']` (the comma separator parses); asserted in the `inbox` eval.
+- `ApiBudgetExhausted` is a `RuntimeError`, so `poll_prs` and `poll_ci` used to swallow it with one line per repo per call. They now re-raise it; `shadow_pass` catches it around the poll, prints one line and the pass goes on (asserted: one fetch call, one stderr line, pass returns normally). `poll_due` sets `last_poll` in `meta` before the poll, so a failing poll waits its turn (asserted: two passes 100 s apart call fetch once per function).
+- One real read-only poll of both repos, temp COORD_INBOX_DIR and COORD_JOURNAL_DIR, `/usr/bin/python3`, plist env, temp usage log:
+
+| | |
+|---|---|
+| first pass (activate, replay, poll) | 2.71 s |
+| second pass 0 s later (poll not due) | 0.08 s, no new gh call |
+| gh calls (gateway usage rows) | 4: 2 graphql `pr list`, 2 core `commits/HEAD/status` |
+| rows enqueued | 1: one `ci_main`, batch tier, pending |
+| `pr_opened` rows | 0: every open PR was created before activation, so each is marked seen and not enqueued |
+| wake-tier rows | 0 |
+| log lines | `shyamsivakumar/mac-ops: no Mac-published status` (one line per poll while that repo has no `srw/agent-check` status: 288 a day) |
+
+Cost at 300 s: 12 polls an hour, 48 gh calls an hour (24 graphql, 24 core), 576 gh calls a day... per hour 24 graphql points-bearing list calls and 24 core calls.
