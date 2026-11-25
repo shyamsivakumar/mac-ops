@@ -188,6 +188,22 @@ uses, keeping only decisions that carry a recorded recommendation and have no
 recorded answer, favouring the thin kinds. It prints the first ten with the guess
 hidden. An item with no recorded answer stays in the queue until Shyam answers it.
 
+## Gate disagreements
+
+`burst.py --log-disagreements` reads every `events-*.jsonl` in the coordinator
+journal (`COORD_JOURNAL_DIR`, else `~/.local/state/coordinator/journal`, backfill
+file included) and appends to `gate_disagreements.jsonl` one row per PR whose
+third distinct reviewed head has a different final verdict (PASS or FAIL) from
+its first. A head's final verdict is its latest `gate_verdict` row. A row holds
+the repo, PR, both heads, both verdicts, the round-1 class and both times. A
+row is written once per repo, PR and third head, so a second run adds nothing.
+A line that does not parse, in the journal or in the log, is skipped. A normal
+`burst.py` run does the same append before it rebuilds the queue. Nothing else
+changes: no label, split, scorer lock or queue row, and no model call.
+
+A FAIL then PASS pair usually means the code was fixed between the heads, so a
+row is a question for Shyam and not a label.
+
 ## Rebuild
 
 ```sh

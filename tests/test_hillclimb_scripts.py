@@ -159,6 +159,8 @@ class BurstMining(unittest.TestCase):
                     mock.patch.object(burst, "OUT", out), \
                     mock.patch.object(burst, "LABELS", labels), \
                     mock.patch.object(burst, "DECISIONS", base / "missing_decisions.json"), \
+                    mock.patch.object(burst, "LOG", base / "gate_disagreements.jsonl"), \
+                    mock.patch.dict("os.environ", {"COORD_JOURNAL_DIR": str(base / "journal")}), \
                     redirect_stdout(StringIO()):
                 self.assertEqual(burst.main(), 0)
                 first = out.read_bytes()
