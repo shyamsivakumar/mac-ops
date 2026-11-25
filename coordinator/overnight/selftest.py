@@ -4969,6 +4969,80 @@ def journal_migration():
         exact((new / ".migrated").exists(), True)
 
 
+def stop_rules():
+    import tick_health as health
+
+    def hold(ts=0, head="a" * 40, reason="loop code hold", event="merge_held", pr=7):
+        return {"ts": ts, "event": event, "repo": "o/r", "pr": pr, "head": head, "data": {"reason": reason}}
+
+    def verdict(ts, pr=9, result="FAIL"):
+        return {"ts": ts, "event": "gate_verdict", "repo": "o/r", "pr": pr, "head": "b" * 40, "data": {"verdict": result}}
+
+    def acted(ts):
+        return {"ts": ts, "event": "launched", "repo": "o/r", "pr": None, "data": {"via_tick": True}}
+
+    hour = 3600
+    held = health.held_alarm
+    exact("o/r#7" in held([hold()], now=7 * hour, hours=6), True)
+    exact("prompt hold" in held([hold(reason="prompt hold")], now=7 * hour, hours=6), True)
+    exact(held([hold()], now=5 * hour, hours=6), "")
+    exact(held([hold(reason="manual repo")], now=70 * hour, hours=6), "")
+    for event in ("merged", "merged_outside_lane"):
+        exact(held([hold(), hold(9, event=event)], now=7 * hour, hours=6), "")
+    exact(held([hold(), hold(9, head="c" * 40, event="gate_queued")], now=7 * hour, hours=6), "")
+    exact("o/r#7" in held([hold(), hold(9, pr=8, event="merged")], now=7 * hour, hours=6), True)
+    exact(held([hold()], now=8 * 24 * hour, hours=6), "")
+    for bad in (None, "", float("nan"), -1, 0, "x"):
+        exact("o/r#7" in held([hold()], now=7 * hour, hours=bad), True)
+        exact(held([hold()], now=3 * hour, hours=bad), "")
+    exact(held(["x", None, {"ts": "1", "pr": 7}, {"ts": 1, "repo": "o/r", "pr": [1]}, hold()], now=7 * hour, hours=6).count("ALARM"), 1)
+
+    ticks = [100 * hour + n * 1800 for n in range(8)]
+    now = ticks[-1] + 60
+    idle = health.idle_alarm
+    waiting = [verdict(50 * hour)]
+    exact("o/r#9" in idle(waiting, ticks, now=now, count=8), True)
+    exact(idle([], ticks, now=now, count=8), "")
+    exact(idle([verdict(50 * hour, result="PASS")], ticks, now=now, count=8), "")
+    exact(idle(waiting + [acted(ticks[3])], ticks, now=now, count=8), "")
+    exact(idle(waiting + [acted(ticks[0] - 300)], ticks, now=now, count=8), "")
+    exact(idle(waiting + [acted(now + 5)], ticks, now=now, count=8), "")
+    exact(idle(waiting + [acted(ticks[0] - 700)], ticks, now=now, count=8) != "", True)
+    exact(idle(waiting + [hold(60 * hour, pr=9)], ticks, now=now, count=8), "")
+    exact(idle(waiting, ticks[1:], now=now, count=8), "")
+    exact(idle([verdict(now - 8 * 24 * hour)], ticks, now=now, count=8), "")
+    for bad in (None, "", float("nan"), -1, 2.5):
+        exact(idle(waiting, ticks, now=now, count=bad) != "", True)
+        exact(idle(waiting, ticks[1:], now=now, count=bad), "")
+
+    log = ("2026-03-08 12:00 EDT | tick | exit=0 reply=NOOP\nsecond line\n"
+           "2026-03-08 12:30 EDT | tick | exit=1 reply=(empty)\n"
+           "2026-03-08 13:00 EDT | tick | tick killed after 600s\n"
+           "2025-03-08 12:00 EST | tick | exit=0 reply=x\n"
+           "2026-11-01 01:30 EDT | tick | exit=0 reply=a\n2026-11-01 01:30 EST | tick | exit=0 reply=b\n")
+    with patch.dict(os.environ, {"TZ": "America/New_York"}):
+        time.tzset()
+        got = health.finished_ticks(log)
+    time.tzset()
+    exact((len(got), got[0] - got[1] > 300 * 86400, got[3] - got[2]), (4, True, 3600.0))
+
+    with tempfile.TemporaryDirectory() as root:
+        journal_dir = Path(root, "journal")
+        journal_dir.mkdir()
+        import journal
+        (journal_dir / Path(journal.journal_path(time.time())).name).write_text(
+            "not json\n" + json.dumps(hold(time.time() - 7 * hour)) + "\n{\"pr\":3,\n")
+        env = {"HOME": root, "COORD_JOURNAL_DIR": str(journal_dir)}
+        with patch.dict(os.environ, env), patch.object(health, "journal_rows", side_effect=AssertionError("read while off")):
+            for switch in ("", "off", "ON", "1"):
+                with patch.dict(os.environ, {"COORD_STOP_RULES": switch}):
+                    exact(health.stop_rules_alarm(), "")
+            os.environ.pop("COORD_STOP_RULES", None)
+            exact(health.stop_rules_alarm(), "")
+        with patch.dict(os.environ, {**env, "COORD_STOP_RULES": "on"}):
+            exact("o/r#7" in health.stop_rules_alarm(), True)
+
+
 def builder_receipt():
     coordq = load_coordq()
     repo = "shyamsivakumar/strategy-replay-workbench"
@@ -5910,7 +5984,7 @@ def worker_cases():
         exact(("COORD_INBOX_DEBOUNCE='soon'" in buffer.getvalue(), "COORD_INBOX_MIN_GAP='nan'" in buffer.getvalue()), (True, True))
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "stop-rules": stop_rules}
 
 
 def main():
