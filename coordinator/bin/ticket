@@ -1820,13 +1820,13 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False, partial=None):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
                             fast_forward_main=False, ascend_override=ascend,
                             proof=proof, proof_path=proof_path, proof_state=proof_state,
-                            prompt=prompt)
+                            prompt=prompt, partial=partial)
 
 
 def pull_changed_count(repo, number):
@@ -1923,7 +1923,8 @@ def cmd_gate(a):
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt_hold(repo, number, pull.get("changedFiles"),
-                                              base, head))
+                                              base, head),
+                           partial=None if partial_claim(pull.get("body")) is None else False)
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
@@ -2009,20 +2010,23 @@ def builder_thread(repo, number):
 def keep_open_partial(repo, number, pr, head, merge, left):
     issue = gh_json(["issue", "view", str(number), "-R", repo, "--json", "state,labels,comments"])
     marker = f"<!-- partial-merged #{pr} -->"
-    if issue["state"] != "OPEN" or any(marker in (c.get("body") or "") for c in issue["comments"]):
-        print(f"{repo}#{number} is already closed or recorded as partial; nothing to do")
+    if any(marker in (c.get("body") or "") for c in issue["comments"]):
+        print(f"{repo}#{number} already has the partial record for #{pr}; nothing to do")
         return
-    if STARTED_LABEL in [label["name"] for label in issue["labels"]]:
-        swap_stage(repo, number, STARTED_LABEL, "stage:backlog")
+    if issue["state"] != "OPEN":
+        gh(["issue", "reopen", str(number), "-R", repo])
+    staged = [label["name"] for label in issue["labels"] if label["name"] in (STARTED_LABEL, "stage:todo")]
+    if staged:
+        swap_stage(repo, number, staged[0], "stage:backlog")
     item = {"id": f"partial-{repo.split('/')[1]}-{number}-{pr}", "group": "Coordinator", "kind": "action",
             "title": f"{repo}#{number} merged only a part in #{pr}: cut the rest into its own ticket",
             "why": f"The pull request says `Partial: yes`, so {repo}#{number} stays open. Left for later: {left[:500]}"}
     if alarms.route_update(alarms.DECISIONS_PATH, item["id"], "raise", item) != "wrote":
         die(f"{repo}#{number} is partial but the decisions item could not be raised; run ticket close again")
-    journal.emit("partial_merged", "ticket", repo=repo, ticket=number, pr=pr, head=head, merge=merge)
     gh(["issue", "comment", str(number), "-R", repo, "--body",
         f"Merged via #{pr} ({merge}) as a partial pull request, so this issue stays open.\n\n"
         f"## Left for later\n\n{left or 'The pull request lists nothing.'}\n\n{marker}"])
+    journal.emit("partial_merged", "ticket", repo=repo, ticket=number, pr=pr, head=head, merge=merge)
     print(f"kept {repo}#{number} open: #{pr} is partial")
 
 

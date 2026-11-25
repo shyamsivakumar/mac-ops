@@ -1888,6 +1888,14 @@ def consolidation_guard():
     for text, claim in (("Partial: yes\n## Left for later\n- x\n## Next\ny", "- x"), ("Partial: yes", ""),
                         ("```\nPartial: yes\n```\n## Left for later\n- x", None), ("Refs #1", None)):
         exact(gate_policy.partial_claim(text), claim)
+    exact(gate_policy.partial_claim("> **Partial: yes**.\r\n### Left for later:\r\n- x"), "- x")
+    log = []
+    closed = {"state": "CLOSED", "labels": [{"name": "stage:todo"}], "comments": []}
+    with patch.object(ticket, "gh_json", lambda args, **kw: closed), patch.object(ticket, "gh", lambda args, **kw: log.append(args[:2])), \
+         patch.object(ticket.alarms, "route_update", lambda *a, **k: "wrote"), patch.object(ticket.journal, "emit", lambda *a, **k: log.append([a[0]])), \
+         contextlib.redirect_stdout(io.StringIO()):
+        ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, "a" * 40, "m", "x")
+    exact([entry for entry in log if entry != ["label", "create"]], [["issue", "reopen"], ["issue", "edit"], ["issue", "comment"], ["partial_merged"]])
     brief_of = lambda repo, **kw: gate_policy.build_gate_brief({"key": "FIX"}, repo, 1, 2, "a" * 40, False, **kw)
     for repo in ("shyamsivakumar/zzz-fixture", "shyamsivakumar/mac-ops"):
         plain, partial = brief_of(repo), brief_of(repo, partial=True)

@@ -42,8 +42,8 @@ def verdict(report):
     return match.group(1) if match else None
 
 
-PARTIAL_LINE = re.compile(r"(?im)^[ \t]*Partial:[ \t]*yes[ \t]*$")
-LEFT_HEADING = re.compile(r"(?im)^##[ \t]+Left for later[ \t]*$")
+PARTIAL_LINE = re.compile(r"(?im)^[ \t]*(?:[-*>][ \t]+)?\**[ \t]*Partial:\**[ \t]*yes[ \t]*\**[ \t]*\.?[ \t]*$")
+LEFT_HEADING = re.compile(r"(?im)^#{2,3}[ \t]+Left for later[ \t]*:?[ \t]*$")
 NEXT_HEADING = re.compile(r"(?m)^#{1,2}[ \t]")
 PARTIAL_ASK = ("This pull request is partial: its body has `Partial: yes` and lists the rest under `## Left for later`. "
                "Work listed there is no finding; anything missing that the list does not name is. "
@@ -56,7 +56,7 @@ PARTIAL_PROVIDES = ("Verify only the Provides claims the delivered part makes on
 
 def partial_claim(body):
     from pr_refs import FENCED_BLOCK
-    text = FENCED_BLOCK.sub(" ", body or "")
+    text = FENCED_BLOCK.sub(" ", (body or "").replace("\r\n", "\n"))
     if not PARTIAL_LINE.search(text):
         return None
     heading = LEFT_HEADING.search(text)
