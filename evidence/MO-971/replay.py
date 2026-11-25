@@ -10,7 +10,8 @@ end = time.time()
 def fmt(x): return time.strftime("%d %b %H:%M", time.localtime(x))
 def run(label, fn, params):
     for p in params:
-        episodes = {}
+        episodes = []
+        open_by_key = {}
         now = start
         while now <= end:
             vis = [r for r in rows if r["ts"] <= now]
@@ -18,12 +19,19 @@ def run(label, fn, params):
             out = fn(vis, tk, now, p)
             for line in out.splitlines():
                 key = re.sub(r" held [\d.]+ h", "", line) if label == "held" else line.split(";")[1]
-                ep = episodes.setdefault(key, [now, now, line])
-                ep[1] = now
+                ep = open_by_key.get(key)
+                if ep is None or now - ep["last"] > 1800:
+                    ep = {"first": now, "last": now, "first_line": line, "last_line": line}
+                    episodes.append(ep)
+                    open_by_key[key] = ep
+                ep["last"] = now
+                ep["last_line"] = line
             now += 900
         print(f"\n{label} at {p}: {len(episodes)} alert(s)")
-        for _key, (a, b, line) in sorted(episodes.items(), key=lambda kv: kv[1][0]):
-            print(f"  from {fmt(a)} to {fmt(b)} | {line}")
+        for ep in sorted(episodes, key=lambda e: e["first"]):
+            print(f"  from {fmt(ep['first'])} to {fmt(ep['last'])}")
+            print(f"    first: {ep['first_line']}")
+            print(f"    last:  {ep['last_line']}")
 run("held", lambda r, tk, now, p: t.held_alarm(r, now=now, hours=p), (4, 6, 12))
 run("idle", lambda r, tk, now, p: t.idle_alarm(r, tk, now=now, count=p), (6, 8, 12))
 print("\nvia_tick rows:", sum(1 for r in rows if isinstance(r.get('data'),dict) and r['data'].get('via_tick')), "first at", fmt(min(r['ts'] for r in rows if isinstance(r.get('data'),dict) and r['data'].get('via_tick'))))
