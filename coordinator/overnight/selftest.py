@@ -161,7 +161,7 @@ def start_routing():
                 stack.enter_context(patch.object(ticket, name, return_value=value))
             stack.enter_context(patch.object(ticket, "run", launch))
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
-                                       print_brief=False, dry_run=False))
+                                       print_brief=False, dry_run=False, alongside=False))
         exact(len(commands), 1)
     # A ticket labelled before the router entry existed still starts.
     exact(ticket.builder_alias("kimi"), "router")
