@@ -1742,8 +1742,8 @@ def refill(a):
                 log("refill stopped: the refill budget is spent")
                 break
             repo = candidate["repository"]["nameWithOwner"]
-            active = candidates.active.get(repo, ())
-            lanes = candidates.limits.get(repo, 1)
+            active = getattr(candidates, "active", {}).get(repo, ())
+            lanes = getattr(candidates, "limits", {}).get(repo, REFILL_MAX)
             if started.get(repo, 0) >= lanes - len(active) or tries.get(repo, 0) >= REPO_TRIES:
                 continue
             key = candidate_key(candidate)
