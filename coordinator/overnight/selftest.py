@@ -1883,6 +1883,18 @@ def consolidation_guard():
     other_brief = ticket.gate_brief("shyamsivakumar/tunerise", {"key": "FIX"}, 1, 2, "a" * 40, "main", False, False)
     exact("gh pr merge" in other_brief, False)
     exact("PROVIDES: PASS " + "a" * 40 in other_brief, True)
+    exact(all(word in builder for word in ("Partial: yes", "## Left for later", "300", "Refs #n")), True)
+    import gate_policy
+    for text, claim in (("Partial: yes\n## Left for later\n- x\n## Next\ny", "- x"), ("Partial: yes", ""),
+                        ("```\nPartial: yes\n```\n## Left for later\n- x", None), ("Refs #1", None)):
+        exact(gate_policy.partial_claim(text), claim)
+    brief_of = lambda repo, **kw: gate_policy.build_gate_brief({"key": "FIX"}, repo, 1, 2, "a" * 40, False, **kw)
+    for repo in ("shyamsivakumar/zzz-fixture", "shyamsivakumar/mac-ops"):
+        plain, partial = brief_of(repo), brief_of(repo, partial=True)
+        exact(plain == brief_of(repo, partial=False) and "Partial: yes" not in plain, True)
+        exact("gh issue close" in partial, False)
+        exact("Nothing closes the issue" in partial and "Work listed there is no finding" in partial, True)
+        exact("PROVIDES: PASS " + "a" * 40 in partial, True)
     for brief in (builder, gate):
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
