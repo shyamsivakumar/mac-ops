@@ -1,4 +1,4 @@
-import json,re,subprocess,datetime as dt,statistics as st
+import json,re,subprocess,datetime as dt
 UTC=dt.timezone.utc
 def iso(s): return dt.datetime.fromisoformat(s.replace('Z','+00:00'))
 prs=json.loads(subprocess.run(['gh','pr','list','-R','shyamsivakumar/mac-ops','--state','all','--limit','60','--json','number,createdAt,mergedAt'],capture_output=True,text=True).stdout)
