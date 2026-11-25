@@ -3136,9 +3136,8 @@ def backstop_model(thread, runs):
     return reviewer_model([])
 
 
-def publisher_checks(repo, head, optional=True, fresh=False):
-    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
-                       optional=optional, fresh=fresh)
+def publisher_checks(repo, head, **read):
+    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100", **read)
     return [x for x in statuses if x.get("context") == "srw/agent-check"]
 
 
@@ -3178,7 +3177,7 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
         model = reviewer_model(builder_models(thread, runs))
         if model is None:
             return None
-        checks = publisher_checks(repo, head, optional, fresh)
+        checks = publisher_checks(repo, head, optional=optional, fresh=fresh)
         publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
         if not check_names_head(body, head, publisher, checks):
             return None
@@ -3192,7 +3191,7 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
                                prompt=prompt == prompt_paths.HOLD,
                                base=(pr.get("base") or {}).get("ref") or "main"), builder_models(thread, runs)
-    checks = publisher_checks(repo, head, optional, fresh)
+    checks = publisher_checks(repo, head, optional=optional, fresh=fresh)
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
         return None
