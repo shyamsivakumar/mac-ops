@@ -2252,7 +2252,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
 DEFER = object()
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main", partial=False):
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main", partial=None):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -2412,7 +2412,10 @@ PARTIAL_MIN_LINES = 200
 
 def partial_head(repo, number, pr):
     from gate_policy import partial_claim
-    return bool(partial_claim(pr.get("body"))) and PARTIAL_MIN_LINES <= pr_size(repo, number, pr)["lines"] <= RECUT_LINES
+    claim = partial_claim(pr.get("body"))
+    if claim is None:
+        return None
+    return bool(claim) and PARTIAL_MIN_LINES <= pr_size(repo, number, pr)["lines"] <= RECUT_LINES
 
 
 def recut_item(repo_key, repo, number, head, lines, count):

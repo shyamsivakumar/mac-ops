@@ -1891,7 +1891,9 @@ def consolidation_guard():
     brief_of = lambda repo, **kw: gate_policy.build_gate_brief({"key": "FIX"}, repo, 1, 2, "a" * 40, False, **kw)
     for repo in ("shyamsivakumar/zzz-fixture", "shyamsivakumar/mac-ops"):
         plain, partial = brief_of(repo), brief_of(repo, partial=True)
-        exact(plain == brief_of(repo, partial=False) and "Partial: yes" not in plain, True)
+        exact(plain == brief_of(repo, partial=None) and "Partial: yes" not in plain, True)
+        marked = brief_of(repo, partial=False)
+        exact("Nothing closes the issue" in marked and "gh issue close" not in marked and "no finding" not in marked, True)
         exact("gh issue close" in partial, False)
         exact("Nothing closes the issue" in partial and "Work listed there is no finding" in partial, True)
         exact("PROVIDES: PASS " + "a" * 40 in partial, True)

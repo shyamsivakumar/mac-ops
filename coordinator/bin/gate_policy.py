@@ -150,7 +150,7 @@ def manual_gate_ending():
     return "Do not merge or close; Shyam merges passed PRs himself." + NO_LATER_MERGE
 
 
-def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False, partial=False):
+def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False, partial=None):
     import proof_file
     mode = merge_mode(repo, settings, ascend_override)
     merge = (PROMPT_NO_MERGE + NO_LATER_MERGE if prompt else
@@ -162,7 +162,7 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
                     f"`VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.")
     lane = mode == "lane" and not prompt
     if lane:
-        merge = ("Do not merge or fast-forward main: the lane does both on your verdict. Nothing closes the issue." if partial else
+        merge = ("Do not merge or fast-forward main: the lane does both on your verdict. Nothing closes the issue." if partial is not None else
                  "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict.") + NO_LATER_MERGE
     fast_forward = ("" if mode == "ascend" or lane or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
@@ -177,7 +177,7 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
              + (f" --issue {issue}" if issue is not None else "") + "` (the coordinator's mac-ops checkout holds it). "
              "If it ends `RESULT: FAIL`, send the work back to the builder with the failing item it names, close nothing, and report the refusal. "
              f"Only after every Provides claim passes on the merge commit and the checklist passes, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
-    if partial and close and not prompt and mode != "ascend":
+    if partial is not None and close and not prompt and mode != "ascend":
         close = " Close nothing: this pull request is partial, so the issue stays open."
     if issue is None:
         close = " No ticket is associated with this PR; close no issue."
