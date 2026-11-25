@@ -110,6 +110,7 @@ PI_FILES = (
     ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),
     ("coordinator.sb", ".pi/agent-coordinator/coordinator.sb"),
     ("settings.json", ".pi/agent-coordinator/settings.json"),
+    ("antigravity-acp-provider/config.json", ".pi/agent-coordinator/antigravity-acp-provider/config.json"),
     ("subagent-manager/settings.json", ".pi/agent-coordinator/subagent-manager/settings.json"),
     ("subagent-manager/agents/architect.yml", ".pi/agent-coordinator/subagent-manager/agents/architect.yml"),
     ("subagent-manager/agents/coder.yml", ".pi/agent-coordinator/subagent-manager/agents/coder.yml"),

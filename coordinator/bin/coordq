@@ -997,6 +997,63 @@ def head_title(title):
     return match.groups() if match else None
 
 
+MERGE_ACTION = re.compile(r"merge:([^#\s]+)#(\d+):([0-9a-f]{40})", re.IGNORECASE)
+MERGE_TITLE = re.compile(r"([A-Za-z][A-Za-z0-9]*)[-#](\d+) merge (?:on PASS )?([0-9a-f]{4,40})", re.IGNORECASE)
+HOLD_REASONS = ("loop code hold", "prompt hold")
+
+
+def held_merge(action_key, title, rows, keys):
+    by_key = {k.lower(): v for k, v in keys.items()}
+    asks = []
+    match = MERGE_ACTION.fullmatch((action_key or "").strip())
+    if match:
+        asks.append((*match.groups(), False))
+    match = MERGE_TITLE.fullmatch((title or "").strip())
+    if match and match.group(1).lower() in by_key:
+        asks.append((by_key[match.group(1).lower()], *match.groups()[1:], True))
+    for repo, number, head, from_title in asks:
+        repo, head = repo.lower(), head.lower()
+        holds = [row for row in rows
+                 if row.get("event") == "merge_held"
+                 and isinstance(row.get("repo"), str) and row["repo"].lower() == repo
+                 and str(row.get("pr")) == str(int(number))
+                 and isinstance(row.get("head"), str)]
+        live = [row for row in holds if row["data"].get("reason") in HOLD_REASONS]
+        hit = next((row for row in live if row["head"].lower().startswith(head)), None)
+        if hit is None and from_title and live and holds[-1] is live[-1]:
+            hit = live[-1]
+        if hit is not None:
+            return f"{hit['repo']}#{number}", hit["data"]["reason"]
+    return None
+
+
+def journal_rows():
+    now = int(time.time())
+    rows = []
+    for path in (journal.journal_path(now - time.gmtime(now).tm_mday * 86400), journal.journal_path(now)):
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            for line in f:
+                if '"merge_held"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and isinstance(row.get("data"), dict):
+                    rows.append(row)
+    return rows
+
+
+def ticket_keys():
+    if not os.path.exists(TICKETS_CONFIG):
+        return {}
+    with open(TICKETS_CONFIG) as f:
+        config = json.load(f)
+    return {s["key"]: repo for repo, s in config["repos"].items() if s.get("key")}
+
+
 def older_head_items(queue, title, below=None):
     """The queued messages that name an older head of the title's pull request.
 
@@ -1064,6 +1121,13 @@ def cmd_start(a):
     label = journal_title(a.title or args.get("title") or args.get("threadId"))
     if tool not in DISPATCHABLE_TOOLS:
         refuse_start(f"refused: {tool_refusal(tool)}", args, tool, label)
+    action_key = (getattr(a, "action_key", None) or "").strip()
+    asked = str(a.title or args.get("title") or "")
+    if MERGE_ACTION.fullmatch(action_key) or MERGE_TITLE.fullmatch(asked.strip()):
+        held = held_merge(action_key, asked, journal_rows(), ticket_keys())
+        if held:
+            refuse_start(f"refused: {held[0]} is held for Shyam ({held[1]}); Shyam merges it, a send does not",
+                         args, tool, label)
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
@@ -1321,6 +1385,22 @@ def lane_candidates(rows, occupied, pr_refs=None, build_here=()):
     return selected
 
 
+class Candidates(list):
+    def __init__(self, selected, rows, build_here):
+        super().__init__(selected)
+        self.rows = rows
+        self.build_here = build_here
+
+
+def empty_board_reason(rows, build_here):
+    waiting = sum(1 for row in rows
+                  if stage_todo(row) and row["repository"]["nameWithOwner"] not in build_here)
+    if not waiting:
+        return "refill stopped: the board has no open stage:todo ticket"
+    return (f"refill stopped: {waiting} open stage:todo ticket{'s' if waiting != 1 else ''} "
+            "waiting, and their repos are busy")
+
+
 def board_candidates():
     with open(TICKETS_CONFIG) as f:
         cfg = json.load(f)
@@ -1342,7 +1422,7 @@ def board_candidates():
     for row in stale_started(rows, occupied, pr_refs):
         log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
     build_here = {repo for repo, entry in cfg["repos"].items() if entry.get("build") == "here"}
-    return lane_candidates(rows, occupied, pr_refs, build_here)
+    return Candidates(lane_candidates(rows, occupied, pr_refs, build_here), rows, build_here)
 
 
 def ticket_start(repo, number, dry_run):
@@ -1490,7 +1570,7 @@ def refill(a):
             log(f"refill stopped: {e}")
             return
         if not candidates:
-            log("refill stopped: the board has no open stage:todo ticket")
+            log(empty_board_reason(getattr(candidates, "rows", []), getattr(candidates, "build_here", ())))
             return
         deadline = time.time() + REFILL_BUDGET
         state = load_refill_state()

@@ -13,10 +13,14 @@ decisions-board snapshots) and keeps only decisions that:
 Nothing is invented. An item with no recorded answer stays in burst_queue.jsonl
 until Shyam answers it through `daily3.py record`.
 
-Writes only burst_queue.jsonl under this directory.
+Writes burst_queue.jsonl under this directory. It also appends to
+gate_disagreements.jsonl: one row per PR whose third reviewed head got a
+different gate verdict from its first. `--log-disagreements` does only that.
 """
 
 import json
+import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -29,6 +33,8 @@ THIN = ("merge", "money", "access", "size_exception")
 OUT = HERE / "burst_queue.jsonl"
 LABELS = HERE / "labels.jsonl"
 DECISIONS = Path.home() / "Code/coordinator/decisions.json"
+LOG = HERE / "gate_disagreements.jsonl"
+JOURNAL = Path.home() / ".local/state/coordinator/journal"
 
 STOP = {
     "the", "a", "an", "it", "is", "to", "and", "or", "of", "for", "in", "on", "that", "this",
@@ -86,7 +92,85 @@ def clean_options(options, recommended):
     return all(len(o.strip()) >= 4 and len(o.split()) >= 2 for o in options)
 
 
+def journal_rows():
+    directory = Path(os.environ.get("COORD_JOURNAL_DIR") or JOURNAL)
+    rows = []
+    for path in sorted(directory.glob("events-*.jsonl")):
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    return rows
+
+
+def gate_row(row):
+    if not isinstance(row, dict) or row.get("event") != "gate_verdict":
+        return None
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    ts, pr = row.get("ts"), row.get("pr")
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
+        return None
+    if isinstance(pr, bool) or not isinstance(pr, int):
+        return None
+    if not all(isinstance(row.get(k), str) and row[k] for k in ("repo", "head")):
+        return None
+    if data.get("verdict") not in ("PASS", "FAIL"):
+        return None
+    return {"repo": row["repo"], "pr": pr, "head": row["head"], "ts": ts,
+            "verdict": data["verdict"], "class": data.get("class")}
+
+
+def disagreements(rows):
+    """One record per PR whose third distinct head has a different final verdict
+    from its first. A head's final verdict is its latest row; heads are ordered
+    by their first review."""
+    prs = {}
+    for g in sorted(filter(None, map(gate_row, rows)), key=lambda g: g["ts"]):
+        heads = prs.setdefault((g["repo"], g["pr"]), {})
+        heads[g["head"]] = g
+    out = []
+    for (repo, pr), heads in prs.items():
+        rounds = list(heads.values())
+        if len(rounds) >= 3 and rounds[0]["verdict"] != rounds[2]["verdict"]:
+            r1, r3 = rounds[0], rounds[2]
+            out.append({
+                "repo": repo, "pr": pr,
+                "round1_head": r1["head"], "round3_head": r3["head"],
+                "round1_verdict": r1["verdict"], "round3_verdict": r3["verdict"],
+                "round1_class": r1["class"], "round1_ts": r1["ts"], "round3_ts": r3["ts"],
+            })
+    return out
+
+
+def log_disagreements(rows, path=None):
+    path = LOG if path is None else path
+    known = set()
+    if path.exists():
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                old = json.loads(line)
+                known.add((old["repo"], old["pr"], old["round3_head"]))
+            except (ValueError, KeyError, TypeError):
+                continue
+    new = [r for r in disagreements(rows) if (r["repo"], r["pr"], r["round3_head"]) not in known]
+    if new:
+        torn = path.exists() and path.stat().st_size and not path.read_bytes().endswith(b"\n")
+        text = ("\n" if torn else "") + "".join(json.dumps(r, sort_keys=True) + "\n" for r in new)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, text.encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    return new
+
+
 def main():
+    logged = log_disagreements(journal_rows())
+    print(f"gate_disagreements.jsonl: {len(logged)} new")
+    if "--log-disagreements" in sys.argv[1:]:
+        return 0
     recs = B.load_messages()
     panel = B.load_panel(recs)
     board = B.load_board(recs)
