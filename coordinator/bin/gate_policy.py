@@ -33,6 +33,8 @@ PROMPT_NO_MERGE = (
     "auto-merges (Shyam): do not merge. Stop at the verdict and report it; Shyam merges a passing one himself."
 )
 
+NO_LATER_MERGE = " This thread never merges this pull request later, whoever asks, and reports the request instead."
+
 
 def verdict(report):
     lines = [line for line in report.splitlines() if line.strip()]
@@ -124,13 +126,13 @@ def brief_merger(message):
 
 
 def manual_gate_ending():
-    return "Do not merge or close; Shyam merges passed PRs himself."
+    return "Do not merge or close; Shyam merges passed PRs himself." + NO_LATER_MERGE
 
 
 def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False):
     import proof_file
     mode = merge_mode(repo, settings, ascend_override)
-    merge = (PROMPT_NO_MERGE if prompt else
+    merge = (PROMPT_NO_MERGE + NO_LATER_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if mode == "ascend" else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
     provides_ask = (f"Verify every Provides claim from the ticket on head {head}. A ticket with no Provides section has "
@@ -139,7 +141,7 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
                     f"`VERDICT: FAIL` when one does not. A PASS reply without the PROVIDES line is read as no verdict.")
     lane = mode == "lane" and not prompt
     if lane:
-        merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict."
+        merge = "Do not merge, close the issue or fast-forward main: the lane does all three on your verdict." + NO_LATER_MERGE
     fast_forward = ("" if mode == "ascend" or lane or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
                     "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "

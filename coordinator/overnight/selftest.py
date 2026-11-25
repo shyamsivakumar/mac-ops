@@ -6177,6 +6177,45 @@ def held_merge():
     exact(bool(ask(f"merge:o/r#7:{held}", rows=[hold(7, held), hold(7, other, "manual repo")])), True)
     exact(bool(ask(title="R-7 merge " + "c" * 8, rows=[hold(7, held), hold(7, other, "manual repo")])), False)
 
+    gate = lambda thread, receipts, rows=rows: coordq.held_gate_thread(thread, receipts, rows)
+    exact(bool(gate("t1", {f"gate:o/r#7:{held}": "t1"})), True)
+    exact(bool(gate("t1", {f"GATE:O/R#7:{held.upper()}:astra2": "t1"})), True)
+    exact(bool(gate("t1", {f"gate:o/r#7:{held}:gate:main:lane": "t1"})), True)
+    exact(bool(gate("t1", {f"gate:o/r#7:{other}": "t1", f"gate:o/r#7:{held}:swap": "t1"})), True)
+    exact(bool(gate("t1", {f"gate:o/r#7:{other}": "t1"})), False)
+    exact(bool(gate("t2", {f"gate:o/r#7:{held}": "t1"})), False)
+    exact(bool(gate("t1", {f"gate:o/r#9:{held}": "t1"})), False)
+    exact(bool(gate("t1", {f"gate:o/r#5:{held}": "t1"})), True)
+    exact(bool(gate("t1", {"base:t1": "main", "brief:t1": "lane-merges", f"merge-pass:o/r#7:{held}": "t1"})), False)
+    exact(bool(gate("t1", {f"gate:o/r#7:{held}": "t1"}, rows=[hold(7, held, "manual repo")])), False)
+    for bad in (None, 7, "", ["t1"]):
+        exact(gate(bad, {f"gate:o/r#7:{held}": "t1"}), None)
+    for bad in (None, [], "x", {f"gate:o/r#7:{held}": ["t1"], 5: "t1", f"gate:o/r#7:{held[:9]}": "t1"}):
+        exact(gate("t1", bad), None)
+    exact(coordq.held_gate_thread("t1", {f"gate:o/r#7:{held}": "t1"}, [None, "x", {"event": "merge_held"}, hold(7, held)]) is not None, True)
+    command = lambda text, rows=rows: coordq.held_command(text, rows)
+    for text in ("gh pr merge 7 -R o/r", "gh pr merge -R o/r 7 --squash", "gh pr merge 7 --repo=o/r", "gh pr merge 7 --repo o/R",
+                 "gh pr merge https://github.com/o/r/pull/7 --squash", "run `gh pr merge 7 -R o/r --squash`.",
+                 "first\n```\ngh pr merge -R o/r --squash 7\n```", f"gh pr merge 7 -R o/r --match-head-commit {held}",
+                 "x && gh pr merge 007 -R o/r", "gh pr merge '#7' -R 'o/r'"):
+        exact(bool(command(text)), True)
+    for text in ("gh pr view 7 -R o/r", "gh pr merge 7", "gh pr merge 8 -R o/r", "gh pr merge 7 -R o/rx", "gh pr merge --squash -R o/r",
+                 f"gh pr merge 7 -R o/r --match-head-commit {other}", "gh pr merge 9 -R o/r", "merge 7 -R o/r",
+                 "gh pr merge https://github.com/o/r/pull/8", None, 7, ["gh pr merge 7 -R o/r"]):
+        exact(bool(command(text)), False)
+    exact(bool(command("gh pr merge 5 -R o/r", rows=[hold(5, other, "prompt hold")])), True)
+    exact(bool(command("gh pr merge 5 -R o/r", rows=[hold(5, other, "prompt hold"), hold(5, held, "manual repo")])), False)
+    exact(bool(command("gh pr merge 7 -R o/r", rows=[None, "x", {"event": "merge_held", "repo": "o/r", "pr": 7, "head": held}])), False)
+    gate_policy = importlib.import_module("gate_policy")
+    sentence = gate_policy.NO_LATER_MERGE
+    exact("gh pr merge" in sentence, False)
+    brief = lambda repo, **kw: gate_policy.build_gate_brief({"key": "MO"}, repo, 7, 8, held, False, **kw)
+    for text in (brief("shyamsivakumar/mac-ops"), brief("shyamsivakumar/mac-ops", prompt=True),
+                 brief("shyamsivakumar/mac-ops", ascend_override=False, prompt=True)):
+        exact(sentence in text and "gh pr merge" not in text, True)
+    exact(sentence in gate_policy.manual_gate_ending(), True)
+    exact(sentence in brief("shyamsivakumar/mac-ops", ascend_override=True), False)
+
     scratch = tempfile.mkdtemp(prefix="selftest-held-merge-")
     with patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}):
         now = time.time()
@@ -6203,6 +6242,23 @@ def held_merge():
         exact(os.listdir(queue_dir), [])
         refused = [json.loads(line) for line in open(coordq.journal.journal_path(now)) if '"refused"' in line]
         exact(len(refused), 2)
+        receipts = {f"gate:o/r#7:{held}:astra2": "gate", f"gate:o/r#7:{other}": "other"}
+        send = lambda thread, message: argparse.Namespace(
+            args=json.dumps({"threadId": thread, "message": message}), title="", priority=900,
+            tool="t3_thread_send", action_key="")
+        with patch.object(coordq, "DIR", queue_dir), patch.object(coordq, "journal_rows", lambda: rows), \
+             patch.object(coordq, "load_receipts", lambda: receipts), patch.object(coordq, "drain", side_effect=AssertionError("drain")), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            for thread, message in [("gate", "Finish this gate and run the merge approval step"), ("gate", None), ("other", "gh pr merge 7 -R o/r"),
+                                    ("builder", "gh pr merge 7 -R o/r --squash")]:
+                try:
+                    coordq.cmd_start(send(thread, message))
+                except SystemExit:
+                    pass
+                else:
+                    raise AssertionError("a held send was queued")
+        exact(err.getvalue().count("o/r#7 is held for Shyam (loop code hold)"), 4)
+        exact(os.listdir(queue_dir), [])
 
 
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
