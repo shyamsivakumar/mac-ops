@@ -13,6 +13,9 @@ HOLD_REASONS = ("loop code hold", "prompt hold")
 MERGED = ("merged", "merged_outside_lane")
 STOP_DAYS = 7 * 86400
 TICK_RUN_S = 600
+READ_LIMIT = 10
+READ_TIMEOUT = 10
+READ_DEADLINE = 30
 TICK_LINE = re.compile(
     r"^(\d{4}-\d\d-\d\d \d\d:\d\d) ([A-Z]{2,5}) \| tick \| exit=0\b", re.MULTILINE
 )
@@ -137,7 +140,7 @@ def rows_by_pr(rows):
     return grouped
 
 
-def held_alarm(rows, *, now, hours):
+def held_alarm(rows, *, now, hours, state=None):
     hours = limit(hours, 6)
     alarms = []
     for (repo, pr), seq in rows_by_pr(rows).items():
@@ -165,13 +168,20 @@ def held_alarm(rows, *, now, hours):
             continue
         if any(r.get("event") in MERGED and ts >= held for ts, r in seq):
             continue
+        note = ""
+        if state is not None:
+            verdict = state(repo, pr, head)
+            if verdict == "stale":
+                continue
+            if verdict == "unknown":
+                note = " (state not read)"
         alarms.append(
-            f"ALARM: {repo}#{pr} held {age / 3600:.1f} h ({reason}), no merge since"
+            f"ALARM: {repo}#{pr} held {age / 3600:.1f} h ({reason}), no merge since{note}"
         )
     return "\n".join(sorted(alarms))
 
 
-def idle_alarm(rows, ticks, *, now, count):
+def idle_alarm(rows, ticks, *, now, count, state=None):
     count = limit(count, 8, whole=True)
     rows = list(rows)
     if len(ticks) < count:
@@ -193,10 +203,18 @@ def idle_alarm(rows, ticks, *, now, count):
             and ts < start
             and now - ts <= STOP_DAYS
         ):
-            waiting.append(f"{repo}#{pr}")
+            note = ""
+            if state is not None:
+                verdict = state(repo, pr, last.get("head"))
+                if verdict == "stale":
+                    continue
+                if verdict == "unknown":
+                    note = " (state not read)"
+            waiting.append((f"{repo}#{pr}", note))
     if not waiting:
         return ""
-    return f"ALARM: {count} finished ticks did nothing; gate FAIL waiting on {', '.join(sorted(waiting))}"
+    names = ", ".join(name + note for name, note in sorted(waiting))
+    return f"ALARM: {count} finished ticks did nothing; gate FAIL waiting on {names}"
 
 
 def finished_ticks(text):
@@ -212,6 +230,77 @@ def finished_ticks(text):
         )
         ticks.append(time.mktime(tuple(parsed)[:8] + (dst,)))
     return ticks
+
+
+def pr_state_reader():
+    try:
+        import gh_gateway
+    except (ImportError, OSError, ValueError):
+        return lambda repo, pr, head: "unknown"
+    answers = {}
+    started = time.monotonic()
+    refused = object()
+
+    def read(repo, pr):
+        if len(answers) >= READ_LIMIT:
+            return refused
+        elapsed = time.monotonic() - started
+        if elapsed >= READ_DEADLINE:
+            return refused
+        timeout = max(1, min(READ_TIMEOUT, READ_DEADLINE - elapsed))
+        try:
+            result = gh_gateway.run(
+                ["gh", "api", f"repos/{repo}/pulls/{pr}"],
+                timeout=timeout,
+                limit=gh_gateway.floor(),
+            )
+            if result.returncode != 0:
+                return None
+            body = json.loads(result.stdout)
+            if not isinstance(body, dict):
+                return None
+            block = body.get("head")
+            sha = block.get("sha") if isinstance(block, dict) else None
+            if body.get("state") not in ("open", "closed"):
+                return None
+            if not isinstance(sha, str) or not sha:
+                return None
+            return sha, body["state"]
+        except (
+            subprocess.TimeoutExpired,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            gh_gateway.ApiBudgetExhausted,
+        ):
+            return None
+
+    def asked(repo, pr, head):
+        if not isinstance(repo, str) or isinstance(pr, bool) or not isinstance(pr, int):
+            return "unknown"
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            return "unknown"
+        if any(part in (".", "..") for part in repo.split("/")):
+            return "unknown"
+        key = (repo, pr)
+        if key not in answers:
+            answer = read(repo, pr)
+            if answer is refused:
+                return "unknown"
+            answers[key] = answer
+        answer = answers[key]
+        if answer is None:
+            return "unknown"
+        sha, status = answer
+        if status == "closed":
+            return "stale"
+        if isinstance(head, str) and head and sha.lower() != head.lower():
+            return "stale"
+        return "live"
+
+    return asked
 
 
 def journal_rows(now):
@@ -243,11 +332,17 @@ def stop_rules_alarm():
     except OSError:
         ticks = []
     rows = list(journal_rows(now))
+    state = pr_state_reader()
     return "\n".join(
         part
         for part in (
-            held_alarm(rows, now=now, hours=os.environ.get("COORD_HELD_HOURS")),
-            idle_alarm(rows, ticks, now=now, count=os.environ.get("COORD_IDLE_TICKS")),
+            held_alarm(
+                rows, now=now, hours=os.environ.get("COORD_HELD_HOURS"), state=state
+            ),
+            idle_alarm(
+                rows, ticks, now=now,
+                count=os.environ.get("COORD_IDLE_TICKS"), state=state,
+            ),
         )
         if part
     )
