@@ -500,7 +500,7 @@ def check_lane_selection():
     # with no live thread and no open pull request, so a/b#1 is a candidate.
     selected = module.lane_candidates(rows, {"a/d"})
     assert [(r["repository"]["nameWithOwner"], r["number"]) for r in selected] == [
-        ("a/b", 1), ("a/c", 7), ("a/e", 11)]
+        ("a/b", 1), ("a/c", 7), ("a/e", 11), ("a/c", 8), ("a/e", 10), ("a/c", 9)]
     # A live lane thread still makes its repo busy.
     assert module.lane_candidates([issue("a/b", 1)], {"a/b"}) == []
     # An open, non-draft pull request that refs an open ticket makes its repo
@@ -510,7 +510,7 @@ def check_lane_selection():
     assert module.lane_candidates([issue("a/b", 1)], set())
     # The stale ticket is the one the refill logs, and only that one.
     assert [row["number"] for row in module.stale_started(rows, {"a/d"}, {})] == [2]
-    assert module.stale_started(rows, {"a/b"}, {}) == []
+    assert module.stale_started(rows, {"a/b#2"}, {}) == []
     assert module.stale_started(rows, set(), {"a/b": {2}}) == []
     # A pull request body refs a ticket with Refs, Closes or Fixes.
     assert module.PR_REF.findall("Refs #7, closes #8 and Fixes #9") == ["7", "8", "9"]
@@ -528,7 +528,7 @@ def check_lane_selection():
             return snapshots[len(asked) - 1]
 
         with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=threads):
-            assert module.live_lane_repositories(config) == {"a/b", "a/c"}
+            assert module.live_lane_repositories(config) == {"a/b#AB-1", "a/c#pr2"}
         # A thread that waits for an answer is still a builder in flight, so
         # the lane read asks for it: the ticket CLI counts it as live.
         assert all("waiting" in args["statuses"] for args in asked), asked
