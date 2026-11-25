@@ -510,7 +510,7 @@ def check_lane_selection():
     assert module.lane_candidates([issue("a/b", 1)], set())
     # The stale ticket is the one the refill logs, and only that one.
     assert [row["number"] for row in module.stale_started(rows, {"a/d"}, {})] == [2]
-    assert module.stale_started(rows, {"a/b"}, {}) == []
+    assert module.stale_started(rows, {"a/b#2"}, {}) == []
     assert module.stale_started(rows, set(), {"a/b": {2}}) == []
     # A pull request body refs a ticket with Refs, Closes or Fixes.
     assert module.PR_REF.findall("Refs #7, closes #8 and Fixes #9") == ["7", "8", "9"]
