@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -5191,10 +5192,13 @@ def disagreement_cases():
         (copy / name).write_bytes((source / name).read_bytes())
     for name, body in sentinels.items():
         (copy / name).write_bytes(body)
-    env = {**os.environ, "COORD_JOURNAL_DIR": str(jdir), "HOME": str(work / "home")}
     for _ in range(2):
-        done = subprocess.run([sys.executable, str(copy / "burst.py"), "--log-disagreements"], env=env, capture_output=True, text=True)
-        exact(done.returncode, 0)
+        with patch.dict(os.environ, {"COORD_JOURNAL_DIR": str(jdir)}), patch.object(sys, "argv", [str(copy / "burst.py"), "--log-disagreements"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                runpy.run_path(str(copy / "burst.py"), run_name="__main__")
+            except SystemExit as done:
+                exact(done.code, 0)
     exact({n: (copy / n).read_bytes() for n in sentinels}, sentinels)
     exact(len((copy / "gate_disagreements.jsonl").read_text().splitlines()), 1)
 
