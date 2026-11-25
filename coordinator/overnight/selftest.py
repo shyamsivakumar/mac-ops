@@ -2806,6 +2806,11 @@ def refill_busy():
     exact(lines, [f"refill: #{number} is stage:started with no live thread or open PR" for number in started])
     exact(candidates({repo}, set())[0], [])
     exact(candidates(set(), {675})[0], [])
+    todo = {"number": 1, "labels": [{"name": "stage:todo"}], "repository": {"nameWithOwner": "o/r"}}
+    exact(coordq.empty_board_reason([], ()), "refill stopped: the board has no open stage:todo ticket")
+    exact(coordq.empty_board_reason([todo], ()), "refill stopped: 1 open stage:todo ticket waiting, and their repos are busy")
+    exact(coordq.empty_board_reason([todo, {**todo, "number": 2}], ()).split(" ")[2], "2")
+    exact(coordq.empty_board_reason([todo], {"o/r"}), coordq.empty_board_reason([], ()))
 
 
 def root_workspace():
