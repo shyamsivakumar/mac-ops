@@ -5135,6 +5135,8 @@ def replay_cases():
 
 def disagreement_cases():
     source = ROOT.parent / "evals" / "hillclimb"
+    if not source.is_dir():
+        return
     spec = importlib.util.spec_from_file_location("burst_disagreements", source / "burst.py")
     sys.path.insert(0, str(source))
     burst = importlib.util.module_from_spec(spec)
