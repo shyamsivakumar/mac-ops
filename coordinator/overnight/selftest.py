@@ -5740,6 +5740,54 @@ def inbox():
     inbox_poll_cases()
     worker_cases()
     liveness_cases()
+    main_cases()
+
+
+def main_cases():
+    import plistlib
+    import inbox_poll
+    import inbox_worker as w
+
+    inbox_dir = tempfile.mkdtemp(prefix="selftest-main-")
+    env = {"COORD_JOURNAL_DIR": tempfile.mkdtemp(prefix="selftest-main-journal-"),
+           "COORD_INBOX_DIR": inbox_dir, "COORD_INBOX_SHADOW": "1"}
+    with patch.dict(os.environ, env):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exact((w.main([]), out.getvalue()), (0, ""))
+        exact(os.path.exists(os.path.join(inbox_dir, "inbox.db")), True)
+        with patch.object(w, "shadow_pass", return_value={"batches": 1, "lines": 3}), contextlib.redirect_stdout(io.StringIO()) as out:
+            exact((w.main([]), out.getvalue()), (0, "inbox shadow pass: batches=1 lines=3\n"))
+        with patch.object(w, "shadow_pass", side_effect=RuntimeError("secret payload")), contextlib.redirect_stderr(io.StringIO()) as err:
+            exact((w.main([]), err.getvalue()), (1, "inbox shadow pass failed: RuntimeError\n"))
+    with patch.dict(os.environ, {**env, "COORD_INBOX_POLL_EVERY": "300", "COORD_INBOX_REPOS": "o/r"}):
+        exact((w.poll_due(now=1000.0), w.poll_due(now=1100.0), w.poll_due(now=1300.0)), (True, False, True))
+        calls = []
+
+        def failing(repo):
+            calls.append(repo)
+            raise RuntimeError("gh")
+
+        def exhausted(repo):
+            calls.append(repo)
+            raise inbox_poll.gh_gateway.ApiBudgetExhausted("floor")
+
+        with patch.object(inbox_poll, "fetch", failing), patch.object(inbox_poll, "fetch_status", failing), contextlib.redirect_stderr(io.StringIO()):
+            exact((w.shadow_pass(now=2000.0)["batches"], w.shadow_pass(now=2100.0)["batches"], calls), (0, 0, ["o/r", "o/r"]))
+        calls.clear()
+        with patch.object(inbox_poll, "fetch", exhausted), contextlib.redirect_stderr(io.StringIO()) as err:
+            exact((w.shadow_pass(now=3000.0)["batches"], calls, err.getvalue().count("\n")), (0, ["o/r"], 1))
+    off = os.path.join(tempfile.mkdtemp(prefix="selftest-main-off-"), "x")
+    with patch.dict(os.environ, {**env, "COORD_INBOX_DIR": off, "COORD_INBOX_SHADOW": "0"}), contextlib.redirect_stderr(io.StringIO()):
+        exact((w.main([]), os.path.exists(off)), (2, False))
+    plist = ROOT.parent / "launchd/dev.coordinator.inbox.plist"
+    if plist.is_file():
+        job = plistlib.loads(plist.read_bytes())
+        settings = job["EnvironmentVariables"]
+        exact((sorted(settings), settings["COORD_INBOX_SHADOW"], settings["COORD_INBOX_POLL_EVERY"], "KeepAlive" in job),
+              (["COORD_INBOX_POLL_EVERY", "COORD_INBOX_REPOS", "COORD_INBOX_SHADOW", "HOME", "PATH"], "1", "300", False))
+        with patch.dict(os.environ, {"COORD_INBOX_REPOS": settings["COORD_INBOX_REPOS"]}):
+            exact(inbox_poll.configured_repos(), ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench"])
+        exact((job["StartInterval"], job["RunAtLoad"], job["ProgramArguments"][1].endswith("/.local/bin/inbox_worker.py")), (60, True, True))
 
 
 def worker_cases():

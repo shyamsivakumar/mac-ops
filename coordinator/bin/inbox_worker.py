@@ -186,6 +186,16 @@ def _running(lock_path, *, now, retry_delay, alarm_seconds, beat_seconds, clock)
             heartbeat(now=clock(), ended=True)
 
 
+def poll_due(*, now):
+    every = _seconds("COORD_INBOX_POLL_EVERY", 0)
+    with inbox.txn() as conn:
+        row = conn.execute("SELECT v FROM meta WHERE k='last_poll'").fetchone()
+        if row is not None and now - float(row[0]) < every:
+            return False
+        inbox._set_meta(conn, "last_poll", str(now))
+    return True
+
+
 def shadow_pass(*, now, runner=shadow_runner, retry_delay=0.2, alarm_seconds=PASS_ALARM,
                 beat_seconds=BEAT, clock=time.time):
     lock_path = os.path.join(os.path.dirname(inbox._db_path()), "inbox.worker.lock")
@@ -199,9 +209,12 @@ def shadow_pass(*, now, runner=shadow_runner, retry_delay=0.2, alarm_seconds=PAS
         inbox_replay.replay()
         import inbox_poll
         repos = inbox_poll.configured_repos()
-        if repos:
-            inbox_poll.poll_prs(repos, inbox_poll.fetch, now=now)
-            inbox_poll.poll_ci(repos, inbox_poll.fetch_status, now=now)
+        if repos and poll_due(now=now):
+            try:
+                inbox_poll.poll_prs(repos, inbox_poll.fetch, now=now)
+                inbox_poll.poll_ci(repos, inbox_poll.fetch_status, now=now)
+            except inbox_poll.gh_gateway.ApiBudgetExhausted:
+                print("inbox poll skipped: GitHub quota is below the floor", file=sys.stderr)
         due, oldest = _due(now)
         if not due:
             return dict(ZEROS)
@@ -289,3 +302,22 @@ def watch(*, now):
     return liveness(now=now, lock_held=_lock_held(os.path.join(d, LOCK)),
                     heartbeat=_stamp(HEARTBEAT), last_pass_end=_stamp(PASS_END),
                     expect_passes=os.environ.get("COORD_INBOX_EXPECT_PASSES", "0") not in ("", "0"))
+
+
+def main(argv=None) -> int:
+    if not outbox.shadow_on():
+        print("inbox shadow pass skipped: shadow mode off", file=sys.stderr)
+        return 2
+    try:
+        result = shadow_pass(now=time.time())
+    except Exception as exc:
+        print(f"inbox shadow pass failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    batches, lines = result["batches"], result["lines"]
+    if batches:
+        print(f"inbox shadow pass: batches={batches} lines={lines}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
