@@ -5926,6 +5926,13 @@ def held_merge():
     exact(bool(ask(title="R-7 merge " + other[:8])), True)
     exact(bool(ask(title="R-5 merge " + other[:8])), True)
     exact(bool(ask(f"merge:o/r#5:{other}")), True)
+    newer = "c" * 40
+    exact(bool(ask(f"merge:o/r#7:{newer}", "R-7 merge " + newer[:8])), True)
+    exact(bool(ask(f"merge:o/r#8:{newer}", "R-7 merge " + held[:8])), True)
+    exact(bool(ask(f"merge:o/r#7:{newer}", "R-8 merge " + newer[:8])), False)
+    exact(bool(ask(title="R#7 merge on PASS " + held[:8])), True)
+    exact(bool(ask(title="R#8 merge on PASS " + held[:8])), False)
+    exact(bool(ask(title="R-7 merge on PASS " + held[:8])), True)
     exact(bool(ask(f"merge:o/r#5:{'c' * 40}")), False)
     exact(bool(ask(title="R-5 merge " + "c" * 8)), True)
     exact(bool(ask(f"merge:o/r#8:{held}")), False)

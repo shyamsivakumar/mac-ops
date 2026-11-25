@@ -25,3 +25,9 @@ exit 0
 held-merge ok
 exit 0
 ```
+
+## After review fixes (key and title both checked, KEY#n and on PASS forms)
+```
+held-merge ok
+exit 0
+```
