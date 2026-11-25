@@ -31,31 +31,59 @@ Live journal `events-2026-11.jsonl`, 9.3 MB, 19,952 lines, read-only:
 
 ## Replay over the live journal and tick.log, 23 to 25 Nov (read-only)
 
-Method: every 15 minutes from 23 Nov 00:00 local to now, call `held_alarm` and `idle_alarm` with only the rows and finished ticks that existed at that moment. Script: `evidence/MO-971/replay.py`.
+Method: every 15 minutes from 23 Nov 00:00 local to the run time, call `held_alarm` and `idle_alarm` with only the rows and finished ticks that existed at that moment. An episode splits when the alert is absent for more than 30 minutes. Each episode shows its first and last alert line. Script: `evidence/MO-971/replay.py`.
 Limits: held at 4, 6, 12 hours; idle at 6, 8, 12 ticks.
-Caveat: `via_tick` rows exist only from 23 Nov 20:32, so an idle verdict before that time cannot be trusted either way. The tick.log has 50 finished ticks (exit=0) since 23 Nov 00:00.
+Caveat: `via_tick` rows exist only from 23 Nov 20:32, so an idle verdict before that time cannot be trusted either way.
 
 ```text
 
 held at 4: 2 alert(s)
-  from 23 Nov 00:00 to 25 Nov 01:15 | ALARM: shyamsivakumar/sams-llm-wiki#244 held 14.1 h (prompt hold), no merge since
-  from 23 Nov 03:15 to 23 Nov 09:00 | ALARM: shyamsivakumar/mac-ops#887 held 4.1 h (loop code hold), no merge since
+  from 23 Nov 00:00 to 25 Nov 07:30
+    first: ALARM: shyamsivakumar/sams-llm-wiki#244 held 14.1 h (prompt hold), no merge since
+    last:  ALARM: shyamsivakumar/sams-llm-wiki#244 held 69.6 h (prompt hold), no merge since
+  from 23 Nov 03:15 to 23 Nov 09:00
+    first: ALARM: shyamsivakumar/mac-ops#887 held 4.1 h (loop code hold), no merge since
+    last:  ALARM: shyamsivakumar/mac-ops#887 held 9.9 h (loop code hold), no merge since
 
 held at 6: 2 alert(s)
-  from 23 Nov 00:00 to 25 Nov 01:15 | ALARM: shyamsivakumar/sams-llm-wiki#244 held 14.1 h (prompt hold), no merge since
-  from 23 Nov 05:15 to 23 Nov 09:00 | ALARM: shyamsivakumar/mac-ops#887 held 6.1 h (loop code hold), no merge since
+  from 23 Nov 00:00 to 25 Nov 07:30
+    first: ALARM: shyamsivakumar/sams-llm-wiki#244 held 14.1 h (prompt hold), no merge since
+    last:  ALARM: shyamsivakumar/sams-llm-wiki#244 held 69.6 h (prompt hold), no merge since
+  from 23 Nov 05:15 to 23 Nov 09:00
+    first: ALARM: shyamsivakumar/mac-ops#887 held 6.1 h (loop code hold), no merge since
+    last:  ALARM: shyamsivakumar/mac-ops#887 held 9.9 h (loop code hold), no merge since
 
 held at 12: 1 alert(s)
-  from 23 Nov 00:00 to 25 Nov 01:15 | ALARM: shyamsivakumar/sams-llm-wiki#244 held 14.1 h (prompt hold), no merge since
+  from 23 Nov 00:00 to 25 Nov 07:30
+    first: ALARM: shyamsivakumar/sams-llm-wiki#244 held 14.1 h (prompt hold), no merge since
+    last:  ALARM: shyamsivakumar/sams-llm-wiki#244 held 69.6 h (prompt hold), no merge since
 
-idle at 6: 1 alert(s)
-  from 24 Nov 01:15 to 24 Nov 04:15 | ALARM: 6 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
+idle at 6: 2 alert(s)
+  from 24 Nov 01:15 to 24 Nov 04:15
+    first: ALARM: 6 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
+    last:  ALARM: 6 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
+  from 25 Nov 06:30 to 25 Nov 07:30
+    first: ALARM: 6 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
+    last:  ALARM: 6 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
 
 idle at 8: 1 alert(s)
-  from 24 Nov 02:15 to 24 Nov 04:15 | ALARM: 8 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
+  from 24 Nov 02:15 to 24 Nov 04:15
+    first: ALARM: 8 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
+    last:  ALARM: 8 finished ticks did nothing; gate FAIL waiting on shyamsivakumar/sams-llm-wiki#254
 
 idle at 12: 0 alert(s)
 
-via_tick rows: 155 first at 23 Nov 20:32
-finished ticks since 23 Nov: 50
+via_tick rows: 164 first at 23 Nov 20:32
+finished ticks since 23 Nov: 60
 ```
+
+### Real PR state (from the coordinator, checked against GitHub)
+
+| Alert | Real state | Verdict |
+| --- | --- | --- |
+| held: sams-llm-wiki#244 (prompt hold 22 Nov 09:56 EST) | merged 23 Nov 18:59 EST (mergedAt 2026-11-23T23:59:42Z); the journal has no `merged` or `merged_outside_lane` row for it | true until 23 Nov 18:59, false after (the episode runs to 25 Nov) |
+| held: mac-ops#887 (loop code hold) | merged 23 Nov 09:05 EST | true; the alert ends at 09:00 |
+| idle: sams-llm-wiki#254 (gate FAIL), 24 Nov 01:15 to 04:15 | still open, FAIL waiting | true |
+| idle: sams-llm-wiki#254, 25 Nov 06:30 on | closed unmerged 24 Nov 06:02 EST; the journal has no close row | false |
+
+The journal records a merge only through `merged` and `merged_outside_lane` rows. No row type records a PR closed unmerged. For sams-llm-wiki the merge row for #244 is missing, so the 7-day stop is the only thing that ends these false alerts.

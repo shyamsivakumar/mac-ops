@@ -380,6 +380,9 @@ FAIL on a PR's newest head has waited through all of them. Both ship off:
 `COORD_STOP_RULES=on` turns them on, and any other value reads no file and
 prints nothing. A limit that is unset, empty, zero, negative or not a number
 uses the default.
+A merge or close that the journal does not record keeps alarming until the
+7-day stop (the journal has no row for a PR closed unmerged, and some merges
+have no `merged` row). Fix that before `COORD_STOP_RULES=on`.
 
 ## Agent session traces (MO-124)
 

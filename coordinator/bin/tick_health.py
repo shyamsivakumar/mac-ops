@@ -251,6 +251,8 @@ def stop_rules_alarm():
         )
         if part
     )
+
+
 def tick_alarm():
     listing = ""
     try:
