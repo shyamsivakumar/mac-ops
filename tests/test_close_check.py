@@ -644,6 +644,15 @@ class ScopeTest(unittest.TestCase):
         ticket = "In: the sheet: TRSourceImportSheet.swift."
         self.assertEqual(check.scope_tokens(ticket), {"TRSourceImportSheet.swift"})
 
+    def test_a_bold_name_still_permits_the_file(self):
+        check = close_check()
+        item = check.item_scope("In: **Foo.swift** and docs/x.md", ["App/Foo.swift", "docs/x.md"])
+        self.assertEqual(item["status"], "pass")
+
+    def test_a_trailing_hyphen_still_names_the_file(self):
+        check = close_check()
+        self.assertEqual(check.scope_tokens("In: Foo.swift-only"), {"Foo.swift"})
+
 
 class DiffValuesTest(unittest.TestCase):
     """The values a change sets come from its own added lines."""

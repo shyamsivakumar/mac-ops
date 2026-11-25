@@ -59,7 +59,7 @@ PATH_TOKEN = re.compile(_NOT_IN_PATH +
 # word character continues a different name, so neither is a boundary.
 # A dot that ends a sentence is (`In: Foo.swift.`), because no extension
 # starts after it.
-_FILE_END = r"(?!\.[A-Za-z0-9])(?![A-Za-z0-9_*/\\-])"
+_FILE_END = r"(?!\.[A-Za-z0-9])(?![A-Za-z0-9_/\\])"
 FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css|swift)" + _FILE_END)
 # A URL is not a repository path, and a name inside one is not a file the
 # ticket names: `https://example.org/?file=Foo.swift` names no file here.
