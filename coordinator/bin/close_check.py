@@ -54,8 +54,24 @@ PATH_TOKEN = re.compile(_NOT_IN_PATH +
 # knows: the list is what keeps prose such as "3.9" or "e.g." out of the
 # tokens. It carries the document and source extensions a ticket can
 # declare by name, so a new language is one entry here and one test.
-FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css|swift)\b")
+# The name ends where it stops being that name: a dot that starts a longer
+# extension (`Foo.swift.template`), a slash (`Foo.swift/assets/`) or a
+# word character continues a different name, so neither is a boundary.
+# A dot that ends a sentence is (`In: Foo.swift.`), because no extension
+# starts after it.
+_FILE_END = r"(?!\.[A-Za-z0-9])(?![A-Za-z0-9_*/\\-])"
+FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css|swift)" + _FILE_END)
+# A URL is not a repository path, and a name inside one is not a file the
+# ticket names: `https://example.org/?file=Foo.swift` names no file here.
+# The address is read out of the text before tokens are, so a pasted link
+# cannot hand out a permission it carries in its path or its query.
+URL_SPAN = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S+")
 DOCKERFILE_TOKEN = re.compile(_NOT_IN_PATH + r"Dockerfile(?:\.[A-Za-z0-9_-]+)?\b")
+
+
+def token_text(text):
+    """The ticket text with its URLs read out, so only names are left."""
+    return URL_SPAN.sub(" ", text or "")
 
 PASS = "pass"
 FAIL = "fail"
@@ -197,28 +213,29 @@ def scope_tokens(body):
     permission, exclusion = scope_texts(body)
     excluded = exclusion_tokens(exclusion)
     tokens = set()
-    for text in (permission,):
-        for match in PATH_TOKEN.finditer(text or ""):
-            token = match.group(0).strip(".,;:()[]")
-            if token and "://" not in token:
-                tokens.add(token)
-        for match in FILE_TOKEN.finditer(text or ""):
-            tokens.add(match.group(0).strip(".,;:()[]"))
-        for match in DOCKERFILE_TOKEN.finditer(text or ""):
-            tokens.add(match.group(0).strip(".,;:()[]"))
+    text = token_text(permission)
+    for match in PATH_TOKEN.finditer(text):
+        token = match.group(0).strip(".,;:()[]")
+        if token and "://" not in token:
+            tokens.add(token)
+    for match in FILE_TOKEN.finditer(text):
+        tokens.add(match.group(0).strip(".,;:()[]"))
+    for match in DOCKERFILE_TOKEN.finditer(text):
+        tokens.add(match.group(0).strip(".,;:()[]"))
     return {token for token in tokens if not token_matches_any(token, excluded)}
 
 
 def exclusion_tokens(text):
     """The files and paths the ticket excludes."""
     tokens = set()
-    for match in PATH_TOKEN.finditer(text or ""):
+    text = token_text(text)
+    for match in PATH_TOKEN.finditer(text):
         token = match.group(0).strip(".,;:()[]")
         if token and "://" not in token:
             tokens.add(token)
-    for match in FILE_TOKEN.finditer(text or ""):
+    for match in FILE_TOKEN.finditer(text):
         tokens.add(match.group(0).strip(".,;:()[]"))
-    for match in DOCKERFILE_TOKEN.finditer(text or ""):
+    for match in DOCKERFILE_TOKEN.finditer(text):
         tokens.add(match.group(0).strip(".,;:()[]"))
     return tokens
 
