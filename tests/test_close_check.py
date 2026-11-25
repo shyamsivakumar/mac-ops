@@ -618,9 +618,31 @@ class ScopeTest(unittest.TestCase):
 
     def test_an_excluded_swift_file_is_not_a_permission(self):
         check = close_check()
-        ticket = "In: the sheet: TRSourceImportSheet.swift. Out: HomeView.swift."
+        ticket = "In: the sources list: src/. Out: HomeView.swift."
+        item = check.item_scope(ticket, ["src/HomeView.swift"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("the ticket excludes it", item["detail"])
+
+    def test_a_longer_name_does_not_permit_the_swift_file(self):
+        check = close_check()
+        for ticket in ("In: the new template: Foo.swift.template.",
+                       "In: the template directory: Foo.swift/assets/."):
+            with self.subTest(ticket=ticket):
+                item = check.item_scope(ticket, ["App/Foo.swift"])
+                self.assertEqual(item["status"], check.FAIL)
+                self.assertNotIn("Foo.swift", check.scope_tokens(ticket))
+
+    def test_a_url_query_does_not_permit_the_swift_file(self):
+        check = close_check()
+        ticket = "In: the issue: https://example.org/?file=Foo.swift"
+        item = check.item_scope(ticket, ["App/Foo.swift"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertEqual(check.scope_tokens(ticket), set())
+
+    def test_a_sentence_ending_after_the_name_still_names_it(self):
+        check = close_check()
+        ticket = "In: the sheet: TRSourceImportSheet.swift."
         self.assertEqual(check.scope_tokens(ticket), {"TRSourceImportSheet.swift"})
-        self.assertNotIn("HomeView.swift", check.scope_tokens(ticket))
 
 
 class DiffValuesTest(unittest.TestCase):

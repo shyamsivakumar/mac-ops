@@ -54,6 +54,13 @@ that matches it, or the file's own name. A directory token such as
 `coordinator/` bounds every changed path under it, so a ticket that declares
 a directory does not have to list each file.
 
+A name is read whole. The leading part of a longer name is not a token
+(`Foo.swift.template` names no `Foo.swift`), and neither is a name inside a
+URL (`https://example.org/?file=Foo.swift` names no file in this
+repository). A bare name is a token only when its extension is one the
+checklist knows: the document and script extensions, plus `swift` for the
+board's Apple apps.
+
 Two allowances sit on top of the declaration:
 
 - **Evidence travels.** A file under the ticket's own `evidence/<KEY>/`
