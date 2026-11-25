@@ -2814,6 +2814,8 @@ def refill_busy():
     exact(picked({"o/r#1", "o/r#pr9", "o/r#SRW-1"}, {}, (), {"o/r": {9: {1}}}, {"o/r": 2}), [2, 4, 3])
     exact(picked({"o/r#1", "o/r#SRW-2"}, {}, (), {}, {"o/r": 2}), [4])
     exact(picked(set(), {"o/r": {1, 2}}, (), {"o/r": {5: {1, 2}}}, {"o/r": 2}), [3, 4])
+    started = [{**todo, "number": n, "labels": [{"name": "stage:started"}]} for n in (5, 6, 7)]
+    exact([row["number"] for row in coordq.stale_started(started, {"o/r#5", "o/r#pr9"}, {}, {"o/r": {9: {7}}})], [6])
     exact([coordq.lane_limit({"lanes": value}) for value in (None, 0, -1, True, "2", 2)], [1, 1, 1, 1, 1, 2])
     exact(coordq.candidate_state(todo, {"a"}) == coordq.candidate_state(todo, {"b"}), False)
     exact(coordq.empty_board_reason([], ()), "refill stopped: the board has no open stage:todo ticket")
