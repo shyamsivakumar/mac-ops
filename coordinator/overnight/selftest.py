@@ -5989,7 +5989,72 @@ def worker_cases():
         exact(("COORD_INBOX_DEBOUNCE='soon'" in buffer.getvalue(), "COORD_INBOX_MIN_GAP='nan'" in buffer.getvalue()), (True, True))
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox}
+def held_merge():
+    coordq = load_coordq()
+    held, other, keys = "a" * 40, "b" * 40, {"R": "o/r", "RX": "o/rx"}
+
+    def hold(pr, head, reason="loop code hold", repo="o/r"):
+        return {"event": "merge_held", "repo": repo, "pr": pr, "head": head, "data": {"reason": reason}}
+
+    rows = [hold(7, held), hold(9, held, "manual repo"), hold(5, other, "prompt hold"), hold(5, held)]
+    ask = lambda key="", title="", rows=rows: coordq.held_merge(key, title, rows, keys)
+    exact(bool(ask(f"merge:o/r#7:{held}")), True)
+    exact(bool(ask(f"MERGE:O/R#7:{held.upper()}")), True)
+    exact(bool(ask(title="R-7 merge " + held[:8])), True)
+    exact(bool(ask(title="r-7 MERGE " + held[:4].upper())), True)
+    exact(bool(ask(title="R-7 merge " + other[:8])), True)
+    exact(bool(ask(title="R-5 merge " + other[:8])), True)
+    exact(bool(ask(f"merge:o/r#5:{other}")), True)
+    newer = "c" * 40
+    exact(bool(ask(f"merge:o/r#7:{newer}", "R-7 merge " + newer[:8])), True)
+    exact(bool(ask(f"merge:o/r#8:{newer}", "R-7 merge " + held[:8])), True)
+    exact(bool(ask(f"merge:o/r#7:{newer}", "R-8 merge " + newer[:8])), False)
+    exact(bool(ask(title="R#7 merge on PASS " + held[:8])), True)
+    exact(bool(ask(title="R#8 merge on PASS " + held[:8])), False)
+    exact(bool(ask(title="R-7 merge on PASS " + held[:8])), True)
+    exact(bool(ask(f"merge:o/r#5:{'c' * 40}")), False)
+    exact(bool(ask(title="R-5 merge " + "c" * 8)), True)
+    exact(bool(ask(f"merge:o/r#8:{held}")), False)
+    exact(bool(ask(f"merge:o/rx#7:{held}")), False)
+    exact(bool(ask(title="RX-7 merge " + held[:8])), False)
+    exact(bool(ask(title="R-9 merge " + held[:8])), False)
+    exact(bool(ask(title="R-7 continue")), False)
+    exact(bool(ask(title="R-7 merge abc")), False)
+    exact(bool(ask(title="ZZ-7 merge " + held[:8])), False)
+    exact(bool(ask(f"fix:o/r#7:{held}", "o/r#7 gate findings")), False)
+    exact(bool(ask(f"merge:o/r#7:{held}", rows=[hold(7, None), {"event": "merge_held", "repo": "o/r", "pr": 7}])), False)
+    exact(bool(ask(f"merge:o/r#7:{held}", rows=[hold(7, held), hold(7, other, "manual repo")])), True)
+    exact(bool(ask(title="R-7 merge " + "c" * 8, rows=[hold(7, held), hold(7, other, "manual repo")])), False)
+
+    scratch = tempfile.mkdtemp(prefix="selftest-held-merge-")
+    with patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}):
+        now = time.time()
+        last_month = now - time.gmtime(now).tm_mday * 86400
+        lines = ["not json", "[1]", json.dumps(hold(7, held)), '{"event":"merge_held","data":[1]}']
+        with open(coordq.journal.journal_path(last_month), "w") as handle:
+            handle.write("\n".join(lines) + "\n")
+        exact([r["pr"] for r in coordq.journal_rows()], [7])
+        queue_dir = tempfile.mkdtemp(prefix="selftest-held-queue-")
+        args = lambda title, key="": argparse.Namespace(
+            args=json.dumps({"threadId": "gate", "message": "merge"}), title=title, priority=900,
+            tool="t3_thread_send", action_key=key)
+        with patch.object(coordq, "DIR", queue_dir), patch.object(coordq, "ticket_keys", lambda: keys), \
+             patch.object(coordq, "journal_rows", lambda: rows), patch.object(coordq, "drain", side_effect=AssertionError("drain")), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            for title, key in [("R-7 merge " + held[:8], ""), ("", f"merge:o/r#7:{held}")]:
+                try:
+                    coordq.cmd_start(args(title, key))
+                except SystemExit:
+                    pass
+                else:
+                    raise AssertionError("a held merge was queued")
+        exact(err.getvalue().count("o/r#7 is held for Shyam (loop code hold)"), 2)
+        exact(os.listdir(queue_dir), [])
+        refused = [json.loads(line) for line in open(coordq.journal.journal_path(now)) if '"refused"' in line]
+        exact(len(refused), 2)
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge}
 
 
 def main():
