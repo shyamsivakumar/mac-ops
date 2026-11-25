@@ -6186,7 +6186,7 @@ def held_merge():
     exact(bool(gate("t2", {f"gate:o/r#7:{held}": "t1"})), False)
     exact(bool(gate("t1", {f"gate:o/r#9:{held}": "t1"})), False)
     exact(bool(gate("t1", {f"gate:o/r#5:{held}": "t1"})), True)
-    exact(bool(gate("t1", {f"base:t1": "main", f"brief:t1": "lane-merges", f"merge-pass:o/r#7:{held}": "t1"})), False)
+    exact(bool(gate("t1", {"base:t1": "main", "brief:t1": "lane-merges", f"merge-pass:o/r#7:{held}": "t1"})), False)
     exact(bool(gate("t1", {f"gate:o/r#7:{held}": "t1"}, rows=[hold(7, held, "manual repo")])), False)
     for bad in (None, 7, "", ["t1"]):
         exact(gate(bad, {f"gate:o/r#7:{held}": "t1"}), None)
