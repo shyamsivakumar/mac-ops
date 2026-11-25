@@ -107,24 +107,6 @@ def drift_alarm():
         return ""
 
 
-import json
-import math
-import os
-import re
-import time
-from pathlib import Path
-
-import journal
-
-HOLD_REASONS = ("loop code hold", "prompt hold")
-MERGED = ("merged", "merged_outside_lane")
-STOP_DAYS = 7 * 86400
-TICK_RUN_S = 600
-TICK_LINE = re.compile(
-    r"^(\d{4}-\d\d-\d\d \d\d:\d\d) ([A-Z]{2,5}) \| tick \| exit=0\b", re.MULTILINE
-)
-
-
 def limit(value, default, whole=False):
     try:
         number = float(value)
