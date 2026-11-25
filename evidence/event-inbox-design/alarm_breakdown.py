@@ -8,7 +8,9 @@ import sys
 
 sys.argv = sys.argv[:1] + sys.argv[1:2]
 src = open(__file__.replace("alarm_breakdown.py", "replay_wakes.py")).read().split("fs = facts()")[0]
-exec(src)
+wakes = {}
+exec(src, wakes)
+facts, rows, URGENT = wakes["facts"], wakes["rows"], wakes["URGENT"]
 
 fs = facts()
 raises = collections.Counter()

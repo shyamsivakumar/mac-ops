@@ -5,14 +5,17 @@
   "defaultTools": ["+codemode"],
   "enabledModels": [
     "pi-claude-cli/claude-opus-5-5",
-    "openai/gpt-6.1-sol",
-    "openai/gpt-6-astra",
+    "openai/gpt-6.2-sol",
+    "openai/gpt-6.2-astra",
     "claude-team/claude-opus-5-5",
     "claude-team/claude-sonnet-5-5",
     "claude-team/claude-haiku-5-5",
     "claude-team/claude-fable-5-2",
     "morph/morph-dsv41flash",
-    "morph/morph-kimik31"
+    "morph/morph-kimik31",
+    "antigravity-acp/gemini-4-neon",
+    "cursor-acp/gemini-4-neon",
+    "zai/glm-5.4"
   ],
   "skills": [],
   "quietStartup": true,
@@ -22,10 +25,10 @@
     "reserveTokens": 64000,
     "keepRecentTokens": 20000,
     "modelOverrides": {
-      "openai/gpt-6.1-sol": {
+      "openai/gpt-6.2-sol": {
         "reserveTokens": 32000
       },
-      "openai/gpt-6-astra": {
+      "openai/gpt-6.2-astra": {
         "reserveTokens": 32000
       },
       "minimax/MiniMax-M3.1-Flash": {
@@ -50,7 +53,9 @@
     "/Users/shyamsivakumar/.pi/agent-coordinator/packages/pi-claude-team",
     "npm:pi-background-monitor@1.0.1",
     "npm:pi-checklist@3.3.0",
-    "npm:pi-subagent-manager@1.9.0"
+    "npm:pi-subagent-manager@1.9.0",
+    "git:github.com/zacbemis/pi-antigravity-acp-provider@v0.1.22",
+    "git:github.com/zacbemis/pi-cursor-acp-provider@v0.1.4"
   ],
   "lastChangelogVersion": "1.5.2"
 }
