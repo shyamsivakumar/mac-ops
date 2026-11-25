@@ -332,7 +332,7 @@ this job now covers that step. The job appends one line per poll pass to
 coordinator checkout's own `queue/` directory, which that repository owns.
 
 The `dev.coordinator.inbox` job (mac-ops #964) runs one shadow pass of the
-event inbox worker (`inbox_worker.py`) every 60 seconds, for the shadow week.
+event inbox worker (`inbox_worker.py`) every 60 seconds, for the 48-hour shadow run.
 Each pass replays the journal into the inbox database and, when a batch is
 due, writes one `inbox_would_wake` journal row. It sends nothing, calls no
 model and writes nothing to GitHub: the job sets `COORD_INBOX_SHADOW=1` and has
@@ -342,7 +342,9 @@ strategy-replay-workbench with read-only `gh` calls, at most once every 300
 seconds (`COORD_INBOX_POLL_EVERY`); a quota below the gateway floor skips that
 poll with one log line. It logs a line only when a batch ran or a pass
 failed, to `~/Library/Logs/coordinator/inbox.log`. To stop it, run
-`launchctl bootout gui/$(id -u)/dev.coordinator.inbox` and remove
+`launchctl bootout gui/$(id -u)/dev.coordinator.inbox`, move the installed
+`~/Library/LaunchAgents/dev.coordinator.inbox.plist` out of `LaunchAgents` (launchd
+loads it again at the next login otherwise), and remove
 `coordinator/launchd/dev.coordinator.inbox.plist` from the repo, so the
 installer does not write it again.
 
