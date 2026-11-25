@@ -1438,7 +1438,7 @@ def open_pr_refs(repo):
     return refs, by_pull
 
 
-def stale_started(rows, occupied, pr_refs):
+def stale_started(rows, occupied, pr_refs, prs=None):
     """The stage:started tickets with no live lane thread and no open pull
     request that refs them.
 
@@ -1447,13 +1447,14 @@ def stale_started(rows, occupied, pr_refs):
     or the lane decides what the label means.
     """
     stale = []
+    covered = active_lanes(rows, occupied, pr_refs, prs or {})[1]
     for row in rows:
         names = [label["name"] if isinstance(label, dict) else str(label)
                  for label in row.get("labels") or []]
         repo = row["repository"]["nameWithOwner"]
         if "stage:started" not in names or repo in occupied:
             continue
-        if row["number"] in pr_refs.get(repo, ()):
+        if f"{repo}#{row['number']}" in covered:
             continue
         stale.append(row)
     return stale
@@ -1565,7 +1566,7 @@ def board_candidates():
                     rows.append({**row, "repository": {"nameWithOwner": repo},
                                  "updatedAt": row["updated_at"]})
         pr_refs[repo], prs[repo] = open_pr_refs(repo)
-    for row in stale_started(rows, occupied, pr_refs):
+    for row in stale_started(rows, occupied, pr_refs, prs):
         log(f"refill: #{row['number']} is stage:started with no live thread or open PR")
     build_here = {repo for repo, entry in cfg["repos"].items() if entry.get("build") == "here"}
     limits = {repo: lane_limit(entry) for repo, entry in cfg["repos"].items()}
