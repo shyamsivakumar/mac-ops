@@ -38,8 +38,12 @@ def body(line, left):
 
 def gate_row(line, left, size, mode):
     pr = {"body": body(line, left)}
-    with patch.object(coordq, "pr_size", lambda *a: {"lines": size}):
+    files = [{"filename": "coordinator/bin/x.py", "additions": size, "deletions": 0, "status": "modified"}]
+    with patch.object(coordq, "gh_json", lambda *a, **k: files):
         partial = coordq.partial_head(REPOS[mode], 8, pr)
+    with patch.object(ticket, "gh_json", lambda *a, **k: files):
+        by_hand = gate_policy.partial_state(pr["body"], lambda: ticket.gh_json(["api", "files"]))
+    assert by_hand == partial, (by_hand, partial)
     brief = gate_policy.build_gate_brief({"key": "MO"}, REPOS[mode], 7, 8, HEAD, False, partial=partial)
     return partial, "no finding" in brief, "gh issue close" in brief
 
@@ -47,7 +51,7 @@ def gate_row(line, left, size, mode):
 class Calls:
     def __init__(self, line, left):
         self.pull = {"state": "MERGED", "headRefOid": HEAD, "body": body(line, left), "mergeCommit": {"oid": "m" * 40}}
-        self.issue = {"state": "OPEN", "labels": [{"name": "stage:started"}], "comments": []}
+        self.issue = {"state": "OPEN", "stateReason": None, "labels": [{"name": "stage:started"}], "comments": []}
         self.log = []
 
     def gh_json(self, args, **kw):
@@ -91,12 +95,18 @@ for line, left in (("present", "listed"), ("present", "empty"), ("present", "non
 print("repeated cmd_close x3 (present, listed) ->", close_row("present", "listed", 3))
 calls = Calls("present", "listed")
 calls.issue["state"] = "CLOSED"
+calls.issue["stateReason"] = "COMPLETED"
 print("closed by a Closes keyword at merge, no record yet ->", end=" ")
 with patch.object(ticket, "gh_json", calls.gh_json), patch.object(ticket, "gh", calls.gh), \
      patch.object(ticket.journal, "emit", lambda *a, **k: calls.log.append(["journal", a[0]])):
     ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, HEAD, "m", "x")
     ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, HEAD, "m", "x")
 print(calls.log, "(second call recorded nothing)")
+calls = Calls("present", "listed")
+calls.issue.update(state="CLOSED", stateReason="NOT_PLANNED")
+with patch.object(ticket, "gh_json", calls.gh_json), patch.object(ticket, "gh", calls.gh), patch.object(ticket.journal, "emit", lambda *a, **k: calls.log.append(["journal", a[0]])):
+    ticket.keep_open_partial("shyamsivakumar/mac-ops", 7, 8, HEAD, "m", "x")
+print("closed as not planned ->", calls.log, "(no reopen)")
 print("marker spellings ->", [gate_policy.partial_claim(t) for t in (
     "- Partial: yes.\r\n### Left for later:\r\n- x", "> **Partial: yes**\n## Left for later\nx", "Partial: yes")])
 calls = Calls("present", "listed")
