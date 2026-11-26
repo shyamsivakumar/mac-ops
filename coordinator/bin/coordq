@@ -3153,7 +3153,7 @@ def cmd_gatekeep(a):
                 attempted.add(key)
                 ids = journal.parse_request_id(key)
                 gate_arm = journal.assigned_arm(ids["repo"], event.get("scopeIssue"), gate=True)
-                ballots = gate_vote.voter_args(args, key) if gate_vote.votes(gate_arm) and not retries else [args]
+                ballots = gate_vote.voter_args(args, key) if journal.treatment_names(gate_arm, "gate", "vote3") and not retries else [args]
                 for ballot in ballots:
                     print(stamped(("would queue " if a.dry_run else "queued ") + (key if ballot is ballots[0] else ballot["clientRequestId"])
                                   + " reviewer " + ballot["modelSelection"]["instanceId"] + " " + ballot["modelSelection"]["model"]),

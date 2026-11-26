@@ -20,27 +20,12 @@ PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 VERDICT: PASS
 
-  voter e2adfac8: FAIL, findings [major] bot2/trade_machine.js:482; [major] scripts/bot2_two_lane_admission_proof.cjs:271
-  voter 199c1c07: FAIL, findings [major] bot2/trade_machine.js:3546; [major] scripts/bot2_two_lane_admission_proof.cjs:174
-  voter 9ec50189: FAIL, findings 
-### 2649: heads ['db9ca9a2', '65d89375', 'e62b6a4f']
-voter order (0, 1, 2):
-Merged gate review of 3 reports on db9ca9a2bd902fb14c645bcd04eef90d5495061e: a finding stays when 2 agree on file, line within 5 and severity.
-2 reports ended FAIL without a finding line the merge could read.
-PROVIDES: PASS db9ca9a2bd902fb14c645bcd04eef90d5495061e
-CHECK: FAIL db9ca9a2bd902fb14c645bcd04eef90d5495061e
-VERDICT: FAIL
-
-voter order (2, 1, 0):
-Merged gate review of 3 reports on db9ca9a2bd902fb14c645bcd04eef90d5495061e: a finding stays when 2 agree on file, line within 5 and severity.
-2 reports ended FAIL without a finding line the merge could read.
-PROVIDES: PASS db9ca9a2bd902fb14c645bcd04eef90d5495061e
-CHECK: FAIL db9ca9a2bd902fb14c645bcd04eef90d5495061e
-VERDICT: FAIL
-
-  voter db9ca9a2: FAIL, findings 
-  voter 65d89375: FAIL, findings [major] alpaca_paper_execution.js:14734
-  voter e62b6a4f: FAIL, findings 
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/Code/mac-ops/.claude/worktrees/agent-a4b182d2c039a2066/evidence/MO-778/prove_merge.py", line 74, in <module>
+    show(pr, by_pr[pr][:3])
+  File "/Users/shyamsivakumar/Code/mac-ops/.claude/worktrees/agent-a4b182d2c039a2066/evidence/MO-778/prove_merge.py", line 60, in show
+    for row, report in zip(picked, reports, strict=True):
+TypeError: zip() takes no keyword arguments
 ```
 
 ## 2. the 2-of-3 rule, window of 5, severity match, dead voters (prove_window.py)
@@ -101,19 +86,19 @@ lane reads: verdict=FAIL complete_pass=False
 
 ```
 == dry run, arm treatment (vote3)
-2026-11-26 16:16:59 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 16:16:59 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 16:16:59 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == dry run, arm control
-2026-11-26 16:16:59 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == temp-queue run, arm treatment
-2026-11-26 16:16:59 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 16:16:59 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 16:16:59 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 == temp-queue run, arm control
-2026-11-26 16:16:59 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:05:00 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 1 gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | T-778 review #1 aaaaaaaa | arm treatment
 2 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 | T-778 review #1 aaaaaaaa vote 2 | arm treatment
 3 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 | T-778 review #1 aaaaaaaa vote 3 | arm treatment
