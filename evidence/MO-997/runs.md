@@ -1,7 +1,6 @@
 # MO-997 runs
 
-A builder-side factory.json experiment names the bar with
-`"names": ["severity_bar"]`.
+A builder-side experiment in factory.json names the switches it controls in `names`. `severity_bar` shows the builder the bar. `proof_required` makes a green proof required before the gate.
 Only the treatment arm of that experiment changes anything.
 
 ## Ticket proof command
@@ -36,41 +35,40 @@ and the other gh readers are stubbed, so nothing is written or queued.
 
 ```text
 no experiment
-  arm=None: bar_visible=False proof_required(proofRequired=True)=True
-  arm=control: bar_visible=False proof_required(proofRequired=True)=True
-  arm=treatment: bar_visible=False proof_required(proofRequired=True)=True
+  arm=None: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=control: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=treatment: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
   caller with no arm: True False
-builder experiment naming severity_bar
-  arm=None: bar_visible=False proof_required(proofRequired=True)=True
-  arm=control: bar_visible=False proof_required(proofRequired=True)=True
-  arm=treatment: bar_visible=True proof_required(proofRequired=True)=False
-builder experiment not naming the bar
-  arm=treatment: bar_visible=False proof_required(proofRequired=True)=True
-gate-side experiment naming the bar
-  arm=treatment: bar_visible=False proof_required(proofRequired=True)=True
+builder experiment naming severity_bar only
+  arm=None: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=control: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=treatment: bar_visible=True proof_required(unset)=False proof_required(proofRequired=True)=True
+builder experiment naming proof_required only
+  arm=None: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=control: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=treatment: bar_visible=False proof_required(unset)=True proof_required(proofRequired=True)=True
+builder experiment naming both
+  arm=control: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
+  arm=treatment: bar_visible=True proof_required(unset)=True proof_required(proofRequired=True)=True
+gate-side experiment naming proof_required
+  arm=treatment: bar_visible=False proof_required(unset)=False proof_required(proofRequired=True)=True
 real cmd_start --dry-run --print-brief path, gh and queue stubbed, journal.emit raises if called
   experiment split=100: assigned arm=treatment, bar in brief=True
   experiment split=0: assigned arm=control, bar in brief=False
   no experiment: bar in brief = False
   no experiment, COORD_ARM=treatment: bar in brief = False
 coordq scope_gate (the gatekeep proof rule), real journal assigned row, temp dirs, dry run, gh read stubbed
-  ticket 5 journaled treatment, severity-bar experiment: scope_gate returned True, gh reads before returning: 0
-  ticket 6 journaled control, severity-bar experiment: scope_gate returned True, gh reads before returning: 1
-  ticket 5 journaled treatment, no experiment: scope_gate returned True, gh reads before returning: 1
+  ticket 5 treatment, proof experiment, proofRequired unset: scope_gate returned True, gh reads before returning: 1
+  ticket 6 control, proof experiment, proofRequired unset: scope_gate returned True, gh reads before returning: 0
+  ticket 5 treatment, bar-only experiment, proofRequired unset: scope_gate returned True, gh reads before returning: 0
+  ticket 5 treatment, no experiment, proofRequired unset: scope_gate returned True, gh reads before returning: 0
+  ticket 6 control, proof experiment, proofRequired=True: scope_gate returned True, gh reads before returning: 1
 ```
-
-<!-- markdownlint-enable MD013 -->
 
 Reading the output:
 
-- With no experiment, all briefs and proof decisions match origin/main.
-  `proof_required` with no arm (every existing caller) returns what it did before.
-  `COORD_ARM=treatment` with no registered experiment adds no bar.
-- With a registered builder-side experiment naming the bar, only the treatment
-  arm sees the bar and has the proof rule relaxed. Control, no arm, an experiment
-  not naming the bar, and a gate-side experiment all stay unchanged.
-- The `cmd_start` run shows the cluster stamp's arm reaches the brief. Split 100
-  gives treatment and the bar appears. Split 0 gives control and it does not.
-- The `scope_gate` run reads the arm from a real journal `assigned` row. The
-  treatment ticket returns before any GitHub read. The control ticket goes on to
-  the scope read as today.
+- With no experiment, every brief and every proof decision is as on origin/main. `proof_required` called with no arm (every existing caller) returns what it did before. `COORD_ARM=treatment` with no experiment registered adds no bar.
+- `severity_bar`: only the treatment arm of a builder-side experiment naming it sees the bar. Control, no arm, other names and a gate-side experiment do not.
+- `proof_required`: the treatment arm of a builder-side experiment naming it requires a green proof even when `proofRequired` is unset. Control, no arm, an experiment naming only `severity_bar`, and a gate-side experiment give the configured value. A configured `proofRequired: true` stays on for every arm.
+- The `cmd_start` run shows the arm from the cluster stamp reaches the brief: split 100 gives treatment and the bar appears, split 0 gives control and it does not.
+- The `scope_gate` run reads the arm from a real journal `assigned` row. With `proofRequired` unset, the treatment ticket goes on to the scope read (proof required) and the control ticket returns with no read. A configured `proofRequired` still reads for control.

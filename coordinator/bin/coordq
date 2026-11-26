@@ -2619,7 +2619,7 @@ def gate_allowed(state, required):
 
 def proof_required(settings, arm=None):
     required = bool(settings.get("proofRequired") or os.environ.get("COORD_PROOF_REQUIRED"))
-    return required and not journal.treatment_names(arm, "builder", "severity_bar")
+    return required or journal.treatment_names(arm, "builder", "proof_required")
 
 
 def proof_text(kept):
