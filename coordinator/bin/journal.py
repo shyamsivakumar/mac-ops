@@ -146,11 +146,49 @@ def factory_experiments():
     return []
 
 
-def arm_for(cluster_root, experiment):
+PROMOTION_DAYS = 14
+HOLDBACK_PERCENT = 20
+
+
+def factory_state_dir():
+    return os.environ.get("COORD_FACTORY_DIR") or os.path.expanduser("~/Code/coordinator/factory")
+
+
+def factory_state(state_dir=None):
+    path = os.path.join(state_dir or factory_state_dir(), "state.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as fh:
+            state = json.load(fh)
+    except (OSError, ValueError) as exc:
+        _note(f"{path} unreadable, no promotion applies: {exc}")
+        return None
+    if not isinstance(state, dict):
+        _note(f"{path} is not an object, no promotion applies")
+        return None
+    return state
+
+
+def promotion_open(entry, now):
+    return (isinstance(entry, dict) and entry.get("state") == "promoted"
+            and isinstance(entry.get("promoted_at"), (int, float)) and not isinstance(entry["promoted_at"], bool)
+            and now < entry["promoted_at"] + PROMOTION_DAYS * 86400)
+
+
+def _bucket(salt, cluster_root):
+    return int(hashlib.sha256((salt + cluster_root).encode()).hexdigest(), 16) % 100
+
+
+def arm_for(cluster_root, experiment, state_dir=None, now=None):
     if not experiment:
         return "control"
-    bucket = int(hashlib.sha256((experiment["name"] + cluster_root).encode()).hexdigest(), 16) % 100
-    return "treatment" if bucket < experiment["split"] else "control"
+    name = experiment["name"]
+    entry = (factory_state(state_dir) or {}).get(name)
+    if isinstance(entry, dict) and entry.get("state") == "promoted" and isinstance(entry.get("promoted_at"), (int, float)):
+        held_back = promotion_open(entry, now or time.time()) and _bucket("holdback:" + name, cluster_root) < HOLDBACK_PERCENT
+        return "control" if held_back else "treatment"
+    return "treatment" if _bucket(name, cluster_root) < experiment["split"] else "control"
 
 
 def arms_for(cluster_root):

@@ -1,4 +1,8 @@
 from contextlib import contextmanager
+import argparse
+import contextlib
+import io
+import runpy
 import shlex
 import json
 import os
@@ -2585,6 +2589,98 @@ def recover_dead_runs(ledger):
                 settle_dead_run(thread_id)
 
 
+def write_factory_state(state, state_dir):
+    os.makedirs(state_dir, exist_ok=True)
+    temporary = os.path.join(state_dir, f"state.json.{os.getpid()}.tmp")
+    with open(temporary, "w") as handle:
+        json.dump(state, handle, indent=1)
+    os.replace(temporary, os.path.join(state_dir, "state.json"))
+
+
+def undo_command(name):
+    return f"python3 {Path(__file__).resolve()} undo {shlex.quote(name)}"
+
+
+def promote_experiment(name, state_dir=None, now=None):
+    now = now or time.time()
+    state = journal.factory_state(state_dir)
+    if state is None:
+        return None
+    maturing = next((other for other, entry in state.items() if other != name and journal.promotion_open(entry, now)), None)
+    if maturing:
+        print(f"PROMOTION {name} refused, {maturing} is still inside its {journal.PROMOTION_DAYS} days")
+        if not DRY:
+            journal.emit("experiment_promotion_refused", "lane", experiment=name, maturing=maturing)
+        return None
+    state[name] = {"state": "promoted", "promoted_at": now, "holdback_percent": journal.HOLDBACK_PERCENT}
+    write_factory_state(state, state_dir or journal.factory_state_dir())
+    if not DRY:
+        journal.emit("experiment_promoted", "lane", experiment=name)
+    return {"id": f"promoted-{name}", "group": "Coordinator", "kind": "info",
+            "title": f"{name} won and is now the default for new launches. {journal.HOLDBACK_PERCENT} percent of clusters stay on the old default for {journal.PROMOTION_DAYS} days.",
+            "why": f"Undo with `{undo_command(name)}`. Launches already running finish on their stamped arm."}
+
+
+def undo_experiment(name, state_dir=None, now=None):
+    state = journal.factory_state(state_dir)
+    if not state or not isinstance(state.get(name), dict) or state[name].get("state") != "promoted":
+        return None
+    state[name] = {**state[name], "state": "undone", "undone_at": now or time.time()}
+    write_factory_state(state, state_dir or journal.factory_state_dir())
+    if not DRY:
+        journal.emit("experiment_undone", "lane", experiment=name)
+    return f"promoted-{name}"
+
+
+def compare_decision(name):
+    arguments = argparse.Namespace(experiment=name, journal_dir=None, target=None)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            runpy.run_path(os.path.join(_BIN_DIR, "scorecard"))["cmd_compare"](arguments)
+    except SystemExit:
+        return None
+    return out.getvalue().strip().splitlines()[-1]
+
+
+def check_experiments(ledger, state_dir=None):
+    day = time.strftime("%Y-%m-%d")
+    state = journal.factory_state(state_dir) or {}
+    for experiment in journal.factory_experiments():
+        name = experiment["name"]
+        entry = state.get(name)
+        if isinstance(entry, dict) and not journal.promotion_open(entry, time.time()):
+            continue
+        if ledger.get(f"experiment-check:{name}") == day:
+            continue
+        ledger[f"experiment-check:{name}"] = day
+        decision = compare_decision(name)
+        if journal.promotion_open(entry, time.time()):
+            if decision == "control wins" and undo_experiment(name, state_dir):
+                print(f"PROMOTION {name} undone, control wins on the holdback")
+                if not DRY:
+                    alarms.route_update(DECISIONS_PATH, f"promoted-{name}", "remove")
+            continue
+        if decision != "treatment wins":
+            continue
+        if experiment["side"] == "gate":
+            card = {"id": f"promote-click-{name}", "group": "Coordinator", "kind": "action",
+                    "title": f"Gate experiment {name} won. It changes the gate, so it waits for your click.",
+                    "why": "The lane promotes builder-side wins only. Promote it yourself or leave it."}
+            print(f"PROMOTION {name} is gate-side, board card raised")
+            if not DRY:
+                journal.emit("experiment_needs_click", "lane", experiment=name)
+                publish_decision(card)
+            continue
+        if DRY:
+            print(f"PROMOTION {name} would be promoted")
+            continue
+        card = promote_experiment(name, state_dir)
+        if card:
+            publish_decision(card)
+            print(f"PROMOTION {name} promoted, undo card raised")
+
+
 def run_pass(ledger):
     global SNAPSHOT, STALL_STATE
     ledger.pop("_item_failures", None)
@@ -2688,6 +2784,7 @@ def run_pass(ledger):
                 print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
 
     merge_passes(ledger)
+    check_experiments(ledger)
 
     if item_failure_summary(ledger):
         raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures")
@@ -2788,3 +2885,10 @@ def main():
             print(f"API USAGE unavailable: {exc}")
         if not DRY:
             save_ledger(ledger)
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["undo"] and len(sys.argv) == 3:
+    undone = undo_experiment(sys.argv[2])
+    print(f"undone {sys.argv[2]}" if undone else f"{sys.argv[2]} is not promoted")
+    if undone:
+        alarms.route_update(DECISIONS_PATH, undone, "remove")
