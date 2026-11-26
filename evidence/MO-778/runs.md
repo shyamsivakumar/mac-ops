@@ -86,19 +86,19 @@ lane reads: verdict=FAIL complete_pass=False
 
 ```
 == dry run, arm treatment (vote3)
-2026-11-26 18:05:00 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:05:00 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:05:00 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == dry run, arm control
-2026-11-26 18:05:00 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == temp-queue run, arm treatment
-2026-11-26 18:05:00 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:05:00 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:05:00 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 == temp-queue run, arm control
-2026-11-26 18:05:00 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:14:08 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 1 gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | T-778 review #1 aaaaaaaa | arm treatment
 2 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 | T-778 review #1 aaaaaaaa vote 2 | arm treatment
 3 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 | T-778 review #1 aaaaaaaa vote 3 | arm treatment
