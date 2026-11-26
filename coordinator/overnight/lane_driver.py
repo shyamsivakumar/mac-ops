@@ -28,6 +28,7 @@ if _BIN_DIR not in sys.path:
 import gh_gateway
 import close_check
 import gate_policy
+import gate_vote
 import journal
 from gate_policy import (LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode, parse_verdict,
                          read_verdict, report_for_builder)
@@ -559,9 +560,12 @@ def gate_verdict(repo, number, head, base):
     if not current:
         return "absent", None, ""
     gate = {"threadId": current}
-    if gate_in_flight(current):
+    voters = gate_vote.vote_threads(receipts, key)
+    if any(gate_in_flight(thread) for thread in [current, *voters]):
         return "running", gate, ""
     reply = last_reply(current)
+    if voters:
+        reply = gate_vote.merge_reports([reply, *map(last_reply, voters)], head)
     primary = read_verdict(reply)[0]
     if primary == "FAIL":
         return "FAIL", gate, reply
