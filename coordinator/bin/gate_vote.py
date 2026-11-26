@@ -1,7 +1,6 @@
 import random
 import re
 
-import journal
 from gate_bar import GATE_BAR
 from gate_policy import JSON_VERDICT_ASK, read_verdict
 
@@ -10,13 +9,6 @@ AGREE = 2
 LINE_WINDOW = 5
 BAR_SECTION = re.compile(r"\n\n(?=(?:Merge bar|Severity bar|Convergence rule) )")
 BLOCKING = ("critical", "major")
-
-
-def votes(gate_arm):
-    return gate_arm == "treatment" and any(
-        e["side"] == "gate" and "vote3" in (e.get("names") or [])
-        for e in journal.factory_experiments()
-    )
 
 
 def shuffled(message, seed):
