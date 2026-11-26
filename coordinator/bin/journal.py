@@ -109,12 +109,40 @@ def installed_sha():
     return installation_receipt().get("source_sha")
 
 
+_NOTED = set()
+
+
+def _note(message):
+    if message not in _NOTED:
+        _NOTED.add(message)
+        print(f"journal: {message}", file=sys.stderr)
+
+
+def _valid_experiments(entries):
+    kept = {}
+    for entry in entries if isinstance(entries, list) else []:
+        ok = (isinstance(entry, dict) and isinstance(entry.get("name"), str)
+              and entry.get("side") in ("builder", "gate")
+              and isinstance(entry.get("split"), (int, float)) and not isinstance(entry["split"], bool))
+        if not ok:
+            _note(f"experiment skipped, needs a name, a side of builder or gate and a numeric split: {entry!r}")
+        elif entry["side"] in kept:
+            _note(f"experiment {entry['name']} refused, {kept[entry['side']]['name']} is already active on side {entry['side']}")
+        else:
+            kept[entry["side"]] = entry
+    return list(kept.values())
+
+
 def factory_experiments():
     here = os.path.dirname(os.path.realpath(__file__))
     for candidate in (os.path.join(here, "..", "config", "factory.json"), os.path.expanduser("~/.coordinator/factory.json")):
         if os.path.exists(candidate):
-            with open(candidate) as fh:
-                return json.load(fh).get("experiments", [])
+            try:
+                with open(candidate) as fh:
+                    return _valid_experiments(json.load(fh).get("experiments", []))
+            except (OSError, ValueError, AttributeError) as exc:
+                _note(f"{candidate} unreadable, no experiment registered: {exc}")
+                return []
     return []
 
 
@@ -131,18 +159,25 @@ def arms_for(cluster_root):
 
 
 def assigned_arm(repo, ticket, gate=False):
-    if not ticket or not factory_experiments():
+    if not factory_experiments():
+        return None
+    try:
+        number = int(ticket)
+    except (TypeError, ValueError):
         return None
     for path in sorted(glob.glob(os.path.join(journal_dir(), "events-*.jsonl")), reverse=True):
-        with open(path) as fh:
-            lines = fh.readlines()
+        try:
+            with open(path) as fh:
+                lines = fh.readlines()
+        except (OSError, ValueError):
+            continue
         for line in reversed(lines):
             try:
                 row = json.loads(line)
             except ValueError:
                 continue
-            if row.get("event") == "assigned" and row.get("repo") == repo and row.get("ticket") == int(ticket):
-                return row["data"].get("gate_arm") if gate else row["arm"]
+            if isinstance(row, dict) and row.get("event") == "assigned" and row.get("repo") == repo and row.get("ticket") == number:
+                return (row.get("data") or {}).get("gate_arm") if gate else row.get("arm")
     return None
 
 

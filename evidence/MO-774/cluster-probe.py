@@ -39,3 +39,26 @@ coordq.journal_item("launched", {"id": 2, "tool": "t3_thread_launch", "args": {"
 for line in open(tmp+"/j/"+os.listdir(tmp+"/j")[0]):
     r = json.loads(line); print(r["event"], r["repo"], r["ticket"], "arm=", r["arm"], {k: v for k, v in r["data"].items() if k in ("cluster","cluster_note","gate_arm")})
 print("gate arm", journal.assigned_arm("o/r", "9", gate=True), journal.assigned_arm("o/r", None, gate=True))
+
+print("--- crash paths")
+import importlib
+home = tempfile.mkdtemp(); os.makedirs(home + "/.coordinator")
+here_cfg = os.path.join(os.path.realpath("coordinator/bin"), "..", "config", "factory.json")
+importlib.reload(journal)
+real = journal.os.path.exists
+journal.os.path.exists = lambda p: False if p == here_cfg else real(p)
+os.environ["HOME"] = home
+cfg = home + "/.coordinator/factory.json"
+def reg(text):
+    open(cfg, "w").write(text); journal._NOTED.clear(); return journal.factory_experiments()
+print("malformed json", reg("{nope"))
+print("not an object", reg("[1]"))
+print("bad entries", reg(json.dumps({"experiments": [{"name": "a", "side": "other", "split": 5}, {"name": "b", "side": "gate"}, {"name": "c", "side": "gate", "split": "x"}, "junk"]})))
+two = reg(json.dumps({"experiments": [{"name": "a", "side": "builder", "split": 10}, {"name": "b", "side": "builder", "split": 90}, {"name": "g", "side": "gate", "split": 50}]}))
+print("one per side", [e["name"] for e in two])
+j = os.environ["COORD_JOURNAL_DIR"]; os.makedirs(j, exist_ok=True)
+open(j + "/events-2026-12.jsonl", "w").write('{"event":"assigned","repo":"o/r","ticket":7,"arm":"treatment"}\n5\nnot json\n')
+os.makedirs(j + "/events-2026-09.jsonl", exist_ok=True)
+open(j + "/events-2026-10.jsonl", "wb").write(b"\xff\xfe\n")
+print("assigned row without data", journal.assigned_arm("o/r", 7), journal.assigned_arm("o/r", 7, gate=True))
+print("non-numeric ticket", journal.assigned_arm("o/r", "abc"), journal.assigned_arm("o/r", None), journal.assigned_arm("o/r", 99))
