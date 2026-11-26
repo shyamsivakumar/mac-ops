@@ -511,6 +511,28 @@ def classify_failure(report, size, prev_lines):
     return "logic"
 
 
+OVER_CAP_LINES = 150
+OVER_CAP_FILES = 3
+
+
+def fail_size(repo, number, head, ledger):
+    key = f"size:{repo}#{number}:{head}"
+    if key not in ledger:
+        pr = next((p for p in SNAPSHOT.get("repos", {}).get(repo, {}).get("prs", []) if p["number"] == number), {})
+        if pr.get("additions", 0) + pr.get("deletions", 0) <= OVER_CAP_LINES and pr.get("changedFiles", 0) <= OVER_CAP_FILES:
+            return "ok"
+        try:
+            lines, count = gate_policy.code_size(api_json(f"repos/{repo}/pulls/{number}/files?per_page=100"))
+        except (subprocess.CalledProcessError, ValueError):
+            return "ok"
+        ledger[key] = "recut" if lines > OVER_CAP_LINES or count > OVER_CAP_FILES else "ok"
+    return ledger[key]
+
+
+def route_for(cls):
+    return "recut" if cls == "size" else "today"
+
+
 def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_lines=None):
     if verdict in ("PASS", "FAIL", "SPLIT"):
         extra = {"class": classify_failure(report, size, prev_lines or {})} if verdict == "FAIL" else {}
@@ -773,7 +795,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
 
 
-def park(repo, number, issue, head, reply, ledger):
+def park(repo, number, issue, head, reply, ledger, why="failed its gate after two fix rounds"):
     lkey = f"park:{repo}#{number}"
     if lkey in ledger:
         return f"#{number}: parked, re-cut on the way"
@@ -785,9 +807,9 @@ def park(repo, number, issue, head, reply, ledger):
     if issue:
         run(["gh", "issue", "edit", str(issue), "-R", repo, "--remove-label", "stage:todo", "--add-label", "stage:backlog"])
         run(["gh", "issue", "comment", str(issue), "-R", repo, "--body",
-             f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). A builder re-cuts it into smaller tickets."])
+             f"Parked by the lane (specs/lane.md section 6): PR #{number} {why} (head {head[:8]}). A builder re-cuts it into smaller tickets."])
     msg = (f"Type: design · {recutter['id']} (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"
-           f"Ticket {repo}#{issue} with PR #{number} failed its gate after two fix rounds. Read the issue, the PR diff (`gh pr diff {number} -R {repo}`) and the last gate report below. "
+           f"Ticket {repo}#{issue} with PR #{number} {why}. Read the issue, the PR diff (`gh pr diff {number} -R {repo}`) and the last gate report below. "
            "Re-cut the remaining work into at most 2 ordered tickets that each fit a 5-minute builder turn. Consolidate any further work into those tickets; never create a third ticket. Use the 12-section template in ~/.coordinator/tickets.json, "
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Open every new ticket with `ticket open --repo {repo} --title \"<title>\" --body-file <file> --label stage:todo,type:<type>,priority:<n>`; the tool mints the key, so never type the key yourself and never use `gh issue create`. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
@@ -1598,7 +1620,8 @@ def merge_pass(repo, ledger):
         settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
         if verdict in ("running", "none", "absent"):
             continue
-        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply)
+        size = fail_size(repo, number, head, ledger) if verdict == "FAIL" else "ok"
+        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply, size=size)
         if verdict == "SPLIT":
             journal_once("merge_held", repo, number, head, ledger,
                          f"journal-held:{repo}#{number}:{head}:split", reason="split")
@@ -1711,8 +1734,9 @@ def act_on_pr(repo, number, ledger):
         return None
     if verdict == "running":
         return f"#{number}: gate running"
+    size = fail_size(repo, number, head, ledger) if verdict == "FAIL" else "ok"
     if gate:
-        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply)
+        journal_verdict(repo, number, head, verdict, gate, ledger, report=reply, size=size)
     if verdict == "SPLIT":
         journal_once("merge_held", repo, number, head, ledger,
                      f"journal-held:{repo}#{number}:{head}:split", reason="split")
@@ -1730,6 +1754,9 @@ def act_on_pr(repo, number, ledger):
             if no_open_findings(reply, head):
                 return merge_passed_pr(repo, number, head, pr, issue, gate, ledger)
             return gate_round_decision(repo, number, head, ledger, gate)
+        if (issue and route_for(classify_failure(reply, size, {})) == "recut" and CFG[repo].get("build") != "here"
+                and gate_policy.partial_claim(body) is None):
+            return park(repo, number, issue, head, reply, ledger, f"is over the {OVER_CAP_LINES} code line cap")
     if verdict == "FAIL" and CFG[repo].get("build") == "here":
         return herdr_build_card(repo, number, head, "the gate returned FAIL findings")
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
