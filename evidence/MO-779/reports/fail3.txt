@@ -1,0 +1,9 @@
+Major — [PR #919](https://github.com/shyamsivakumar/mac-ops/pull/919) now points to `717c2b5ff81dd8eb23d9be979720e391b8d0c9b8`. GitHub and the remote Git ref agree. A PASS for this request would give the lane a verdict for a superseded revision.
+
+The PR body contains the exact line `Builder check: PASS 1b18220329a4b5b3ade0d312183076ca00e02da0`. All ten checks in `evidence/check-proof.md` passed, but the commit named at line 4 is not an ancestor of the requested head. The PR-specific proof at `evidence/MO-916/check-proof.md:5` names its parent, `cc1f31c2`. All ten checks there passed, and only that proof file changed between parent and requested head.
+
+Applied the standard merge bar because the journal hook does not change trading, stop, or exit logic. The exact-head requirement determines the failure. The PR conversation contains no prior gate findings. No ticket Provides claims apply.
+
+PROVIDES: PASS 1b18220329a4b5b3ade0d312183076ca00e02da0
+CHECK: FAIL 1b18220329a4b5b3ade0d312183076ca00e02da0
+VERDICT: FAIL

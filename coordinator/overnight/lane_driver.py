@@ -28,6 +28,7 @@ if _BIN_DIR not in sys.path:
 import gh_gateway
 import close_check
 import gate_policy
+import gate_score
 import journal
 from gate_policy import (LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode, parse_verdict,
                          read_verdict, report_for_builder)
@@ -552,7 +553,29 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
-def gate_verdict(repo, number, head, base):
+def gate_score_on(repo, number):
+    return (journal.assigned_arm(repo, number, gate=True) == "treatment"
+            and journal.treatment_names("treatment", "gate", "score2"))
+
+
+def second_pass(reply, repo, number, head, thread, ledger):
+    key = f"score2:{thread}"
+
+    def call(prompt):
+        if key not in ledger:
+            answer = gate_score.pi_call(prompt)
+            if not DRY and answer:
+                ledger[key] = answer
+            return answer
+        return ledger[key]
+
+    scored, dropped = gate_score.score_findings(reply, call)
+    if dropped:
+        journal_once("gate_score_dropped", repo, number, head, ledger, f"journal-{key}", thread=thread, dropped=dropped)
+    return scored
+
+
+def gate_verdict(repo, number, head, base, ledger):
     receipts = json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}
     key = f"gate:{repo}#{number}:{head}"
     current = receipts.get(key)
@@ -563,6 +586,9 @@ def gate_verdict(repo, number, head, base):
         return "running", gate, ""
     reply = last_reply(current)
     primary = read_verdict(reply)[0]
+    if primary == "FAIL" and gate_score_on(repo, number):
+        reply = second_pass(reply, repo, number, head, current, ledger)
+        primary = read_verdict(reply)[0]
     if primary == "FAIL":
         return "FAIL", gate, reply
     if primary == "CONFLICT":
@@ -1593,7 +1619,7 @@ def settle_merged_prs(repo, ledger):
         if DRY:
             print(f"DRY after-merge #{number}")
             continue
-        verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"])
+        verdict, gate, _ = gate_verdict(repo, number, head, pr["baseRefName"], ledger)
         if verdict == "running":
             continue
         journal_merged(repo, number, head, ledger, event="merged_outside_lane",
@@ -1627,7 +1653,7 @@ def merge_candidates(repo, ledger):
 
 def merge_pass(repo, ledger):
     for number, head, thread, base in merge_candidates(repo, ledger):
-        verdict, gate, reply = gate_verdict(repo, number, head, base)
+        verdict, gate, reply = gate_verdict(repo, number, head, base, ledger)
         settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
         if verdict in ("running", "none", "absent"):
             continue
@@ -1644,7 +1670,7 @@ def merge_pass(repo, ledger):
         if skip:
             ledger[settled] = skip
             continue
-        if gate_verdict(repo, number, head, pr["baseRefName"])[0] != "PASS":
+        if gate_verdict(repo, number, head, pr["baseRefName"], ledger)[0] != "PASS":
             continue
         found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
         wait = f"merge-wait:{repo}#{number}:{head}"
@@ -1701,7 +1727,7 @@ def act_on_pr(repo, number, ledger):
     issue, builder = builder_thread(repo, body)
     closed = False
     if (issue and superseded_by(repo, number, int(issue))
-            and gate_verdict(repo, number, head, pr.get("baseRefName") or "main")[0] != "PASS"):
+            and gate_verdict(repo, number, head, pr.get("baseRefName") or "main", ledger)[0] != "PASS"):
         return f"skip #{number}: superseded by a newer pull request for #{issue}"
     proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
@@ -1740,7 +1766,7 @@ def act_on_pr(repo, number, ledger):
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
     base = pr.get("baseRefName") or "main"
-    verdict, gate, reply = gate_verdict(repo, number, head, base)
+    verdict, gate, reply = gate_verdict(repo, number, head, base, ledger)
     if closed and verdict != "PASS":
         return None
     if verdict == "running":

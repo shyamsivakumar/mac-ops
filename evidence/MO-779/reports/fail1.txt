@@ -1,0 +1,11 @@
+Major — PR #909 moved to 4f832559c2c449f3609297bd4cb364995916e673. Both the PR metadata and the remote head confirm it. The body still contains the exact line `Builder check: PASS a4bb576e5a864659fa7d2e1b3b0e7fe76ef3f51c`. A PASS would let the lane merge a revision this gate did not review.
+
+Applied the standard merge bar because the diff changes coordinator tick scheduling and does not touch trade execution, stops, or exits.
+
+Left for later — minor, `evidence/check-proof.md:4`. All ten checks say `passed`, but the named commit `ec72b75` is outside the requested head’s ancestry and the trees differ beyond the proof file. This receipt is identical on `origin/main`. The PR-specific receipt at `evidence/MO-908/check-proof.md:5` names a valid ancestor, `2690e94`. Only that receipt and `runs.md` were added afterward.
+
+The PR conversation contained no prior gate findings. The suite was not rerun. There are no associated ticket Provides claims.
+
+PROVIDES: PASS a4bb576e5a864659fa7d2e1b3b0e7fe76ef3f51c
+CHECK: FAIL a4bb576e5a864659fa7d2e1b3b0e7fe76ef3f51c
+VERDICT: FAIL
