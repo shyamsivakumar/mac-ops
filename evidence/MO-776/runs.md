@@ -38,88 +38,175 @@ Expected green on the PR head: `no difference`.
 
 ## Red on origin/main (897dced2)
 
-<!-- markdownlint-disable MD013 -->
-```text
+```
 scorecard-main: error: argument command: invalid choice: 'compare' (choose from 'backfill')
 ```
-<!-- markdownlint-enable MD013 -->
 
-## Green on the branch
+## Green on the branch (replacement proof command, full output)
 
-```text
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
+time to merge: not enough merges
 no difference
 ```
 
-## Synthetic A/A, 44 vs 44 percent (experiment x)
+Cohorts: the interim cohort is the first ceil(target/2) tickets by assignment time, the final cohort is the first target. Tickets after the target are counted but never change the decision. Runs below use 300 tickets, so the final cohort (the first 260) is decided.
 
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 43.3%
-treatment: 150 tickets in 100 clusters, first-gate PASS 40.7%
-target 260 tickets, 300 assigned
-gap -2.7 points, cluster-bootstrap p 0.6458 (4000 draws, seed 7)
+## A/A, 44 vs 44
+
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 no difference
 ```
 
-## Synthetic treatment better, 35 vs 60 percent
+## Treatment better, 35 vs 60
 
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 36.0%
-treatment: 150 tickets in 100 clusters, first-gate PASS 55.3%
-target 260 tickets, 300 assigned
-gap +19.3 points, cluster-bootstrap p 0.0010 (4000 draws, seed 7)
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 35.4%
+treatment: 130 tickets in 87 clusters, first-gate PASS 53.8%
+gap +18.5 points, cluster-bootstrap p 0.0015 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 treatment wins
 ```
 
-## Synthetic control better, 60 vs 35 percent
+## Control better, 60 vs 35
 
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 62.7%
-treatment: 150 tickets in 100 clusters, first-gate PASS 35.3%
-target 260 tickets, 300 assigned
-gap -27.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 63.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 33.1%
+gap -30.8 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 control wins
 ```
 
-## Two experiments in one journal
+## Treatment tickets never merge, 35 vs 60
 
-Experiment x is A/A (44 vs 44) and y has a real effect (35 vs 60).
-Each has 300 tickets on the builder side and counts only its own.
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 35.4%
+treatment: 130 tickets in 87 clusters, first-gate PASS 53.8%
+gap +18.5 points, cluster-bootstrap p 0.0015 (4000 draws, seed 7)
+time to merge: not enough merges
+no difference
+```
 
-```text
+With --target 400 (interim cohort is the first 200 of 300):
+
+```
+target 400 tickets, 300 assigned, interim cohort is the first 200
+control: 100 tickets in 67 clusters, first-gate PASS 37.0%
+treatment: 100 tickets in 67 clusters, first-gate PASS 53.0%
+gap +16.0 points, cluster-bootstrap p 0.0170 (4000 draws, seed 7)
+time to merge: not enough merges
+continue
+```
+
+## Two experiments in one journal (x is A/A, y has a real effect, 300 tickets each)
+
 --experiment x
-control: 150 tickets in 100 clusters, first-gate PASS 43.3%
-treatment: 150 tickets in 100 clusters, first-gate PASS 40.7%
-target 260 tickets, 300 assigned
-gap -2.7 points, cluster-bootstrap p 0.6458 (4000 draws, seed 7)
+
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 no difference
+```
 
 --experiment y
-control: 150 tickets in 100 clusters, first-gate PASS 36.7%
-treatment: 150 tickets in 101 clusters, first-gate PASS 60.0%
-target 260 tickets, 300 assigned
-gap +23.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+
+```
+target 260 tickets, 300 assigned, final cohort is the first 260
+control: 130 tickets in 87 clusters, first-gate PASS 38.5%
+treatment: 130 tickets in 87 clusters, first-gate PASS 58.5%
+gap +20.0 points, cluster-bootstrap p 0.0015 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
+treatment wins
+```
+
+## One interim look: more tickets between 130 and 259 never change the decision
+
+Same seed, so each journal extends the previous one. A/A (no early stop) and a strong effect (30 vs 65, stops at the interim look) print the same interim result at 130, 160, 200 and 259 assigned. At 100 assigned (below half) the answer is continue. At the target the final cohort is decided.
+
+A/A, 100 assigned
+
+```
+target 260 tickets, 100 assigned, interim cohort is the first 130
+continue
+```
+
+A/A, 130 assigned
+
+```
+target 260 tickets, 130 assigned, interim cohort is the first 130
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+A/A, 160 assigned
+
+```
+target 260 tickets, 160 assigned, interim cohort is the first 130
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+A/A, 200 assigned
+
+```
+target 260 tickets, 200 assigned, interim cohort is the first 130
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+A/A, 259 assigned
+
+```
+target 260 tickets, 259 assigned, interim cohort is the first 130
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+30 vs 65, 130 assigned
+
+```
+target 260 tickets, 130 assigned, interim cohort is the first 130
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+30 vs 65, 200 assigned
+
+```
+target 260 tickets, 200 assigned, interim cohort is the first 130
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+30 vs 65, 259 assigned
+
+```
+target 260 tickets, 259 assigned, interim cohort is the first 130
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
 treatment wins
 ```
 
 ## No match, exit 1
 
-These cases all print the output below and exit 1:
-
-- a misspelled name (`zz`)
-- a missing journal directory
-- a read-only run on the live journal (no row has an experiment yet)
-
-<!-- markdownlint-disable MD013 -->
-```text
+```
 compare: no control or treatment assignments for zz in the journal; register an experiment in coordinator/config/factory.json
 rc=1
 ```
-<!-- markdownlint-enable MD013 -->
 
 ## Stamp
 
@@ -130,78 +217,3 @@ rc=1
 {'arm': 'control', 'experiment': 'b1', 'gate_arm': 'control', 'gate_experiment': 'g1'}
 ```
 <!-- markdownlint-enable MD013 -->
-
-## Treatment tickets never merge (35 vs 60 percent PASS)
-
-Treatment passes the gate more often but has no merged row, so `treatment wins` is withheld. Past the target (260, 300 assigned) the decision is `no difference`:
-
-```
-control: 150 tickets in 100 clusters, first-gate PASS 36.0%
-treatment: 150 tickets in 100 clusters, first-gate PASS 55.3%
-target 260 tickets, 300 assigned
-gap +19.3 points, cluster-bootstrap p 0.0010 (4000 draws, seed 7)
-time to merge: not enough merges
-no difference
-```
-
-Same journal with `--target 400` (300 is past half but short of the target):
-
-```
-target 400 tickets, 300 assigned
-gap +19.3 points, cluster-bootstrap p 0.0010 (4000 draws, seed 7)
-time to merge: not enough merges
-continue
-```
-
-The four cases above (A/A, treatment better, control better, two experiments) were rerun after this change with the same results, and the replacement proof command still ends in `no difference`.
-
-## Control tickets never merge (60 vs 35 percent PASS)
-
-The mirror of the case above. Control passes the gate more often, but only
-treatment ticket numbers carry a `merged` row, so control has no observed
-merge time and `control wins` is withheld too. Past the target (260, 300
-assigned) the decision is `no difference`:
-
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 62.7%
-treatment: 150 tickets in 100 clusters, first-gate PASS 35.3%
-target 260 tickets, 300 assigned
-gap -27.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
-time to merge: not enough merges
-no difference
-```
-
-Same journal with `--target 400` (300 is past half but short of the target):
-
-```text
-target 400 tickets, 300 assigned
-gap -27.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
-time to merge: not enough merges
-continue
-```
-
-`coordinator/bin/scorecard` at the previous head prints `control wins` for both
-of those runs. A winner needs an observed merge time in both arms, so neither
-arm can win on first-gate PASS results alone.
-
-## Decision rule cases
-
-`decide(p, gap, tickets, target, merge_ok)` is the whole stopping rule. The
-twelve cases below are asserted against the function, so each branch is named
-rather than inferred from a journal:
-
-```text
-ok   past target, merges ok -> treatment wins
-ok   past target, merges unknown -> no difference
-ok   treatment over the 15 percent limit -> no difference
-ok   interim, merges unknown -> continue
-ok   past target, control better, merges ok -> control wins
-ok   past target, control better, merges unknown -> no difference
-ok   interim, control better, merges unknown -> continue
-ok   tie at the target -> no difference
-ok   tie at interim -> continue
-ok   below half of the target -> continue
-ok   interim p cutoff not reached -> continue
-ok   final p cutoff not reached -> no difference
-all 12 decide() cases hold
-```
