@@ -2004,6 +2004,8 @@ def gate_round_cap():
     heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
     sent = []
     current = [""]
+    files = None
+    parked = []
     with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as decisions:
         board = decisions.with_name("mac-ops-owner.json")
 
@@ -2014,6 +2016,10 @@ def gate_round_cap():
                 # The prompt classification this branch adds reads the pinned
                 # trees; every head here is code-only against its base.
                 endpoint = cmd[-1]
+                if endpoint.endswith("/files?per_page=100"):
+                    if files is None:
+                        raise subprocess.CalledProcessError(1, cmd)
+                    return json.dumps(files)
                 if "/compare/" in endpoint:
                     return json.dumps({"merge_base_commit": {"sha": "base"}})
                 if endpoint.endswith("/git/trees/base?recursive=1"):
@@ -2037,12 +2043,12 @@ def gate_round_cap():
             ledger[lkey] = "sent"
             return "sent"
 
-        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=(), board=True, dry=False):
+        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=(), board=True, dry=False, body="", issue_labels=(), **fields):
             """Run the lane over one pull request at one head."""
             current[0] = head
             pr = dict(number=number, state="OPEN", headRefOid=head, labels=[{"name": n} for n in labels],
-                      body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
-            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+                      body=f"Refs #10\n{body}\nBuilder check: PASS {head}", mergeable="MERGEABLE", **fields)
+            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[{"name": n} for n in issue_labels])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "round_cap_to_board", lambda _: board), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", dry), \
@@ -2050,7 +2056,8 @@ def gate_round_cap():
                  patch.object(lane, "gate_verdict", return_value=verdict), \
                  patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
-                 patch.object(lane, "send", send):
+                 patch.object(lane, "send", send), \
+                 patch.object(lane, "park", lambda *args: parked.append(args[1]) or "parked"):
                 return lane.act_on_pr(repo, number, ledger)
 
         ledger = {}
@@ -2133,6 +2140,35 @@ def gate_round_cap():
         exact(lane.clear_gate_round_decision(repo, 20, ledger), True)
         exact(f"rounds-decision:{repo}#20" in ledger, False)
         exact(len(json.loads(board.read_text())["items"]), 3)
+
+        # A first-review FAIL parks only when the pull request is over the
+        # 150 code line cap, is not type:large or gate:whole, and the lead
+        # finding of the report is the size stop. The files are read once
+        # per head and the journal class is size only for the parked one.
+        files = [{"filename": "a.py", "status": "modified", "additions": 200, "deletions": 0}]
+        sized = ("FAIL", {"threadId": "gate"}, "Major — a.py:1 crosses the ticket's explicit 150-line stop.\n\nVERDICT: FAIL")
+        buggy = ("FAIL", {"threadId": "gate"}, "Major — a.py:9 loses a write.\n\nThe diff also exceeds the 150-line limit.\n\nVERDICT: FAIL")
+        before = list(sent)
+        emitted = []
+        with patch.object(lane.journal, "emit", lambda event, *a, **kw: emitted.append(kw)):
+            fresh = {}
+            exact(act(40, heads[0], fresh, verdict=sized), "parked")
+            files = None
+            exact(act(40, heads[0], fresh, verdict=sized), "parked")
+        exact((parked, sent, fresh[f"size:{repo}#40:{heads[0]}"]), ([40, 40], before, "recut"))
+        exact([row.get("class") for row in emitted if row.get("verdict") == "FAIL"], ["size"])
+        exact(lane.route_for("size"), "recut")
+        exact(lane.route_for("logic"), "today")
+        files = [{"filename": "a.py", "status": "modified", "additions": 200, "deletions": 0}]
+        act(41, heads[0], {}, verdict=sized, body="Partial: yes\n\n## Left for later\n\nthe rest")
+        act(42, heads[0], {}, verdict=buggy)
+        act(43, heads[0], {}, verdict=sized, issue_labels=["type:large"])
+        act(44, heads[0], {}, verdict=sized, labels=["gate:whole"])
+        files = [{"filename": "a.py", "status": "modified", "additions": 20, "deletions": 0}]
+        act(45, heads[0], {}, verdict=sized)
+        files = None
+        act(46, heads[0], {}, verdict=sized)
+        exact((parked, sent[len(before):]), ([40, 40], [f"fix:{repo}#{n}:{heads[0]}" for n in range(41, 47)]))
 
         check_pass = f"CHECK: PASS {heads[2]}"
         none_line = f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
