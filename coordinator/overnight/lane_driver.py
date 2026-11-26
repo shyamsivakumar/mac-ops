@@ -515,12 +515,23 @@ OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
 
 
-def fail_size(repo, number, head, ledger):
+SIZE_BLOCKER = re.compile(r"(?i)\b150[- ](?:counted[- ])?(?:code[- ])?lines?\b|\b(?:stop|stops|stopping)\b[^.\n]{0,40}\b150\b|\bsize cap\b|\bline cap\b")
+
+
+def size_exempt(repo, pr):
+    refs = re.findall(r"\bRefs #(\d+)", pr.get("body") or "")
+    labels = [label["name"] for label in pr.get("labels") or []]
+    labels += [label["name"] for ref in refs for label in (issue_record(SNAPSHOT, repo, ref) or {"labels": []})["labels"]]
+    return "gate:whole" in labels or "type:large" in labels
+
+
+def fail_size(repo, number, head, ledger, report):
+    lead = next((part for part in report.split("\n\n") if part.strip()), "")
+    pr = next((p for p in SNAPSHOT.get("repos", {}).get(repo, {}).get("prs", []) if p["number"] == number), {})
+    if not SIZE_BLOCKER.search(lead) or size_exempt(repo, pr):
+        return "ok"
     key = f"size:{repo}#{number}:{head}"
     if key not in ledger:
-        pr = next((p for p in SNAPSHOT.get("repos", {}).get(repo, {}).get("prs", []) if p["number"] == number), {})
-        if pr.get("additions", 0) + pr.get("deletions", 0) <= OVER_CAP_LINES and pr.get("changedFiles", 0) <= OVER_CAP_FILES:
-            return "ok"
         try:
             lines, count = gate_policy.code_size(api_json(f"repos/{repo}/pulls/{number}/files?per_page=100"))
         except (subprocess.CalledProcessError, ValueError):
@@ -1620,7 +1631,7 @@ def merge_pass(repo, ledger):
         settled = f"merge-pass:{repo}#{number}:{head}:{thread}"
         if verdict in ("running", "none", "absent"):
             continue
-        size = fail_size(repo, number, head, ledger) if verdict == "FAIL" else "ok"
+        size = fail_size(repo, number, head, ledger, reply) if verdict == "FAIL" else "ok"
         journal_verdict(repo, number, head, verdict, gate, ledger, report=reply, size=size)
         if verdict == "SPLIT":
             journal_once("merge_held", repo, number, head, ledger,
@@ -1734,7 +1745,7 @@ def act_on_pr(repo, number, ledger):
         return None
     if verdict == "running":
         return f"#{number}: gate running"
-    size = fail_size(repo, number, head, ledger) if verdict == "FAIL" else "ok"
+    size = fail_size(repo, number, head, ledger, reply) if verdict == "FAIL" else "ok"
     if gate:
         journal_verdict(repo, number, head, verdict, gate, ledger, report=reply, size=size)
     if verdict == "SPLIT":
