@@ -380,6 +380,105 @@ def tool_refusal(tool):
     return f"tool {tool!r} is not dispatchable. Accepted tools: {', '.join(DISPATCHABLE_TOOLS)}"
 
 
+# The arguments a tool accepts are read from the tool itself. A hand-written
+# key list here would drift from the tool it guards, and the payload that
+# drifts past it is the one that dies at dispatch.
+SCHEMA_TIMEOUT = float(os.environ.get("COORDQ_SCHEMA_TIMEOUT", "20"))
+SCHEMAS = {}
+JSON_TYPES = {"object": dict, "string": str, "boolean": bool, "array": list}
+JSON_TYPE_NAMES = {dict: "an object", str: "a string", bool: "a boolean", list: "a list",
+                   type(None): "null"}
+
+
+def tool_schema(tool):
+    """Read and keep the argument schema the tool publishes, or None when it
+    cannot be read or is not a schema this code can judge.
+
+    None means unknown, and an unknown schema refuses nothing: a server that
+    cannot answer here, or an answer that names no arguments, is no reason to
+    drop a payload the tool may accept. A caller inside the process passes no
+    schema of its own to the refusal below."""
+    if tool not in SCHEMAS:
+        schema = None
+        try:
+            run = subprocess.run([T3MCP, "schema", tool], capture_output=True,
+                                 text=True, timeout=SCHEMA_TIMEOUT)
+            if not run.returncode:
+                schema = json.loads(run.stdout)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            schema = None
+        usable = isinstance(schema, dict) and isinstance(schema.get("properties"), dict)
+        SCHEMAS[tool] = schema if usable and schema["properties"] else None
+    return SCHEMAS[tool]
+
+
+def shape_name(spec):
+    """What a schema entry asks for, in the words the tool's own errors use."""
+    if "enum" in spec:
+        return " | ".join(repr(value) for value in spec["enum"])
+    named = spec.get("required") or []
+    kind = spec.get("type")
+    if kind == "object" and named:
+        return f"an object naming {', '.join(repr(k) for k in named)}"
+    return kind if isinstance(kind, str) else "a value"
+
+
+def value_refusal(tool, path, value, spec, root=False):
+    """The refusal for one value against its schema entry, or None.
+
+    The refusal names the field, what the field asks for and the kind of value
+    it got, never the value itself: a message that a payload is wrong must not
+    copy the brief it carried into the journal."""
+    where = f"{tool} {path}" if path else tool
+    kinds = spec.get("type")
+    kinds = kinds if isinstance(kinds, list) else [kinds]
+    allowed = [JSON_TYPES[k] for k in kinds if k in JSON_TYPES]
+    if allowed and not any(isinstance(value, kind) for kind in allowed):
+        return f"refused: {where} expected {shape_name(spec)}, got {JSON_TYPE_NAMES.get(type(value), 'a value')}"
+    if "enum" in spec and value not in spec["enum"]:
+        return f"refused: {where} expected {shape_name(spec)}"
+    limit = spec.get("maxLength")
+    if isinstance(limit, int) and isinstance(value, str) and len(value) > limit:
+        return f"refused: {where} is {len(value)} characters, and the tool accepts {limit}"
+    if not isinstance(value, dict) or not isinstance(spec.get("properties"), dict):
+        return None
+    # taskType is this queue's own key: with_model resolves it and call drops
+    # it before the tool sees the payload, so the tool's schema omits it.
+    unknown = sorted(k for k in value if k not in spec["properties"] and not (root and k == "taskType"))
+    if unknown:
+        accepted = sorted(spec["properties"]) + (["taskType"] if root and "taskType" not in spec["properties"] else [])
+        return (f"refused: {where} has no argument {', '.join(repr(k) for k in unknown)}. "
+                f"Accepted arguments: {', '.join(sorted(accepted))}")
+    for key in spec.get("required") or []:
+        if key not in value:
+            return f"refused: {where} is missing {key!r}"
+    for key in sorted(value):
+        child = spec["properties"].get(key)
+        if not isinstance(child, dict):
+            continue
+        refusal = value_refusal(tool, f"{path}.{key}" if path else key, value[key], child)
+        if refusal:
+            return refusal
+    return None
+
+
+def schema_refusal(tool, args):
+    """The contract's refusal of this payload, or None when the tool accepts it.
+
+    A launch queued with an argument the tool does not have, or with a
+    workspaceStrategy that is not an object naming a type, is rejected at
+    dispatch: the item dies after its attempts with only last_error recording
+    it, and the decision it carried waits (seven launches, 2026-11-25).
+    Refusing it before the item is queued costs the caller one line.
+
+    The payload is the one dispatch would send, so a model the queue picks
+    itself is resolved first and a strategy the queue fills in is filled. The
+    schema is the one read at the command boundary, so this reads no server: a
+    payload a caller queues from inside the process passes here."""
+    schema = SCHEMAS.get(tool)
+    return value_refusal(tool, "", args, schema, root=True) if schema else None
+
+
 def read_rules():
     try:
         with open(RULES_PATH) as f:
@@ -1202,6 +1301,24 @@ def current_head(title):
         return None
 
 
+def start_command(a):
+    """`coordq start`, with the tool's argument contract read before the queue.
+
+    The read is a subprocess of its own, so it is paid once here, at the
+    command boundary: cmd_start keeps the queue logic, and a caller that runs
+    it inside the process (the tick's re-cut) is not made to wait on a server
+    read for a payload this file builds itself."""
+    try:
+        args = json.loads(a.args)
+    except ValueError:
+        cmd_start(a)
+        return
+    tool = a.tool or tool_for(args)
+    if tool in DISPATCHABLE_TOOLS:
+        tool_schema(tool)
+    cmd_start(a)
+
+
 def cmd_start(a):
     args = json.loads(a.args)
     tool = a.tool or tool_for(args)
@@ -1224,12 +1341,14 @@ def cmd_start(a):
                      args, tool, label)
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
+    judged = args
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
         requested = args
         args, refusal = with_model(args)
         if refusal:
             refuse_start(refusal, requested, tool, label)
+        judged = args
         if not requested.get("modelSelection"):
             args = requested
         if wants_rules(args, task_type):
@@ -1237,6 +1356,13 @@ def cmd_start(a):
                 read_rules()
             except RuntimeError as e:
                 refuse_start(f"refused: {e}", args, tool, label)
+    # The payload is judged as dispatch would send it: after the title the
+    # caller gave, and with the model the queue picks when the payload names
+    # none, which dispatch resolves the same way. The queue itself keeps what
+    # the caller sent, so an empty selection still resolves at dispatch.
+    refusal = schema_refusal(tool, judged)
+    if refusal:
+        refuse_start(refusal, args, tool, label)
     # The thread list is read before the writer lock is taken: a slow t3 call
     # under it would hold every other start for its length. The started-message
     # records it speaks for are snapshotted first, because a record added since
@@ -3336,7 +3462,7 @@ def main():
     s.add_argument("--action-key",
                    help="the board action key this item carries, as action:owner/repo#number:head. "
                         "The key is held by one queue item, so a second item with the same key is refused.")
-    s.set_defaults(fn=cmd_start)
+    s.set_defaults(fn=start_command)
     c = sub.add_parser("create")
     c.add_argument("args")
     c.set_defaults(fn=cmd_create)
