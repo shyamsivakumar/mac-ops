@@ -2043,12 +2043,12 @@ def gate_round_cap():
             ledger[lkey] = "sent"
             return "sent"
 
-        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=(), board=True, dry=False, body="", **fields):
+        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL"), labels=(), board=True, dry=False, body="", issue_labels=(), **fields):
             """Run the lane over one pull request at one head."""
             current[0] = head
             pr = dict(number=number, state="OPEN", headRefOid=head, labels=[{"name": n} for n in labels],
                       body=f"Refs #10\n{body}\nBuilder check: PASS {head}", mergeable="MERGEABLE", **fields)
-            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[{"name": n} for n in issue_labels])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "round_cap_to_board", lambda _: board), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", dry), \
@@ -2141,30 +2141,34 @@ def gate_round_cap():
         exact(f"rounds-decision:{repo}#20" in ledger, False)
         exact(len(json.loads(board.read_text())["items"]), 3)
 
-        # A first-review FAIL on a pull request over the 150 code line cap is
-        # parked for a re-cut and gets no fix round; the class in the
-        # journal is size, and the files are read once per head.
+        # A first-review FAIL parks only when the pull request is over the
+        # 150 code line cap, is not type:large or gate:whole, and the lead
+        # finding of the report is the size stop. The files are read once
+        # per head and the journal class is size only for the parked one.
         files = [{"filename": "a.py", "status": "modified", "additions": 200, "deletions": 0}]
-        over = dict(additions=200, deletions=0, changedFiles=1)
+        sized = ("FAIL", {"threadId": "gate"}, "Major — a.py:1 crosses the ticket's explicit 150-line stop.\n\nVERDICT: FAIL")
+        buggy = ("FAIL", {"threadId": "gate"}, "Major — a.py:9 loses a write.\n\nThe diff also exceeds the 150-line limit.\n\nVERDICT: FAIL")
         before = list(sent)
         emitted = []
         with patch.object(lane.journal, "emit", lambda event, *a, **kw: emitted.append(kw)):
             fresh = {}
-            exact(act(40, heads[0], fresh, **over), "parked")
+            exact(act(40, heads[0], fresh, verdict=sized), "parked")
             files = None
-            exact(act(40, heads[0], fresh, **over), "parked")
+            exact(act(40, heads[0], fresh, verdict=sized), "parked")
         exact((parked, sent, fresh[f"size:{repo}#40:{heads[0]}"]), ([40, 40], before, "recut"))
         exact([row.get("class") for row in emitted if row.get("verdict") == "FAIL"], ["size"])
         exact(lane.route_for("size"), "recut")
         exact(lane.route_for("logic"), "today")
-        # A partial pull request, an unreadable file list and a small pull
-        # request keep today's fix round.
         files = [{"filename": "a.py", "status": "modified", "additions": 200, "deletions": 0}]
-        act(41, heads[0], {}, body="Partial: yes\n\n## Left for later\n\nthe rest", **over)
+        act(41, heads[0], {}, verdict=sized, body="Partial: yes\n\n## Left for later\n\nthe rest")
+        act(42, heads[0], {}, verdict=buggy)
+        act(43, heads[0], {}, verdict=sized, issue_labels=["type:large"])
+        act(44, heads[0], {}, verdict=sized, labels=["gate:whole"])
+        files = [{"filename": "a.py", "status": "modified", "additions": 20, "deletions": 0}]
+        act(45, heads[0], {}, verdict=sized)
         files = None
-        act(42, heads[0], {}, **over)
-        act(43, heads[0], {}, additions=20, deletions=0, changedFiles=1)
-        exact((parked, sent[len(before):]), ([40, 40], [f"fix:{repo}#{n}:{heads[0]}" for n in (41, 42, 43)]))
+        act(46, heads[0], {}, verdict=sized)
+        exact((parked, sent[len(before):]), ([40, 40], [f"fix:{repo}#{n}:{heads[0]}" for n in range(41, 47)]))
 
         check_pass = f"CHECK: PASS {heads[2]}"
         none_line = f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
