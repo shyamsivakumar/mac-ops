@@ -1,7 +1,8 @@
 """The gate second pass: a cheap model scores each critical or major finding against the severity bar.
 
-A FAIL report whose every critical or major finding scores below `KEEP_AT` is
-rewritten to PASS. Any failure to score leaves the report as it was.
+Findings scored below `KEEP_AT` are removed from the report; with none left the
+VERDICT reads PASS. A FAIL CHECK or PROVIDES line, or any failure to score,
+leaves the report as it was.
 """
 
 import json
@@ -12,7 +13,7 @@ import gate_policy
 import models
 from gate_bar import SEVERITY_BAR
 
-KEEP_AT = 5
+KEEP_AT = 7
 LEAD = re.compile(r"(Critical|Major)\b")
 SCORES = re.compile(r"\[[\d,\s]*\]")
 
@@ -25,22 +26,12 @@ Reply with only a JSON list of {count} integers, one per finding, in order.
 
 
 def findings_of(report):
-    parsed = [
-        f["text"]
-        for f in gate_policy.read_verdict(report)[1]
-        if f.get("severity") in ("critical", "major")
-    ]
-    return parsed or [
-        p.strip() for p in re.split(r"\n\s*\n", report) if LEAD.match(p.strip())
-    ]
+    return [f for f in gate_policy.read_verdict(report)[1] if f.get("severity") in ("critical", "major")] or [
+        {"text": p.strip()} for p in re.split(r"\n\s*\n", report) if LEAD.match(p.strip())]
 
 
 def scores_for(findings, call):
-    prompt = ASK.format(
-        bar=SEVERITY_BAR,
-        count=len(findings),
-        findings="\n".join(f"{i + 1}. {t}" for i, t in enumerate(findings)),
-    )
+    prompt = ASK.format(bar=SEVERITY_BAR, count=len(findings), findings="\n".join(f"{i + 1}. {f['text']}" for i, f in enumerate(findings)))
     try:
         found = SCORES.search(call(prompt) or "")
         scores = json.loads(found.group(0)) if found else None
@@ -49,25 +40,32 @@ def scores_for(findings, call):
     return scores if isinstance(scores, list) and len(scores) == len(findings) else None
 
 
+def without(report, dropped):
+    data = gate_policy.parse_verdict(report)
+    if not data:
+        for finding in dropped:
+            report = report.replace(finding["text"], "", 1)
+        return report
+    block = json.dumps({**data, "findings": [f for f in data["findings"] if f not in dropped]})
+    return gate_policy.JSON_BLOCK.sub(lambda m: "```json\n" + block + "\n```", report)
+
+
 def score_findings(report, call):
-    """Return (report, dropped titles); the report is rewritten only when every critical or major finding scores below the bar."""
-    findings = (
-        findings_of(report) if gate_policy.read_verdict(report)[0] == "FAIL" else []
-    )
-    scores = scores_for(findings, call) if findings else None
-    if scores is None or any(s >= KEEP_AT for s in scores):
+    """Return (report, dropped titles). A report with a FAIL CHECK or PROVIDES line is returned as it was."""
+    if gate_policy.read_verdict(report)[0] != "FAIL" or re.search(r"(?m)^(CHECK|PROVIDES): FAIL", report):
         return report, []
-    titles = [f.splitlines()[0][:160] for f in findings]
-    passed = re.sub(
-        r'("verdict":\s*)"FAIL"',
-        r'\1"PASS"',
-        re.sub(r"(?m)^(CHECK|PROVIDES|VERDICT): FAIL", r"\1: PASS", report),
-    )
-    note = (
-        "Second pass scored these below the merge bar and dropped them:\n"
-        + "\n".join(f"- {t}" for t in titles)
-    )
-    return f"{note}\n\n{passed}", titles
+    findings = findings_of(report)
+    scores = scores_for(findings, call) if findings else None
+    if scores is None:
+        return report, []
+    dropped = [f for f, s in zip(findings, scores) if s < KEEP_AT]
+    if not dropped:
+        return report, []
+    report = without(report, dropped)
+    if len(dropped) == len(findings):
+        report = re.sub(r'("verdict":\s*)"FAIL"', r'\1"PASS"', re.sub(r"(?m)^VERDICT: FAIL", "VERDICT: PASS", report))
+    titles = [f["text"].splitlines()[0][:160] for f in dropped]
+    return "Second pass scored these below the merge bar and dropped them:\n" + "\n".join(f"- {t}" for t in titles) + "\n\n" + report, titles
 
 
 def pi_call(prompt):
