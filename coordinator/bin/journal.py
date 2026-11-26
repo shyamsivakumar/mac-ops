@@ -15,6 +15,7 @@ against GitHub catches the missing line.
 import fcntl
 import functools
 import glob
+import hashlib
 import json
 import os
 import re
@@ -106,6 +107,78 @@ def installation_receipt():
 
 def installed_sha():
     return installation_receipt().get("source_sha")
+
+
+_NOTED = set()
+
+
+def _note(message):
+    if message not in _NOTED:
+        _NOTED.add(message)
+        print(f"journal: {message}", file=sys.stderr)
+
+
+def _valid_experiments(entries):
+    kept = {}
+    for entry in entries if isinstance(entries, list) else []:
+        ok = (isinstance(entry, dict) and isinstance(entry.get("name"), str)
+              and entry.get("side") in ("builder", "gate")
+              and isinstance(entry.get("split"), (int, float)) and not isinstance(entry["split"], bool))
+        if not ok:
+            _note(f"experiment skipped, needs a name, a side of builder or gate and a numeric split: {entry!r}")
+        elif entry["side"] in kept:
+            _note(f"experiment {entry['name']} refused, {kept[entry['side']]['name']} is already active on side {entry['side']}")
+        else:
+            kept[entry["side"]] = entry
+    return list(kept.values())
+
+
+def factory_experiments():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for candidate in (os.path.join(here, "..", "config", "factory.json"), os.path.expanduser("~/.coordinator/factory.json")):
+        if os.path.exists(candidate):
+            try:
+                with open(candidate) as fh:
+                    return _valid_experiments(json.load(fh).get("experiments", []))
+            except (OSError, ValueError, AttributeError) as exc:
+                _note(f"{candidate} unreadable, no experiment registered: {exc}")
+                return []
+    return []
+
+
+def arm_for(cluster_root, experiment):
+    if not experiment:
+        return "control"
+    bucket = int(hashlib.sha256((experiment["name"] + cluster_root).encode()).hexdigest(), 16) % 100
+    return "treatment" if bucket < experiment["split"] else "control"
+
+
+def arms_for(cluster_root):
+    sides = {"builder": "arm", "gate": "gate_arm"}
+    return {sides[e["side"]]: arm_for(cluster_root, e) for e in factory_experiments()}
+
+
+def assigned_arm(repo, ticket, gate=False):
+    if not factory_experiments():
+        return None
+    try:
+        number = int(ticket)
+    except (TypeError, ValueError):
+        return None
+    for path in sorted(glob.glob(os.path.join(journal_dir(), "events-*.jsonl")), reverse=True):
+        try:
+            with open(path) as fh:
+                lines = fh.readlines()
+        except (OSError, ValueError):
+            continue
+        for line in reversed(lines):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("event") == "assigned" and row.get("repo") == repo and row.get("ticket") == number:
+                return (row.get("data") or {}).get("gate_arm") if gate else row.get("arm")
+    return None
 
 
 def emit(event, actor, **fields):

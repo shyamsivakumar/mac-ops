@@ -146,10 +146,11 @@ def refuse_start(message, args, tool, label):
 
 def journal_item(event, item, **fields):
     args = item.get("args") or {}
+    ids = journal.parse_request_id(args.get("clientRequestId"))
     row = {"item": item["id"], "thread": args.get("threadId"), "tool": item.get("tool"),
            "title": journal_title(item.get("title")),
            "model": (args.get("modelSelection") or {}).get("model"), "model_source": "requested",
-           **journal.parse_request_id(args.get("clientRequestId")), **fields}
+           **ids, "arm": item.get("arm") or journal.assigned_arm(ids["repo"], ids["ticket"]), **fields}
     journal.emit(event, "coordq", **row)
 
 
@@ -3151,8 +3152,11 @@ def cmd_gatekeep(a):
                       flush=True)
                 if a.dry_run:
                     continue
+                ids = journal.parse_request_id(key)
+                gate_arm = journal.assigned_arm(ids["repo"], event.get("scopeIssue"), gate=True)
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
-                        "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", [])}
+                        "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", []),
+                        **({"arm": gate_arm} if gate_arm else {})}
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
@@ -3163,7 +3167,7 @@ def cmd_gatekeep(a):
                 journal.emit("gate_queued", "gatekeep", item=item["id"],
                              reviewer=args["modelSelection"]["model"],
                              model=args["modelSelection"]["model"], model_source="requested",
-                             size=size, **journal.parse_request_id(key))
+                             size=size, **ids, arm=gate_arm)
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
