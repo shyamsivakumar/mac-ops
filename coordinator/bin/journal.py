@@ -15,6 +15,7 @@ against GitHub catches the missing line.
 import fcntl
 import functools
 import glob
+import hashlib
 import json
 import os
 import re
@@ -106,6 +107,43 @@ def installation_receipt():
 
 def installed_sha():
     return installation_receipt().get("source_sha")
+
+
+def factory_experiments():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for candidate in (os.path.join(here, "..", "config", "factory.json"), os.path.expanduser("~/.coordinator/factory.json")):
+        if os.path.exists(candidate):
+            with open(candidate) as fh:
+                return json.load(fh).get("experiments", [])
+    return []
+
+
+def arm_for(cluster_root, experiment):
+    if not experiment:
+        return "control"
+    bucket = int(hashlib.sha256((experiment["name"] + cluster_root).encode()).hexdigest(), 16) % 100
+    return "treatment" if bucket < experiment["split"] else "control"
+
+
+def arms_for(cluster_root):
+    sides = {"builder": "arm", "gate": "gate_arm"}
+    return {sides[e["side"]]: arm_for(cluster_root, e) for e in factory_experiments()}
+
+
+def assigned_arm(repo, ticket, gate=False):
+    if not ticket or not factory_experiments():
+        return None
+    for path in sorted(glob.glob(os.path.join(journal_dir(), "events-*.jsonl")), reverse=True):
+        with open(path) as fh:
+            lines = fh.readlines()
+        for line in reversed(lines):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("event") == "assigned" and row.get("repo") == repo and row.get("ticket") == int(ticket):
+                return row["data"].get("gate_arm") if gate else row["arm"]
+    return None
 
 
 def emit(event, actor, **fields):
