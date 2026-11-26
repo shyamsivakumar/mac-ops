@@ -154,3 +154,54 @@ continue
 ```
 
 The four cases above (A/A, treatment better, control better, two experiments) were rerun after this change with the same results, and the replacement proof command still ends in `no difference`.
+
+## Control tickets never merge (60 vs 35 percent PASS)
+
+The mirror of the case above. Control passes the gate more often, but only
+treatment ticket numbers carry a `merged` row, so control has no observed
+merge time and `control wins` is withheld too. Past the target (260, 300
+assigned) the decision is `no difference`:
+
+```text
+control: 150 tickets in 100 clusters, first-gate PASS 62.7%
+treatment: 150 tickets in 100 clusters, first-gate PASS 35.3%
+target 260 tickets, 300 assigned
+gap -27.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+time to merge: not enough merges
+no difference
+```
+
+Same journal with `--target 400` (300 is past half but short of the target):
+
+```text
+target 400 tickets, 300 assigned
+gap -27.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+time to merge: not enough merges
+continue
+```
+
+`coordinator/bin/scorecard` at the previous head prints `control wins` for both
+of those runs. A winner needs an observed merge time in both arms, so neither
+arm can win on first-gate PASS results alone.
+
+## Decision rule cases
+
+`decide(p, gap, tickets, target, merge_ok)` is the whole stopping rule. The
+twelve cases below are asserted against the function, so each branch is named
+rather than inferred from a journal:
+
+```text
+ok   past target, merges ok -> treatment wins
+ok   past target, merges unknown -> no difference
+ok   treatment over the 15 percent limit -> no difference
+ok   interim, merges unknown -> continue
+ok   past target, control better, merges ok -> control wins
+ok   past target, control better, merges unknown -> no difference
+ok   interim, control better, merges unknown -> continue
+ok   tie at the target -> no difference
+ok   tie at interim -> continue
+ok   below half of the target -> continue
+ok   interim p cutoff not reached -> continue
+ok   final p cutoff not reached -> no difference
+all 12 decide() cases hold
+```

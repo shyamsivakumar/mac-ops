@@ -674,13 +674,11 @@ def decide(p, gap, tickets, target, merge_ok):
         return "continue"
     if p >= threshold:
         return "no difference" if tickets >= target else "continue"
-    if gap < 0:
-        return "control wins"
-    if merge_ok:
-        return "treatment wins"
-    if merge_ok is None and tickets < target:
-        return "continue"
-    return "no difference"
+    if gap == 0 or merge_ok is None:
+        return "no difference" if tickets >= target else "continue"
+    if gap > 0:
+        return "treatment wins" if merge_ok else "no difference"
+    return "control wins"
 
 
 def median_wait(clusters):
@@ -696,8 +694,8 @@ def cmd_compare(args):
     target = args.target or (experiment or {}).get("target") or DEFAULT_TARGET
     if not arms["control"] or not arms["treatment"]:
         missing = [name for name in ("control", "treatment") if not arms[name]]
-        sys.exit(f"compare: no {' or '.join(missing)} assignments for {args.experiment} in the journal"
-                 + ("; register an experiment in coordinator/config/factory.json" if len(missing) == 2 else ""))
+        hint = "; register an experiment in coordinator/config/factory.json" if not experiment else ""
+        sys.exit(f"compare: no {' or '.join(missing)} assignments for {args.experiment} in the journal" + hint)
     control, treatment = list(arms["control"].values()), list(arms["treatment"].values())
     count = {name: sum(len(items) for items in group) for name, group in (("control", control), ("treatment", treatment))}
     gap, p = pass_rate(treatment) - pass_rate(control), bootstrap_p(control, treatment)
