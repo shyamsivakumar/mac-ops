@@ -11,7 +11,7 @@ from typing import Any
 
 from . import __version__
 from .board_io import read_reviewer_instructions
-from .bundles import default_seed_bundles, load_manifest, write_manifest
+from .bundles import default_seed_bundles, bundles_kept_from, load_manifest, write_manifest
 from .history import compute_loop_stats
 from .metrics import aggregate_scorecard
 from .retrospective import summarize_retrospective_flips
@@ -23,8 +23,9 @@ def _pkg_manifest() -> Path:
 
 
 def cmd_freeze(args: argparse.Namespace) -> int:
-    bundles = default_seed_bundles()
     out = Path(args.out)
+    bundles = default_seed_bundles()
+    bundles += bundles_kept_from(out, bundles)
     write_manifest(out, bundles)
     print(f"Wrote {len(bundles)} bundles to {out}")
     return 0

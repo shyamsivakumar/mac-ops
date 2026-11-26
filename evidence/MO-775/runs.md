@@ -55,3 +55,21 @@ python3 -c "import json; m=json.load(open('reviewer_audit/manifest.json')); prin
 | 2379 | 3f2907a82da3ab9d6fe894528636ead5075d09df | #2375 | one coder yes + file:line in diff | 1.0 | ticket: oldest recorded edit (all 2 edits are after the gate); PR body: oldest recorded edit (all 2 edits are after the gate); own proof: none |
 | 2170 | 25a928b52771e112754446c4b0c84b7225a56dcc | #2143 | one coder yes + file:line in diff | 1.0 | ticket: never edited; PR body: edit 3 of 4 as of gate time; 1 later edits; own proof: none |
 | 2353 | e45f09604e93146a067e1396ddd0db863f6b1eaa | #2318 | one coder yes + file:line in diff | 1.0 | ticket: oldest recorded edit (all 4 edits are after the gate); PR body: oldest recorded edit (all 6 edits are after the gate); own proof: none |
+
+## Scorer and refreeze proof
+
+Scorecard, deterministic, same 49-bundle manifest, temp COORDQ_DIR and COORD_JOURNAL_DIR:
+
+```
+heavy python3 -m reviewer_audit scorecard --deterministic --manifest <manifest> --out <scratch>
+```
+
+- origin/main code (04af24c1): exit 1, `FileNotFoundError: .../.herdr-projects/data/tasks/dbt/3/task.json` (read_task on a bundle whose board task file is gone; the pr<N> ids fail the same way).
+- This branch: exit 0, `Scorecard: 49 bundles, pairwise flip 0.0%, incomplete 0, recall 0.9888888888888888, false blocks 1/7, loops median/p90 2.0/6.0`. Recall 0.99 is the saved-review replay and is not a gate score.
+
+Refreeze into a scratch copy of the manifest (`python3 -m reviewer_audit freeze --out <scratch copy>`; the repo manifest is not written):
+
+- Result: `Wrote 49 bundles`, 42 with expected_pass false.
+- The current manifest's bundles that the seeds do not rebuild are kept, and one stderr line names each (dbt-3--r1 and the 26 holdout bundles; two shown here: pr2170 and pr2353 are among the 27 lines).
+- Code: `board_io.read_task` returns {} on FileNotFoundError only; `bundles_kept_from` in bundles.py; the call in `cmd_freeze`. 18 code lines in 3 files.
+- Caveat: a seed whose rebuilt bundle id changes with board drift would be kept twice (old id and new id). The stderr lines make that visible.
