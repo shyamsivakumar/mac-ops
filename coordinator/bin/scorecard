@@ -614,12 +614,25 @@ def build(day, live, backfill, bad_lines, github, window_closed, repos, cost_sou
 INTERIM_P, FINAL_P, SLOWER_LIMIT, BOOTSTRAP_DRAWS = 0.005, 0.048, 1.15, 4000
 
 
-def arm_outcomes(rows, side):
+NAME_FIELD = {"builder": "experiment", "gate": "gate_experiment"}
+DEFAULT_TARGET = 260
+
+
+def experiment_side(rows, name):
+    for side, field in NAME_FIELD.items():
+        if any(row["event"] == "assigned" and data_of(row).get(field) == name for row in rows):
+            return side
+    return "builder"
+
+
+def arm_outcomes(rows, name, side):
     assigned, first = first_gate_verdicts(rows)
     arms = {}
     for row in rows:
         key = (row.get("repo"), row.get("ticket"))
         if row["event"] != "assigned" or key not in assigned or assigned[key] != row["ts"]:
+            continue
+        if data_of(row).get(NAME_FIELD[side]) != name:
             continue
         arm = data_of(row).get("gate_arm") if side == "gate" else row.get("arm") or data_of(row).get("arm")
         if arm in ("control", "treatment"):
@@ -674,7 +687,9 @@ def median_wait(clusters):
 def cmd_compare(args):
     experiment = next((e for e in journal.factory_experiments() if e["name"] == args.experiment), None)
     live, _, _ = load_journal(args.journal_dir or journal.journal_dir())
-    arms = arm_outcomes(live, experiment["side"] if experiment else "builder")
+    side = experiment["side"] if experiment else experiment_side(live, args.experiment)
+    arms = arm_outcomes(live, args.experiment, side)
+    target = args.target or (experiment or {}).get("target") or DEFAULT_TARGET
     if not arms["control"] or not arms["treatment"]:
         sys.exit(f"compare: no arm assignments for {args.experiment} in the journal, "
                  "so no experiment has run (register one in coordinator/config/factory.json)")
@@ -685,10 +700,11 @@ def cmd_compare(args):
     merge_ok = slow is None or fast is None or slow <= fast * SLOWER_LIMIT
     for name, group in (("control", control), ("treatment", treatment)):
         print(f"{name}: {count[name]} tickets in {len(group)} clusters, first-gate PASS {pass_rate(group):.1%}")
+    print(f"target {target} tickets, {sum(count.values())} assigned")
     print(f"gap {gap * 100:+.1f} points, cluster-bootstrap p {p:.4f} ({BOOTSTRAP_DRAWS} draws, seed 7)")
     print(f"time to merge median: control {fast}, treatment {slow}, " +
           ("non-inferior" if merge_ok else f"more than {SLOWER_LIMIT - 1:.0%} slower"))
-    print(decide(p, gap, sum(count.values()), args.target, merge_ok))
+    print(decide(p, gap, sum(count.values()), target, merge_ok))
 
 
 def today_ts():
@@ -887,7 +903,7 @@ def main():
     compare = commands.add_parser("compare")
     compare.add_argument("--experiment", required=True)
     compare.add_argument("--journal-dir")
-    compare.add_argument("--target", type=int, default=186)
+    compare.add_argument("--target", type=int)
     args = parser.parse_args()
     if args.command == "compare":
         cmd_compare(args)

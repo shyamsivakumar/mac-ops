@@ -154,8 +154,12 @@ def arm_for(cluster_root, experiment):
 
 
 def arms_for(cluster_root):
-    sides = {"builder": "arm", "gate": "gate_arm"}
-    return {sides[e["side"]]: arm_for(cluster_root, e) for e in factory_experiments()}
+    sides = {"builder": ("arm", "experiment"), "gate": ("gate_arm", "gate_experiment")}
+    stamp = {}
+    for e in factory_experiments():
+        arm_key, name_key = sides[e["side"]]
+        stamp.update({arm_key: arm_for(cluster_root, e), name_key: e["name"]})
+    return stamp
 
 
 def assigned_arm(repo, ticket, gate=False):
