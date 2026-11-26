@@ -1529,6 +1529,39 @@ def build_start(cfg, t, attempt, issue):
     return request_id, command, payload
 
 
+CLUSTER_DEPTH = 5
+
+
+def cluster_root(repo, n, issue):
+    chain = [f"{repo}#{n}"]
+    current = issue
+    for depth in range(CLUSTER_DEPTH + 1):
+        try:
+            blockers = blockers_of(current)
+        except Refuse:
+            return chain[-1], "unreadable"
+        if not blockers:
+            return chain[-1], None
+        if depth == CLUSTER_DEPTH:
+            return chain[-1], "depth"
+        ref = f"{blockers[0]['repo']}#{blockers[0]['number']}"
+        if ref in chain:
+            return min(chain[chain.index(ref):]), "cycle"
+        chain.append(ref)
+        try:
+            current = fetch_issue(blockers[0]["repo"], blockers[0]["number"])
+        except GhError:
+            return ref, "unreadable"
+
+
+def cluster_stamp(repo, n, issue):
+    if not journal.factory_experiments():
+        return {"arm": os.environ.get("COORD_ARM")}
+    root, note = cluster_root(repo, n, issue)
+    stamp = {"cluster": root, "cluster_note": note, **journal.arms_for(root)}
+    return {**stamp, "arm": os.environ.get("COORD_ARM") or stamp.get("arm")}
+
+
 def with_ticket_lock(repo, n):
     os.makedirs(CACHE_DIR, exist_ok=True)
     f = open(os.path.join(CACHE_DIR, f"start-{repo.replace('/', '_')}-{n}.lock"), "w")
@@ -1596,8 +1629,9 @@ def cmd_start(a):
         if a.print_brief:
             print("brief:\n" + brief)
         return
+    stamp = cluster_stamp(repo, n, issue)
     if attempt == 1:
-        journal.emit("assigned", "ticket", repo=repo, ticket=n, attempt=attempt, arm=os.environ.get("COORD_ARM"))
+        journal.emit("assigned", "ticket", repo=repo, ticket=n, attempt=attempt, **stamp)
     post_comment(repo, n, intent_text)
     try:
         result = run(command, COORDQ_TIMEOUT)
@@ -1608,7 +1642,7 @@ def cmd_start(a):
     output = result.stdout.strip()
     print(output)
     journal.emit("ticket_started", "ticket", builder=t["builderAlias"], reviewer=t["reviewerAlias"],
-                 taskType=payload.get("taskType"), coordq=output, **journal.parse_request_id(request_id))
+                 taskType=payload.get("taskType"), coordq=output, **stamp, **journal.parse_request_id(request_id))
     receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "coordq": output}
     receipt_text = f"{t['key']} attempt {attempt}: coordq says \"{output}\".\n\n{machine_line(receipt)}"
     posted = False
