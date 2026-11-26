@@ -8,6 +8,7 @@ the reviewer reads the record of the checks instead of one claimed line.
 """
 import argparse
 import ast
+from fnmatch import fnmatch
 import importlib.util
 from collections import Counter
 from importlib.machinery import SourceFileLoader
@@ -49,6 +50,7 @@ RUFF_RULES = "F,B"
 # mypy checks these modules only; each one is added once it is clean.
 MYPY_TARGETS = ("board_resources.py",)
 RUFF_BASELINE = "scripts/ruff-baseline.txt"
+FINDING_RULES = "scripts/finding_rules.json"
 
 
 class NotRun(Exception):
@@ -213,6 +215,19 @@ def check_mypy():
         raise RuntimeError(f"{len(errors)} mypy errors; first: {errors[0]}")
     detail = (result.stderr or result.stdout).strip().splitlines()
     raise RuntimeError(f"mypy exited {result.returncode}: {detail[0] if detail else 'no output'}")
+
+
+def check_finding_rules(paths, rules=None):
+    if rules is None:
+        rules = json.loads((ROOT / FINDING_RULES).read_text())
+    found = []
+    for rule in rules:
+        for path in paths:
+            if fnmatch(str(path), rule["paths"]) and (ROOT / path).is_file():
+                text = (ROOT / path).read_text(errors="replace")
+                if re.search(rule["pattern"], text):
+                    found.append(f"{rule['id']}: {rule['message']} ({path})")
+    return found
 
 
 def git(*args):
@@ -713,6 +728,14 @@ def main():
     ruff = ruff_command()
     proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
     proof.check("mypy", shlex.join(mypy_command()), check_mypy)
+    changed_files = sorted(name for name in changes if (ROOT / name).is_file())
+
+    def finding_rules():
+        found = check_finding_rules(changed_files)
+        if found:
+            raise AssertionError("; ".join(found))
+
+    proof.check("finding rules", "check_finding_rules(changed files)", finding_rules)
 
     scratch = isolation.make_dir("heavy-queue-tlc-")
     model_dir = ROOT / "formal" / "heavy-queue"
