@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -378,6 +379,16 @@ def default_seed_bundles(tasks_root: Path | None = None) -> list[ReviewBundle]:
         if len(bundles) >= 24:
             break
     return bundles
+
+
+def bundles_kept_from(path: Path, rebuilt: list[ReviewBundle]) -> list[ReviewBundle]:
+    if not path.is_file():
+        return []
+    seen = {b.bundle_id for b in rebuilt}
+    kept = [b for b in load_manifest(path)[1] if b.bundle_id not in seen]
+    for b in kept:
+        print(f"kept from current manifest, not rebuilt: {b.bundle_id}", file=sys.stderr)
+    return kept
 
 
 def write_manifest(path: Path, bundles: list[ReviewBundle]) -> None:
