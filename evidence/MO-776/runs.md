@@ -116,7 +116,7 @@ These cases all print the output below and exit 1:
 
 <!-- markdownlint-disable MD013 -->
 ```text
-compare: no arm assignments for zz in the journal, so no experiment has run (register one in coordinator/config/factory.json)
+compare: no control or treatment assignments for zz in the journal; register an experiment in coordinator/config/factory.json
 rc=1
 ```
 <!-- markdownlint-enable MD013 -->
@@ -130,3 +130,27 @@ rc=1
 {'arm': 'control', 'experiment': 'b1', 'gate_arm': 'control', 'gate_experiment': 'g1'}
 ```
 <!-- markdownlint-enable MD013 -->
+
+## Treatment tickets never merge (35 vs 60 percent PASS)
+
+Treatment passes the gate more often but has no merged row, so `treatment wins` is withheld. Past the target (260, 300 assigned) the decision is `no difference`:
+
+```
+control: 150 tickets in 100 clusters, first-gate PASS 36.0%
+treatment: 150 tickets in 100 clusters, first-gate PASS 55.3%
+target 260 tickets, 300 assigned
+gap +19.3 points, cluster-bootstrap p 0.0010 (4000 draws, seed 7)
+time to merge: not enough merges
+no difference
+```
+
+Same journal with `--target 400` (300 is past half but short of the target):
+
+```
+target 400 tickets, 300 assigned
+gap +19.3 points, cluster-bootstrap p 0.0010 (4000 draws, seed 7)
+time to merge: not enough merges
+continue
+```
+
+The four cases above (A/A, treatment better, control better, two experiments) were rerun after this change with the same results, and the replacement proof command still ends in `no difference`.
