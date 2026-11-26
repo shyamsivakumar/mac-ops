@@ -153,6 +153,12 @@ def arm_for(cluster_root, experiment):
     return "treatment" if bucket < experiment["split"] else "control"
 
 
+def treatment_names(arm, side, name):
+    return arm == "treatment" and any(
+        e["side"] == side and name in (e.get("names") if isinstance(e.get("names"), list) else [])
+        for e in factory_experiments())
+
+
 def arms_for(cluster_root):
     sides = {"builder": "arm", "gate": "gate_arm"}
     return {sides[e["side"]]: arm_for(cluster_root, e) for e in factory_experiments()}
