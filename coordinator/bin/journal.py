@@ -170,10 +170,13 @@ def factory_state(state_dir=None):
     return state
 
 
-def promotion_open(entry, now):
+def has_promotion(entry):
     return (isinstance(entry, dict) and entry.get("state") == "promoted"
-            and isinstance(entry.get("promoted_at"), (int, float)) and not isinstance(entry["promoted_at"], bool)
-            and now < entry["promoted_at"] + PROMOTION_DAYS * 86400)
+            and isinstance(entry.get("promoted_at"), (int, float)) and not isinstance(entry["promoted_at"], bool))
+
+
+def promotion_open(entry, now):
+    return has_promotion(entry) and now < entry["promoted_at"] + PROMOTION_DAYS * 86400
 
 
 def _bucket(salt, cluster_root):
@@ -185,7 +188,9 @@ def arm_for(cluster_root, experiment, state_dir=None, now=None):
         return "control"
     name = experiment["name"]
     entry = (factory_state(state_dir) or {}).get(name)
-    if isinstance(entry, dict) and entry.get("state") == "promoted" and isinstance(entry.get("promoted_at"), (int, float)):
+    if isinstance(entry, dict) and entry.get("state") == "undone":
+        return "control"
+    if has_promotion(entry):
         held_back = promotion_open(entry, now or time.time()) and _bucket("holdback:" + name, cluster_root) < HOLDBACK_PERCENT
         return "control" if held_back else "treatment"
     return "treatment" if _bucket(name, cluster_root) < experiment["split"] else "control"

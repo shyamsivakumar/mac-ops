@@ -28,7 +28,7 @@ registered: []
 state.json exists: False | journal rows: [] | board: [] | ledger: {}
 == 2. builder win: promote, card, 20 percent holdback
 PROMOTION exp-b promoted, undo card raised
-state: {'exp-b': {'state': 'promoted', 'promoted_at': 1795727464.628969, 'holdback_percent': 20}}
+state: {'exp-b': {'state': 'promoted', 'promoted_at': 1795734094.199669, 'holdback_percent': 20}}
 board: ['promoted-exp-b'] | journal: ['experiment_promoted', 'alarm_raised']
 control share before promotion 0.497, after 0.205, stable across calls: True
 control share at day 13: 0.205, at day 15: 0.000
@@ -39,9 +39,9 @@ promote exp-c while exp-b is inside 14 days -> None | state keys: ['exp-b'] | jo
 promote exp-c at day 15 -> card
 == 4. undo drill, timed end to end
 PROMOTION exp-b promoted, undo card raised
-promoted control share 0.205, after undo 0.497 (split 50 default restored), card removed: True
-state: {'exp-b': {'state': 'undone', 'promoted_at': 1795727465.0124319, 'holdback_percent': 20, 'undone_at': 1795727465.0819242}} | journal: ['experiment_promoted', 'alarm_raised', 'experiment_undone', 'alarm_withdrawn']
-promote to undo took 0.07 s of lane time (limit 300 s)
+promoted control share 0.205, after undo 1.000, card removed: True
+state: {'exp-b': {'state': 'undone', 'promoted_at': 1795734094.45856, 'holdback_percent': 20, 'undone_at': 1795734094.505281}} | journal: ['experiment_promoted', 'alarm_raised', 'experiment_undone', 'alarm_withdrawn']
+promote to undo took 0.05 s of lane time (limit 300 s)
 CLI undo on an already undone experiment: exp-b is not promoted 
 == 5. gate-side win raises a card only
 PROMOTION exp-g is gate-side, board card raised
@@ -55,3 +55,5 @@ PROMOTION exp-b promoted, undo card raised
 PROMOTION exp-b undone, control wins on the holdback
 state: undone | board: [] | journal: ['experiment_promoted', 'alarm_raised', 'experiment_undone', 'alarm_withdrawn']
 ```
+
+After an undo the experiment is over and every new cluster gets control (share 1.000, asserted in the drill); re-registering under a new name restarts it.
