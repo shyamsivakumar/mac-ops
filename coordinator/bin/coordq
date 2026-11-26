@@ -2617,8 +2617,9 @@ def gate_allowed(state, required):
     return not required or state in PROOF_PASSING
 
 
-def proof_required(settings):
-    return bool(settings.get("proofRequired") or os.environ.get("COORD_PROOF_REQUIRED"))
+def proof_required(settings, arm=None):
+    required = bool(settings.get("proofRequired") or os.environ.get("COORD_PROOF_REQUIRED"))
+    return required or journal.treatment_names(arm, "builder", "proof_required")
 
 
 def proof_text(kept):
@@ -2664,6 +2665,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     heads proved by one gatekeep run, so one run proves one head.
     """
     queue = load()
+    arm = journal.assigned_arm(repo, event.get("scopeIssue"))
     heads = queue.get("proofHeads", {})
     kept = heads.get(key)
     if key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
@@ -2671,7 +2673,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     head = event["head"]
     card_id = f"proof-{settings['key']}-{number}"
     carded = [name for name, row in heads.items() if row.get("carded") and row["pr"] == event["pr"]]
-    blocked = bool(kept) and not gate_allowed(kept["state"], proof_required(settings))
+    blocked = bool(kept) and not gate_allowed(kept["state"], proof_required(settings, arm))
     if kept and not blocked:
         if not drop_scope_card(card_id, carded, dry_run, "proofHeads"):
             return None
@@ -2706,13 +2708,13 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
         kept = {"state": state, "tail": tail, "pr": event["pr"], "body": digest,
                 "at": time.time(), "fetched": fetched,
                 "carded": bool(kept and kept["carded"]) and (
-                    kept["state"] == state or gate_allowed(state, proof_required(settings)))}
+                    kept["state"] == state or gate_allowed(state, proof_required(settings, arm)))}
         with Lock(True):
             queue = load()
             queue.setdefault("proofHeads", {})[key] = kept
             save(queue)
         journal.emit("proof_run", "gatekeep", state=state, **journal.parse_request_id(key))
-        if gate_allowed(state, proof_required(settings)):
+        if gate_allowed(state, proof_required(settings, arm)):
             if state == "green":
                 write_replay(REPLAY_DIR, f"{settings['key']}-{event['scopeIssue']}", body, cmd, head)
             if not drop_scope_card(card_id, carded, dry_run, "proofHeads"):
@@ -2783,7 +2785,8 @@ def scope_issue(event_issue, body):
 def scope_gate(settings, repo, number, event, key, dry_run):
     """True when this head may go on to its gate, False when it gets none this run."""
     queue = load()
-    if not proof_required(settings) or key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
+    arm = journal.assigned_arm(repo, event.get("scopeIssue"))
+    if not proof_required(settings, arm) or key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), key):
         return True
     heads = queue.get("scopeHeads", {})
     kept = heads.get(key)
