@@ -644,7 +644,6 @@ def pass_rate(clusters):
 
 def bootstrap_p(control, treatment, seed=7):
     rng = random.Random(seed)
-    gap = pass_rate(treatment) - pass_rate(control)
     below = above = 0
     for _ in range(BOOTSTRAP_DRAWS):
         draw = pass_rate(rng.choices(treatment, k=len(treatment))) - pass_rate(rng.choices(control, k=len(control)))
