@@ -593,6 +593,66 @@ class ScopeTest(unittest.TestCase):
         check = close_check()
         self.assertEqual(check.scope_tokens("In: MyDockerfile.py"), {"MyDockerfile.py"})
 
+    def test_a_ticket_can_name_a_swift_file(self):
+        # The shape of the ticket that found this: an iOS ticket declares the
+        # component it changes by its bare name, and the changed path carries
+        # the package directory in front of it.
+        check = close_check()
+        ticket = ("## Scope and non-goals\n\n"
+                  "Change only the platform option list in TRSourceImportSheet.swift and record "
+                  "the deliberate Studio departure in docs/DESIGN.md.")
+        tokens = check.scope_tokens(ticket)
+        self.assertIn("TRSourceImportSheet.swift", tokens)
+        self.assertTrue(check.names_a_scope(tokens))
+        path = ("Packages/TuneriseDesign/Sources/TuneriseDesign/Components/"
+                "TRSourceImportSheet.swift")
+        ok, why = check.in_scope(path, tokens)
+        self.assertTrue(ok, why)
+
+    def test_a_swift_file_the_ticket_never_names_stays_out(self):
+        check = close_check()
+        item = check.item_scope("In: the add-source sheet: TRSourceImportSheet.swift.",
+                                ["App/Shared/HomeView.swift", "TRSourceImportSheet.swift"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("App/Shared/HomeView.swift", item["detail"])
+
+    def test_an_excluded_swift_file_is_not_a_permission(self):
+        check = close_check()
+        ticket = "In: the sources list: src/. Out: HomeView.swift."
+        item = check.item_scope(ticket, ["src/HomeView.swift"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("the ticket excludes it", item["detail"])
+
+    def test_a_longer_name_does_not_permit_the_swift_file(self):
+        check = close_check()
+        for ticket in ("In: the new template: Foo.swift.template.",
+                       "In: the template directory: Foo.swift/assets/."):
+            with self.subTest(ticket=ticket):
+                item = check.item_scope(ticket, ["App/Foo.swift"])
+                self.assertEqual(item["status"], check.FAIL)
+                self.assertNotIn("Foo.swift", check.scope_tokens(ticket))
+
+    def test_a_url_query_does_not_permit_the_swift_file(self):
+        check = close_check()
+        ticket = "In: the issue: https://example.org/?file=Foo.swift"
+        item = check.item_scope(ticket, ["App/Foo.swift"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertEqual(check.scope_tokens(ticket), set())
+
+    def test_a_sentence_ending_after_the_name_still_names_it(self):
+        check = close_check()
+        ticket = "In: the sheet: TRSourceImportSheet.swift."
+        self.assertEqual(check.scope_tokens(ticket), {"TRSourceImportSheet.swift"})
+
+    def test_a_bold_name_still_permits_the_file(self):
+        check = close_check()
+        item = check.item_scope("In: **Foo.swift** and docs/x.md", ["App/Foo.swift", "docs/x.md"])
+        self.assertEqual(item["status"], "pass")
+
+    def test_a_trailing_hyphen_still_names_the_file(self):
+        check = close_check()
+        self.assertEqual(check.scope_tokens("In: Foo.swift-only"), {"Foo.swift"})
+
 
 class DiffValuesTest(unittest.TestCase):
     """The values a change sets come from its own added lines."""
