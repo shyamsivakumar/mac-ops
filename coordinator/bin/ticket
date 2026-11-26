@@ -1487,8 +1487,12 @@ def builder_bar_section():
     return SEVERITY_BAR
 
 
+def arm(t):
+    return t.get("arm") or journal.assigned_arm(t["repo"], t["number"])
+
+
 def bar_visible(t):
-    return False
+    return journal.treatment_names(arm(t), "builder", "severity_bar")
 
 
 def assemble_brief(cfg, t, request_id, issue):
@@ -1609,6 +1613,8 @@ def cmd_start(a):
         ledger = ledger_of(issue, authed_login())
         attempt = max([e["attempt"] for e in intents(ledger)], default=0) + 1
         request_id = f"ticket:{repo}#{n}:a{attempt}"
+        stamp = cluster_stamp(repo, n, issue)
+        t["arm"] = stamp["arm"]
         brief = assemble_brief(cfg, t, request_id, issue)
         if a.print_brief and (not a.dry_run or refusal is not None):
             print(brief)
@@ -1639,7 +1645,6 @@ def cmd_start(a):
         if a.print_brief:
             print("brief:\n" + brief)
         return
-    stamp = cluster_stamp(repo, n, issue)
     if attempt == 1:
         journal.emit("assigned", "ticket", repo=repo, ticket=n, attempt=attempt, **stamp)
     post_comment(repo, n, intent_text)
