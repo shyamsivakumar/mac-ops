@@ -13,7 +13,7 @@ if _OVERNIGHT_DIR not in sys.path:
     sys.path.append(_OVERNIGHT_DIR)
 
 from gate_bar import GATE_BAR
-from gate_policy import parse_verdict, verdict
+from gate_policy import RECUT_LINES, code_size, parse_verdict, partial_state, verdict
 import close_check
 import lane_briefs
 from pr_refs import pr_ticket_refs
@@ -2252,7 +2252,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
 DEFER = object()
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main"):
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main", partial=None):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -2262,7 +2262,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     from gate_policy import build_gate_brief
     message = build_gate_brief(settings, repo, issue, number, head, publisher, base=base,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
-                               prompt=prompt)
+                               prompt=prompt, partial=partial)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"},
             "clientRequestId": key, "message": message}
@@ -2360,31 +2360,10 @@ def unreadable_ticket_reason(error, issue, body, title):
     return reason
 
 
-SIZE_EXCLUDED_PREFIXES = ("evidence/", "docs/", "evals/harbor/tasks/")
 OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
-RECUT_LINES = 300
 RECUT_RULE = 2
 GATE_WHOLE_LABEL = "gate:whole"
-
-
-def counted_code_file(f):
-    name = f["filename"]
-    base = name.rsplit("/", 1)[-1]
-    if name.startswith(SIZE_EXCLUDED_PREFIXES) or name.endswith(".md"):
-        return False
-    if "fixtures" in name.split("/") or "proof" in base:
-        return False
-    is_test = (base.startswith("test_") or base.endswith("_test.py")
-               or "selftest" in name or "tests" in name.split("/"))
-    if f.get("status") != "added" and is_test:
-        return False
-    return True
-
-
-def code_size(files):
-    code = [f for f in files if counted_code_file(f)]
-    return sum(f["additions"] + f["deletions"] for f in code), len(code)
 
 
 def gate_whole(pr):
@@ -2405,6 +2384,10 @@ def pr_size(repo, number, pr):
     lines, count = code_size(files)
     whole = gate_whole(pr)
     return {"size": size_class(files, whole), "lines": lines, "files": count, "whole": whole}
+
+
+def partial_head(repo, number, pr):
+    return partial_state(pr.get("body"), lambda: gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100"))
 
 
 def recut_item(repo_key, repo, number, head, lines, count):
@@ -2875,7 +2858,8 @@ def gate_candidates(config, rounds=None):
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
                                          prompt=prompt == prompt_paths.HOLD,
-                                         base=(pr.get("base") or {}).get("ref") or "main")
+                                         base=(pr.get("base") or {}).get("ref") or "main",
+                                         partial=partial_head(repo, number, pr))
                                          | {"clientRequestId": key}}
                 break
             else:
@@ -3231,7 +3215,8 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
                                prompt=prompt == prompt_paths.HOLD,
-                               base=(pr.get("base") or {}).get("ref") or "main"), builder_models(thread, runs)
+                               base=(pr.get("base") or {}).get("ref") or "main",
+                               partial=partial_head(repo, number, pr)), builder_models(thread, runs)
     checks = publisher_checks(repo, head, optional=optional, fresh=fresh)
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
@@ -3248,7 +3233,8 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
     return key, gate_args(settings, repo, None, number, head, publisher, model,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt == prompt_paths.HOLD,
-                           base=(pr.get("base") or {}).get("ref") or "main"), []
+                           base=(pr.get("base") or {}).get("ref") or "main",
+                           partial=partial_head(repo, number, pr)), []
 
 
 def parse_ref(ref):

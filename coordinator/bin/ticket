@@ -6,11 +6,13 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
-from gate_policy import complete_pass
+from gate_policy import complete_pass, partial_claim, partial_state
 import gh_gateway
 import journal
 from pr_refs import FENCED_BLOCK, references_issue, same_repo
 import proof_run
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "overnight"))
+import alarms
 import prompt_paths
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
@@ -50,6 +52,11 @@ BLOCKER_URL = re.compile(r"^https?://[^/]+/([^/\s#]+/[^/\s#]+)/issues/\d+")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 DECISIONS_HEADING = "## Coordinator decisions (override the body)"
+SIZE_RULE = ("Size rule: count code lines as the gate does, added plus deleted, leaving out evidence, docs, Markdown, "
+             "fixtures, proof scripts and edits to existing tests. Aim for this ticket's own cap. If the work would pass "
+             "300, stop before 300 at a point that works on its own and open the PR with `Refs #n` (never Closes or "
+             "Fixes), the line `Partial: yes` outside a code block, and the rest under `## Left for later`. Open no "
+             "issue for it; the Coordinator cuts the rest.")
 RUN_ID = re.compile(r"ticket:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+:a\d+")
 TEXT_TRIGGERS = ("only after", "build only after", "before building")
 TEXT_KEYWORDS = ("review", "approval", "verdict")
@@ -1484,7 +1491,7 @@ def assemble_brief(cfg, t, request_id, issue):
     head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
     if not filled:
         head.append(f"Run id: `{request_id}`")
-    parts = ["\n".join(head), ANSWER_FORMAT, body]
+    parts = ["\n".join(head), ANSWER_FORMAT, SIZE_RULE, body]
     decisions = coordinator_decisions(issue)
     if decisions:
         parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))
@@ -1813,13 +1820,13 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False, partial=None):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
                             fast_forward_main=False, ascend_override=ascend,
                             proof=proof, proof_path=proof_path, proof_state=proof_state,
-                            prompt=prompt)
+                            prompt=prompt, partial=partial)
 
 
 def pull_changed_count(repo, number):
@@ -1916,7 +1923,9 @@ def cmd_gate(a):
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt_hold(repo, number, pull.get("changedFiles"),
-                                              base, head))
+                                              base, head),
+                           partial=partial_state(pull.get("body"), lambda: gh_json(
+                               ["api", f"repos/{repo}/pulls/{number}/files?per_page=100"])))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
@@ -1999,6 +2008,31 @@ def builder_thread(repo, number):
     return None
 
 
+def keep_open_partial(repo, number, pr, head, merge, left):
+    issue = gh_json(["issue", "view", str(number), "-R", repo, "--json", "state,stateReason,labels,comments"])
+    marker = f"<!-- partial-merged #{pr} -->"
+    if any(marker in (c.get("body") or "") for c in issue["comments"]):
+        print(f"{repo}#{number} already has the partial record for #{pr}; nothing to do")
+        return
+    if issue["state"] == "CLOSED" and issue.get("stateReason") == "COMPLETED":
+        gh(["issue", "reopen", str(number), "-R", repo])
+    elif issue["state"] == "CLOSED":
+        print(f"{repo}#{number} was closed as {issue.get('stateReason')}, not by a merge keyword; left closed")
+    staged = [label["name"] for label in issue["labels"] if label["name"] in (STARTED_LABEL, "stage:todo")]
+    if staged:
+        swap_stage(repo, number, staged[0], "stage:backlog")
+    item = {"id": f"partial-{repo.split('/')[1]}-{number}-{pr}", "group": "Coordinator", "kind": "action",
+            "title": f"{repo}#{number} merged only a part in #{pr}: cut the rest into its own ticket",
+            "why": f"The pull request says `Partial: yes`, so {repo}#{number} stays open. Left for later: {left[:500]}"}
+    if alarms.route_update(alarms.DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+        die(f"{repo}#{number} is partial but the decisions item could not be raised; run ticket close again")
+    gh(["issue", "comment", str(number), "-R", repo, "--body",
+        f"Merged via #{pr} ({merge}) as a partial pull request, so this issue stays open.\n\n"
+        f"## Left for later\n\n{left or 'The pull request lists nothing.'}\n\n{marker}"])
+    journal.emit("partial_merged", "ticket", repo=repo, ticket=number, pr=pr, head=head, merge=merge)
+    print(f"recorded {repo}#{number}: #{pr} is partial")
+
+
 def cmd_close(a):
     repo, number = parse_ref(a.ref)
     if repo.split("/")[0] != "shyamsivakumar":
@@ -2009,6 +2043,10 @@ def cmd_close(a):
             or refs_issue(repo, pull.get("body")) != number
             or not (pull.get("mergeCommit") or {}).get("oid")):
         raise Refuse("completion requires the referenced merged PR on the exact reviewed head")
+    left = partial_claim(pull.get("body"))
+    if left is not None:
+        keep_open_partial(repo, number, a.pr, a.head, pull["mergeCommit"]["oid"], left)
+        return
     report = t3_call("t3_thread_read", {"threadId": a.gate_thread, "view": "messages",
                                       "limit": 80, "maxCharsPerItem": 12000})
     replies = [item.get("text", "").rstrip() for item in report.get("items", [])
