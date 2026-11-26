@@ -1488,7 +1488,7 @@ def builder_bar_section():
 
 
 def arm(t):
-    return t.get("arm") or journal.assigned_arm(t["repo"], t["number"])
+    return t.get("arm")
 
 
 def bar_visible(t):
