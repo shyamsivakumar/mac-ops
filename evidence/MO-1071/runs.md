@@ -37,3 +37,5 @@ climb_log.jsonl rows in the copy: 3
 ```
 
 Selftest (heavy overnight selftest): 37 PASS, 0 FAIL.
+
+Re-run on the head rebased onto mo1067-data-dir-v2 (84a00dfd) after the history scrub: help exit 0 and the four fixture runs print the same lines and exit codes as above; climb_log.jsonl rows in the copy: 3.
