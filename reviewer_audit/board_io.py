@@ -54,7 +54,10 @@ def read_task(task_id: str, tasks_root: Path | None = None) -> dict[str, Any]:
     repo, num = task_id.split("/", 1)
     root = tasks_root or DEFAULT_BOARD_TASKS
     path = root / repo / num / "task.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
 
 
 def read_closing_note(task_id: str, tasks_root: Path | None = None) -> str:

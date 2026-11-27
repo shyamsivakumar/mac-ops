@@ -38,88 +38,298 @@ Expected green on the PR head: `no difference`.
 
 ## Red on origin/main (897dced2)
 
-<!-- markdownlint-disable MD013 -->
-```text
+```
 scorecard-main: error: argument command: invalid choice: 'compare' (choose from 'backfill')
 ```
-<!-- markdownlint-enable MD013 -->
 
-## Green on the branch
+## Green on the branch (replacement proof command, full output)
 
-```text
+```
+target 260 tickets, 300 assigned
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-26T16:57-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
+time to merge: not enough merges
 no difference
 ```
 
-## Synthetic A/A, 44 vs 44 percent (experiment x)
+Cohorts: the interim cohort is the first ceil(target/2) tickets by assignment time, the final cohort is the first target. Tickets after the target are counted but never change the decision. Runs below use 300 tickets, so the final cohort (the first 260) is decided.
 
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 43.3%
-treatment: 150 tickets in 100 clusters, first-gate PASS 40.7%
+## A/A, 44 vs 44
+
+```
 target 260 tickets, 300 assigned
-gap -2.7 points, cluster-bootstrap p 0.6458 (4000 draws, seed 7)
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-29T16:50-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 no difference
 ```
 
-## Synthetic treatment better, 35 vs 60 percent
+## Treatment better, 35 vs 60
 
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 36.0%
-treatment: 150 tickets in 100 clusters, first-gate PASS 55.3%
+```
 target 260 tickets, 300 assigned
-gap +19.3 points, cluster-bootstrap p 0.0010 (4000 draws, seed 7)
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-29T16:50-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 35.4%
+treatment: 130 tickets in 87 clusters, first-gate PASS 53.8%
+gap +18.5 points, cluster-bootstrap p 0.0015 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 treatment wins
 ```
 
-## Synthetic control better, 60 vs 35 percent
+## Control better, 60 vs 35
 
-```text
-control: 150 tickets in 100 clusters, first-gate PASS 62.7%
-treatment: 150 tickets in 100 clusters, first-gate PASS 35.3%
+```
 target 260 tickets, 300 assigned
-gap -27.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-29T16:50-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 63.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 33.1%
+gap -30.8 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 control wins
 ```
 
-## Two experiments in one journal
+## Treatment tickets never merge, 35 vs 60
 
-Experiment x is A/A (44 vs 44) and y has a real effect (35 vs 60).
-Each has 300 tickets on the builder side and counts only its own.
-
-```text
---experiment x
-control: 150 tickets in 100 clusters, first-gate PASS 43.3%
-treatment: 150 tickets in 100 clusters, first-gate PASS 40.7%
+```
 target 260 tickets, 300 assigned
-gap -2.7 points, cluster-bootstrap p 0.6458 (4000 draws, seed 7)
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-29T16:50-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 35.4%
+treatment: 130 tickets in 87 clusters, first-gate PASS 53.8%
+gap +18.5 points, cluster-bootstrap p 0.0015 (4000 draws, seed 7)
+time to merge: not enough merges
+no difference
+```
+
+With --target 400 (interim cohort is the first 200 of 300):
+
+```
+target 400 tickets, 300 assigned
+interim cohort is the first 200 tickets, read at 2025-11-29T00:10-08:00
+control: 100 tickets in 67 clusters, first-gate PASS 37.0%
+treatment: 100 tickets in 67 clusters, first-gate PASS 53.0%
+gap +16.0 points, cluster-bootstrap p 0.0170 (4000 draws, seed 7)
+time to merge: not enough merges
+continue
+```
+
+## Two experiments in one journal (x is A/A, y has a real effect, 300 tickets each)
+
+--experiment x
+
+```
+target 260 tickets, 300 assigned
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-29T16:50-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 no difference
+```
 
 --experiment y
-control: 150 tickets in 100 clusters, first-gate PASS 36.7%
-treatment: 150 tickets in 101 clusters, first-gate PASS 60.0%
+
+```
 target 260 tickets, 300 assigned
-gap +23.3 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-12-11T06:36-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 38.5%
+treatment: 130 tickets in 87 clusters, first-gate PASS 58.5%
+gap +20.0 points, cluster-bootstrap p 0.0015 (4000 draws, seed 7)
 time to merge median: control 500.0, treatment 500.0, non-inferior
 treatment wins
 ```
 
+## One interim look: more tickets between 130 and 259 never change the decision
+
+Same seed, so each journal extends the previous one. A/A (no early stop) and a strong effect (30 vs 65, stops at the interim look) print the same interim result at 130, 160, 200 and 259 assigned. At 100 assigned (below half) the answer is continue. At the target the final cohort is decided.
+
+A/A, 100 assigned
+
+```
+target 260 tickets, 100 assigned
+continue
+```
+
+A/A, 130 assigned
+
+```
+target 260 tickets, 130 assigned
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+A/A, 160 assigned
+
+```
+target 260 tickets, 160 assigned
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+A/A, 200 assigned
+
+```
+target 260 tickets, 200 assigned
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+A/A, 259 assigned
+
+```
+target 260 tickets, 259 assigned
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+continue
+```
+
+30 vs 65, 130 assigned
+
+```
+target 260 tickets, 130 assigned
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+30 vs 65, 200 assigned
+
+```
+target 260 tickets, 200 assigned
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+30 vs 65, 259 assigned
+
+```
+target 260 tickets, 259 assigned
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+## Settle cutoff: the same cohort read before and after it, and with post-cutoff events
+
+Fixture timestamps are in November 2025, so no run waits. The interim cohort is the first 130 tickets; its cutoff is the 130th assignment plus 7 days. In this journal 65 of the treatment tickets have no gate verdict or merge by the cutoff. A hidden --now sets the clock.
+
+Before the cutoff (--now 1763830000):
+
+```
+target 260 tickets, 200 assigned
+continue (interim cohort settles at 2025-11-28T04:43-08:00)
+```
+
+After the cutoff:
+
+```
+target 260 tickets, 200 assigned
+interim cohort is the first 130 tickets, read at 2025-11-28T04:43-08:00
+control: 65 tickets in 43 clusters, first-gate PASS 35.4%
+treatment: 65 tickets in 44 clusters, first-gate PASS 38.5%
+gap +3.1 points, cluster-bootstrap p 0.6883 (4000 draws, seed 7)
+continue
+```
+
+After the cutoff, with verdicts and merges for those pending tickets added at later timestamps (ignored, same decision):
+
+```
+target 260 tickets, 200 assigned
+interim cohort is the first 130 tickets, read at 2025-11-28T04:43-08:00
+control: 65 tickets in 43 clusters, first-gate PASS 35.4%
+treatment: 65 tickets in 44 clusters, first-gate PASS 38.5%
+gap +3.1 points, cluster-bootstrap p 0.6883 (4000 draws, seed 7)
+continue
+```
+
+Control: the same late events placed before the cutoff would have flipped the look:
+
+```
+target 260 tickets, 200 assigned
+interim cohort is the first 130 tickets, read at 2025-11-28T04:43-08:00
+control: 65 tickets in 43 clusters, first-gate PASS 35.4%
+treatment: 65 tickets in 44 clusters, first-gate PASS 72.3%
+gap +36.9 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+treatment wins
+```
+
+## An interim stop sticks
+
+One ticket a day (GAP=86400), 30 vs 65 percent PASS. The interim cohort (first 130) is read 7 days after its last assignment, when 137 tickets exist, below the target. It stops at p 0.0040. Adding tickets up to and past the target (260) leaves the decision as it was:
+
+130 assigned
+
+```
+target 260 tickets, 130 assigned
+interim cohort is the first 130 tickets, read at 2026-04-04T17:53-07:00
+control: 65 tickets in 43 clusters, first-gate PASS 27.7%
+treatment: 65 tickets in 44 clusters, first-gate PASS 52.3%
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+200 assigned
+
+```
+target 260 tickets, 200 assigned
+interim cohort is the first 130 tickets, read at 2026-04-04T17:53-07:00
+control: 65 tickets in 43 clusters, first-gate PASS 27.7%
+treatment: 65 tickets in 44 clusters, first-gate PASS 52.3%
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+300 assigned
+
+```
+target 260 tickets, 300 assigned
+interim cohort is the first 130 tickets, read at 2026-04-04T17:53-07:00
+control: 65 tickets in 43 clusters, first-gate PASS 27.7%
+treatment: 65 tickets in 44 clusters, first-gate PASS 52.3%
+gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
+treatment wins
+```
+
+When the target is reached before the interim cohort settles (dense assignments, 300 tickets in under 4 days) the interim look is skipped and only the final cohort counts:
+
+```
+target 260 tickets, 300 assigned
+interim look skipped: the target was reached before its cohort settled
+final cohort is the first 260 tickets, read at 2025-11-29T16:50-08:00
+control: 130 tickets in 87 clusters, first-gate PASS 30.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 56.9%
+gap +26.2 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+treatment wins
+```
+
+A/A with one ticket a day (interim does not stop, so the final cohort decides):
+
+```
+target 260 tickets, 300 assigned
+interim cohort is the first 130 tickets, read at 2026-04-04T17:53-07:00
+control: 65 tickets in 43 clusters, first-gate PASS 41.5%
+treatment: 65 tickets in 44 clusters, first-gate PASS 33.8%
+gap -7.7 points, cluster-bootstrap p 0.3754 (4000 draws, seed 7)
+final cohort is the first 260 tickets, read at 2026-08-12T17:53-07:00
+control: 130 tickets in 87 clusters, first-gate PASS 43.8%
+treatment: 130 tickets in 87 clusters, first-gate PASS 38.5%
+gap -5.4 points, cluster-bootstrap p 0.3854 (4000 draws, seed 7)
+no difference
+```
+
 ## No match, exit 1
 
-These cases all print the output below and exit 1:
-
-- a misspelled name (`zz`)
-- a missing journal directory
-- a read-only run on the live journal (no row has an experiment yet)
-
-<!-- markdownlint-disable MD013 -->
-```text
-compare: no arm assignments for zz in the journal, so no experiment has run (register one in coordinator/config/factory.json)
+```
+compare: no control or treatment assignments for zz in the journal; register an experiment in coordinator/config/factory.json
 rc=1
 ```
-<!-- markdownlint-enable MD013 -->
 
 ## Stamp
 
