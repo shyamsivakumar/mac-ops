@@ -238,7 +238,7 @@ def reply_updated_at(thread_id):
 
 def busy(repo):
     pid = CFG[repo]["projectId"]
-    live = t3("t3_thread_list", {"projectId": pid, "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20}).get("threads") or []
+    live = t3("t3_thread_list", {"projectId": pid, "statuses": LIVE_THREAD_STATUSES, "limit": 20}).get("threads") or []
     if live:
         return f"live: {live[0].get('title', '')[:60]}"
     queue = json.loads(run([COORDQ, "list", "--json"]) or "[]") if False else []
@@ -1947,11 +1947,36 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
     return unstick(repo, ledger, excl)
 
 
+def ticket_started_at(repo, number):
+    """Return the epoch of the newest ticket_started row for a ticket across every journal file, or None when no row is readable."""
+    for path in sorted(Path(journal.journal_dir()).glob("events-*.jsonl"), reverse=True):
+        try:
+            lines = path.read_text().splitlines()
+        except (OSError, ValueError):
+            continue
+        stamps = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("event") == "ticket_started" and row.get("repo") == repo \
+                    and row.get("ticket") == number and isinstance(row.get("ts"), (int, float)):
+                stamps.append(row["ts"])
+        if stamps:
+            return max(stamps)
+    return None
+
+
+LIVE_THREAD_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
+
+
 def unstick(repo, ledger, excl=frozenset()):
     issues = SNAPSHOT["repos"][repo]["issues"]
     referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
                   for x in re.findall(r"\bRefs #(\d+)", pr.get("body") or "")}
-    orphans = [i["number"] for i in issues if not any(l["name"].startswith("stage:") for l in i["labels"])
+    held = {i["number"] for i in issues if any(l["name"] == "stage:started" for l in i["labels"])}
+    orphans = [i["number"] for i in issues if (i["number"] in held or not any(l["name"].startswith("stage:") for l in i["labels"]))
                and i["number"] not in referenced
                and (repo, i["number"]) not in NEVER_START
                and (not excl or (isinstance(i.get("title"), str) and i["title"]
@@ -1961,11 +1986,27 @@ def unstick(repo, ledger, excl=frozenset()):
     receipts = json.load(open(RECEIPTS))
     failures_before = ledger.get("_item_failures", 0)
     started = set()
+    released = []
+    live_titles = ""
+    if held.intersection(orphans):
+        live_titles = " ".join(t.get("title", "") for t in t3("t3_thread_list", {"projectId": CFG[repo]["projectId"], "statuses": LIVE_THREAD_STATUSES, "limit": 20}).get("threads") or [])
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
             best = max(((int(k[len(prefix):]), v) for k, v in receipts.items()
                         if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
+            if n in held:
+                thread = best and t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
+                if (thread or {}).get("status") in LIVE_THREAD_STATUSES or re.search(rf"#{n}\b", live_titles):
+                    continue
+                started_at = ticket_started_at(repo, n)
+                if started_at is None or time.time() - started_at < 1800:
+                    continue
+                if not DRY:
+                    run(["gh", "issue", "edit", str(n), "-R", repo, "--remove-label", "stage:started", "--add-label", "stage:todo"])
+                    run(["gh", "issue", "comment", str(n), "-R", repo, "--body", "Back to stage:todo: no live builder thread and no open pull request."])
+                released.append(n)
+                continue
             if not best:
                 continue
             started.add(n)
@@ -1988,6 +2029,8 @@ def unstick(repo, ledger, excl=frozenset()):
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
         return "continue failed"
+    if released:
+        return f"{'DRY ' if DRY else ''}release {released}"
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     def marked(k):
         v = ledger.get(k)
