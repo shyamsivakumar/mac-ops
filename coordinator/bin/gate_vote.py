@@ -1,30 +1,22 @@
 import random
 import re
 
-from gate_bar import GATE_BAR
 from gate_policy import JSON_VERDICT_ASK, read_verdict
 
 VOTERS = 3
 AGREE = 2
 LINE_WINDOW = 5
-BAR_SECTION = re.compile(r"\n\n(?=(?:Merge bar|Severity bar|Convergence rule) )")
 BLOCKING = ("critical", "major")
 
 
-def shuffled(message, seed):
-    sections = BAR_SECTION.split(GATE_BAR)
-    random.Random(seed).shuffle(sections)
-    return message.replace(GATE_BAR, "\n\n".join(sections))
-
-
-def voter_args(args, key):
+def voter_args(args, key, paths):
     ballots = []
     for number in range(1, VOTERS + 1):
-        ballot = {**args, "message": shuffled(args["message"], f"{key}:{number}") + "\n" + JSON_VERDICT_ASK}
+        order = random.Random(f"{key}:{number}").sample(paths, len(paths))
+        ordered = "\nReview the changed files in this order: " + ", ".join(order) if order else ""
+        ballot = {**args, "message": args["message"] + ordered + "\n" + JSON_VERDICT_ASK}
         if number > 1:
-            ballot["clientRequestId"] = (
-                "vote:" + key.removeprefix("gate:") + f":{number}"
-            )
+            ballot["clientRequestId"] = "vote:" + key.removeprefix("gate:") + f":{number}"
             ballot["title"] = f"{args['title']} vote {number}"
         ballots.append(ballot)
     return ballots
@@ -66,15 +58,15 @@ def check_line(reports, tag, head):
     ]
     if not any(found):
         return None
-    passed = sum(1 for match in found if match and match.group(1) == "PASS")
-    return f"{tag}: {'PASS' if passed >= AGREE else 'FAIL'} {head}"
+    failed = any(match and match.group(1) == "FAIL" for match in found)
+    return f"{tag}: {'FAIL' if failed else 'PASS'} {head}"
 
 
 def merge_reports(reports, head):
     counted = [(report, *read_verdict(report)) for report in reports]
     counted = [row for row in counted if row[1] in ("PASS", "FAIL")]
     if len(counted) < AGREE:
-        return reports[0]
+        return f"Merged gate review of {len(reports)} reports on {head}: only {len(counted)} ended with a readable verdict.\nVERDICT: FAIL"
     kept = survivors([findings for _, _, findings in counted])
     unparsed = sum(
         1 for _, outcome, findings in counted if outcome == "FAIL" and not findings

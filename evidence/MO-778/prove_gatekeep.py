@@ -30,6 +30,7 @@ REPO, HEAD = "o/r", "a" * 40
 CONFIG = Path(os.environ["COORDQ_DIR"]) / "config.json"
 CONFIG.write_text(json.dumps({"repos": {REPO: {"key": "T", "projectId": "P"}}}))
 MODEL = {"instanceId": "claudeAgent", "model": "claude-sonnet-5-5"}
+PATHS = ["coordinator/bin/coordq", "coordinator/bin/gate_vote.py", "coordinator/overnight/lane_driver.py", "evidence/MO-778/runs.md"]
 EXPERIMENTS = [{"name": "gate-vote", "side": "gate", "split": 50, "names": ["vote3"]}]
 
 
@@ -54,6 +55,7 @@ def run(arm, dry):
         "args": args,
         "scopeIssue": None,
         "builderModels": [],
+        "paths": PATHS,
     }
     coordq.gate_candidates = lambda *_, **_kw: iter([event])
     coordq.gh_gateway.remaining_or_none = lambda: None
@@ -87,14 +89,9 @@ for item in queue["items"]:
 heads = queue["gatedHeads"]
 print("gatedHeads keys:", sorted(heads))
 messages = [i["args"]["message"] for i in queue["items"][:3]]
-bar_order = [
-    [m.index(s) for s in ("Merge bar", "Severity bar", "Convergence rule")]
-    for m in messages
-]
-print(
-    "bar section order per voter:",
-    [sorted(range(3), key=lambda i: o[i]) for o in bar_order],
-)
+for number, message in enumerate(messages, 1):
+    print(f"voter {number}:", [line for line in message.splitlines() if line.startswith("Review the changed files")])
+print("voters recorded on items:", [i.get("voters") for i in queue["items"]])
 print(
     "json ask in every voter:", all("Machine-readable verdict" in m for m in messages)
 )

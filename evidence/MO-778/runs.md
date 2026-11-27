@@ -11,13 +11,13 @@ Findings were lifted from the prose by prove_merge.py into the JSON block voters
 voter order (0, 1, 2):
 Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
 PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+CHECK: FAIL e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 VERDICT: PASS
 
 voter order (2, 1, 0):
 Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
 PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+CHECK: FAIL e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 VERDICT: PASS
 
 Traceback (most recent call last):
@@ -69,42 +69,86 @@ CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 VERDICT: FAIL
 lane reads: verdict=FAIL complete_pass=False
 
---- one voter only reports, others died: primary returned unchanged
-```json
-{"verdict": "FAIL", "findings": [{"id": "F1", "severity": "major", "bar_clause": "n/a", "path": "scripts/bot2_two_lane_admission_proof.cjs", "line": 271, "text": "major at scripts/bot2_two_lane_admiss
-```
-summary
-
-PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+--- two voters dead: fewer than 2 readable, FAIL not the primary alone
+Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: only 1 ended with a readable verdict.
 VERDICT: FAIL
 lane reads: verdict=FAIL complete_pass=False
 
+--- one voter CHECK FAIL: merged CHECK FAIL, findings still voted
+Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
+PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+CHECK: FAIL e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+VERDICT: PASS
+lane reads: verdict=PASS complete_pass=False
+
 ```
 
-## 3. cmd_gatekeep with a fake candidate, temp COORDQ_DIR and COORD_JOURNAL_DIR (prove_gatekeep.py)
+## 3. lane_driver.gate_verdict with voters unlaunched, in flight, dead and CHECK FAIL (prove_lane.py, temp receipts, fake threads)
+
+```
+--- primary done PASS, voters 2 and 3 not launched yet
+lane verdict: running
+
+--- primary done, voter 2 launched, voter 3 not
+lane verdict: running
+
+--- all launched, voter 3 still running
+lane verdict: running
+
+--- all three PASS
+lane verdict: PASS
+
+--- one voter dead (no reply): merge of two
+lane verdict: FAIL
+Merged gate review of 2 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a finding stays when 2 agree on file, line within 5 and severity.
+[major] a.py:10 t
+PROVIDES: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CHECK: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+VERDICT: FAIL
+
+--- two voters dead: FAIL, not the primary alone
+lane verdict: FAIL
+Merged gate review of 3 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: only 1 ended with a readable verdict.
+VERDICT: FAIL
+
+--- one voter CHECK FAIL
+lane verdict: none
+Merged gate review of 3 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a finding stays when 2 agree on file, line within 5 and severity.
+PROVIDES: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CHECK: FAIL aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+VERDICT: PASS
+
+--- control arm: no voters recorded, primary alone as today
+lane verdict: PASS
+
+```
+
+## 4. cmd_gatekeep with a fake candidate, temp COORDQ_DIR and COORD_JOURNAL_DIR (prove_gatekeep.py)
 
 ```
 == dry run, arm treatment (vote3)
-2026-11-26 18:14:08 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:14:08 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:14:08 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == dry run, arm control
-2026-11-26 18:14:08 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == temp-queue run, arm treatment
-2026-11-26 18:14:08 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:14:08 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:14:08 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 == temp-queue run, arm control
-2026-11-26 18:14:08 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 18:47:29 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 1 gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | T-778 review #1 aaaaaaaa | arm treatment
 2 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 | T-778 review #1 aaaaaaaa vote 2 | arm treatment
 3 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 | T-778 review #1 aaaaaaaa vote 3 | arm treatment
 4 gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | T-778 review #2 aaaaaaaa | arm control
 gatedHeads keys: ['gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']
-bar section order per voter: [[1, 0, 2], [1, 2, 0], [2, 1, 0]]
+voter 1: ['Review the changed files in this order: coordinator/bin/coordq, coordinator/overnight/lane_driver.py, coordinator/bin/gate_vote.py, evidence/MO-778/runs.md']
+voter 2: ['Review the changed files in this order: coordinator/bin/gate_vote.py, coordinator/overnight/lane_driver.py, coordinator/bin/coordq, evidence/MO-778/runs.md']
+voter 3: ['Review the changed files in this order: coordinator/bin/coordq, coordinator/bin/gate_vote.py, evidence/MO-778/runs.md, coordinator/overnight/lane_driver.py']
+voters recorded on items: [3, None, None, None]
 json ask in every voter: True
 lane sees voter threads for: ['T2', 'T3']
 ```
