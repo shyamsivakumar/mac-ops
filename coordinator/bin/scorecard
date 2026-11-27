@@ -696,34 +696,49 @@ def cmd_compare(args):
         missing = [name for name in ("control", "treatment") if name not in present]
         hint = "; register an experiment in coordinator/config/factory.json" if not experiment else ""
         sys.exit(f"compare: no {' or '.join(missing)} assignments for {args.experiment} in the journal" + hint)
-    final = len(tickets) >= target
-    size = target if final else math.ceil(target / 2)
-    name = "final" if final else "interim"
-    print(f"target {target} tickets, {len(tickets)} assigned, {name} cohort is the first {size}")
-    if len(tickets) < size:
+    half = math.ceil(target / 2)
+    print(f"target {target} tickets, {len(tickets)} assigned")
+    if len(tickets) < half:
         print("continue")
         return
+    now = args.now or today_ts()
+    interim_cutoff = tickets[half - 1][0] + SETTLE_DAYS * 86400
+    taken = now >= interim_cutoff and sum(1 for ticket in tickets if ticket[0] <= interim_cutoff) < target
+    if now >= interim_cutoff and not taken:
+        print("interim look skipped: the target was reached before its cohort settled")
+    decision = look(live, tickets, args, side, "interim", half, now) if taken else "continue"
+    if decision == "continue" and len(tickets) >= target:
+        decision = look(live, tickets, args, side, "final", target, now)
+    elif not taken and now < interim_cutoff:
+        decision = f"continue (interim cohort settles at {iso_time(interim_cutoff)})"
+    print(decision)
+
+
+def iso_time(ts):
+    return datetime.fromtimestamp(ts, TZ).isoformat(timespec="minutes")
+
+
+def look(live, tickets, args, side, name, size, now):
     cutoff = tickets[size - 1][0] + SETTLE_DAYS * 86400
-    if (args.now or today_ts()) < cutoff:
-        print(f"continue ({name} cohort settles at {datetime.fromtimestamp(cutoff, TZ).isoformat(timespec='minutes')})")
-        return
+    print(f"{name} cohort is the first {size} tickets, read at {iso_time(cutoff)}")
+    if now < cutoff:
+        return f"continue ({name} cohort settles at {iso_time(cutoff)})"
     arms = cohort(arm_outcomes([row for row in live if row["ts"] <= cutoff], args.experiment, side), size)
     if not arms["control"] or not arms["treatment"]:
-        print("continue")
-        return
+        return "continue"
     control, treatment = list(arms["control"].values()), list(arms["treatment"].values())
     gap, p = pass_rate(treatment) - pass_rate(control), bootstrap_p(control, treatment)
     slow, fast = median_wait(treatment), median_wait(control)
     merge_ok = None if slow is None or fast is None else slow <= fast * SLOWER_LIMIT
-    for name, group in (("control", control), ("treatment", treatment)):
-        print(f"{name}: {sum(len(items) for items in group)} tickets in {len(group)} clusters, first-gate PASS {pass_rate(group):.1%}")
+    for arm, group in (("control", control), ("treatment", treatment)):
+        print(f"{arm}: {sum(len(items) for items in group)} tickets in {len(group)} clusters, first-gate PASS {pass_rate(group):.1%}")
     print(f"gap {gap * 100:+.1f} points, cluster-bootstrap p {p:.4f} ({BOOTSTRAP_DRAWS} draws, seed 7)")
     if merge_ok is None:
         print("time to merge: not enough merges")
     else:
         print(f"time to merge median: control {fast}, treatment {slow}, " +
               ("non-inferior" if merge_ok else f"more than {SLOWER_LIMIT - 1:.0%} slower"))
-    print(decide(p, gap, merge_ok, final))
+    return decide(p, gap, merge_ok, name == "final")
 
 
 def today_ts():
