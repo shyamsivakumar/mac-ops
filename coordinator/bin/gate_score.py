@@ -26,12 +26,23 @@ Reply with only a JSON list of {count} integers, one per finding, in order.
 
 
 def findings_of(report):
-    return [f for f in gate_policy.read_verdict(report)[1] if f.get("severity") in ("critical", "major")] or [
-        {"text": p.strip()} for p in re.split(r"\n\s*\n", report) if LEAD.match(p.strip())]
+    return [
+        f
+        for f in gate_policy.read_verdict(report)[1]
+        if f.get("severity") in ("critical", "major")
+    ] or [
+        {"text": p.strip()}
+        for p in re.split(r"\n\s*\n", report)
+        if LEAD.match(p.strip())
+    ]
 
 
 def scores_for(findings, call):
-    prompt = ASK.format(bar=SEVERITY_BAR, count=len(findings), findings="\n".join(f"{i + 1}. {f['text']}" for i, f in enumerate(findings)))
+    prompt = ASK.format(
+        bar=SEVERITY_BAR,
+        count=len(findings),
+        findings="\n".join(f"{i + 1}. {f['text']}" for i, f in enumerate(findings)),
+    )
     try:
         found = SCORES.search(call(prompt) or "")
         scores = json.loads(found.group(0)) if found else None
@@ -46,26 +57,40 @@ def without(report, dropped):
         for finding in dropped:
             report = report.replace(finding["text"], "", 1)
         return report
-    block = json.dumps({**data, "findings": [f for f in data["findings"] if f not in dropped]})
-    return gate_policy.JSON_BLOCK.sub(lambda m: "```json\n" + block + "\n```", report)
+    block = json.dumps(
+        {**data, "findings": [f for f in data["findings"] if f not in dropped]}
+    )
+    return gate_policy.JSON_BLOCK.sub(lambda _: "```json\n" + block + "\n```", report)
 
 
 def score_findings(report, call):
     """Return (report, dropped titles). A report with a FAIL CHECK or PROVIDES line is returned as it was."""
-    if gate_policy.read_verdict(report)[0] != "FAIL" or re.search(r"(?m)^(CHECK|PROVIDES): FAIL", report):
+    if gate_policy.read_verdict(report)[0] != "FAIL" or re.search(
+        r"(?m)^(CHECK|PROVIDES): FAIL", report
+    ):
         return report, []
     findings = findings_of(report)
     scores = scores_for(findings, call) if findings else None
     if scores is None:
         return report, []
-    dropped = [f for f, s in zip(findings, scores) if s < KEEP_AT]
+    dropped = [f for f, s in zip(findings, scores, strict=True) if s < KEEP_AT]
     if not dropped:
         return report, []
     report = without(report, dropped)
     if len(dropped) == len(findings):
-        report = re.sub(r'("verdict":\s*)"FAIL"', r'\1"PASS"', re.sub(r"(?m)^VERDICT: FAIL", "VERDICT: PASS", report))
+        report = re.sub(
+            r'("verdict":\s*)"FAIL"',
+            r'\1"PASS"',
+            re.sub(r"(?m)^VERDICT: FAIL", "VERDICT: PASS", report),
+        )
     titles = [f["text"].splitlines()[0][:160] for f in dropped]
-    return "Second pass scored these below the merge bar and dropped them:\n" + "\n".join(f"- {t}" for t in titles) + "\n\n" + report, titles
+    return (
+        "Second pass scored these below the merge bar and dropped them:\n"
+        + "\n".join(f"- {t}" for t in titles)
+        + "\n\n"
+        + report,
+        titles,
+    )
 
 
 def pi_call(prompt):
