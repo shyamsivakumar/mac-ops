@@ -147,6 +147,12 @@ class SectionBlockerTest(unittest.TestCase):
         reasons = ticket.section_blocker_reasons(CFG, REPO, issue(body))
         self.assertEqual(reasons, ["SRW-1018 (#806) is still open"])
 
+    def test_a_closed_pull_request_cited_in_scope_does_not_block(self):
+        self.states[("shyamsivakumar/strategy-replay-workbench", 816)] = "unmerged"
+        body = "**Blocked by:** #898 is merged. No open predecessor.\n\n**Scope and non-goals:** A re-cut of #816.\n"
+        cfg = dict(CFG, template=CFG["template"] + ["Scope and non-goals"])
+        self.assertEqual(ticket.section_blocker_reasons(cfg, REPO, issue(body)), [])
+
     def test_merged_pull_request_passes(self):
         body = "## Blocked by\nB1 #898 is complete.\n"
         self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue(body)), [])
