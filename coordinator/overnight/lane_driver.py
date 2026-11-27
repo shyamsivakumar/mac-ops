@@ -1950,10 +1950,8 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
 def ticket_started_at(repo, number):
     """Return the epoch of the newest ticket_started row for a ticket, or None when no row is readable."""
     latest = None
-    now = time.time()
-    for path in {journal.journal_path(now), journal.journal_path(now - 31 * 86400)}:
-        if not os.path.exists(path):
-            continue
+    directory = Path(journal.journal_path(time.time())).parent
+    for path in directory.glob("events-[0-9][0-9][0-9][0-9]-[0-9][0-9].jsonl"):
         with open(path) as handle:
             for line in handle:
                 try:
