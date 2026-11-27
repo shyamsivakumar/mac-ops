@@ -1773,6 +1773,49 @@ def closed_ticket_reason(repo, issue):
     return (row.get("stateReason") or "").lower()
 
 
+def prereview_findings(repo, number, head, body, builder, proof_path, ledger):
+    """Send the findings of a head's pre-review to its builder, once, before the gate.
+
+    A pre-review that is clean, unreadable or malformed holds nothing back:
+    it is journaled and the gate goes on. A pull request owned by a live
+    builder or an `Owner:` session gets the findings in the journal and no card.
+    """
+    sent = f"prereview-fix:{repo}#{number}:{head}"
+    thread = (json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}).get(f"prereview:{repo}#{number}:{head}")
+    if not thread or sent in ledger:
+        return None
+    try:
+        if gate_in_flight(thread):
+            return None
+        reply = last_reply(thread)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the pre-review could not be read")
+        return None
+    lines = [line.strip() for line in reply.splitlines()]
+    if "PREREVIEW: CLEAN" in lines:
+        if not DRY:
+            ledger[sent] = "clean"
+        return None
+    if "PREREVIEW: FINDINGS" not in lines:
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the reply has no PREREVIEW line")
+        return None
+    findings = "\n".join(line for line in reply.splitlines() if line.strip() != "PREREVIEW: FINDINGS")[-6000:]
+    journal_event("prereview_findings", repo, number, head, findings=findings)
+    if CFG[repo].get("build") == "here":
+        owned = owned_by_live_builder(repo, number, head, body, builder, ledger)
+        if owned:
+            if not DRY:
+                ledger[sent] = "journaled"
+            return owned
+        return herdr_build_card(repo, number, head, "the pre-review listed failure paths")
+    if not builder:
+        return f"skip #{number}: pre-review findings, no builder thread"
+    msg = (f"The independent pre-review of PR #{number} at {head} listed failure paths. Fix each one that is real, "
+           f"{check_step(repo, proof_path)}, push, set "
+           "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n" + findings)
+    return f"#{number} prereview fix: " + send(builder, msg, message_title(repo, number, "pre-review findings", head), ledger, sent, pr_number=number)
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -1831,6 +1874,9 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+    findings = prereview_findings(repo, number, head, body, builder, proof_path, ledger)
+    if findings:
+        return findings
     base = pr.get("baseRefName") or "main"
     verdict, gate, reply = gate_verdict(repo, number, head, base, ledger)
     if closed and verdict != "PASS":
