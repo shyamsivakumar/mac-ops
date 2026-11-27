@@ -6,16 +6,13 @@ command that ran it, and whether it passed, failed or did not run. The
 builder commits that file with the change and the gate brief reads it, so
 the reviewer reads the record of the checks instead of one claimed line.
 """
+
 import argparse
 import ast
-from fnmatch import fnmatch
 import importlib.util
-from collections import Counter
-from importlib.machinery import SourceFileLoader
-from unittest.mock import patch
 import json
+import logging
 import os
-from pathlib import Path
 import re
 import shlex
 import shutil
@@ -23,6 +20,11 @@ import socket
 import subprocess
 import sys
 import tempfile
+from collections import Counter
+from fnmatch import fnmatch
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -69,8 +71,14 @@ def require_tool(tool):
     """
     if shutil.which("uvx") is None:
         raise NotRun("uvx is not installed")
-    probe = subprocess.run(uvx_command(tool, "--version"), cwd=ROOT,
-                           capture_output=True, text=True, timeout=300)
+    probe = subprocess.run(
+        uvx_command(tool, "--version"),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
     if probe.returncode != 0:
         raise NotRun(f"{tool} {TOOL_VERSIONS[tool]} is not available through uvx")
 
@@ -83,10 +91,19 @@ def ruff_command(*extra):
     in a runner is a finding like any other.
     """
     runners = [name for name in SUFFIXLESS_PYTHON if (ROOT / name).is_file()]
-    return uvx_command("ruff", "check", "--select", RUFF_RULES,
-                       "--output-format", "json",
-                       "--extend-exclude", "evals/harbor/tasks/*/tests/files",
-                       ".", *runners, *extra)
+    return uvx_command(
+        "ruff",
+        "check",
+        "--select",
+        RUFF_RULES,
+        "--output-format",
+        "json",
+        "--extend-exclude",
+        "evals/harbor/tasks/*/tests/files",
+        ".",
+        *runners,
+        *extra,
+    )
 
 
 def ruff_counts():
@@ -97,14 +114,20 @@ def ruff_counts():
     """
     require_tool("ruff")
     command = ruff_command()
-    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(
+        command, cwd=ROOT, capture_output=True, text=True, timeout=300, check=False
+    )
     if result.returncode not in (0, 1):
         detail = (result.stderr or result.stdout).strip().splitlines()
-        raise RuntimeError(f"ruff exited {result.returncode}: {detail[0] if detail else 'no output'}")
+        raise RuntimeError(
+            f"ruff exited {result.returncode}: {detail[0] if detail else 'no output'}"
+        )
     try:
         report = json.loads(result.stdout)
     except json.JSONDecodeError:
-        raise RuntimeError(f"ruff exited {result.returncode} without a JSON report") from None
+        raise RuntimeError(
+            f"ruff exited {result.returncode} without a JSON report"
+        ) from None
     if result.returncode == 1 and not report:
         raise RuntimeError("ruff exited 1 but reported no findings")
     return ruff_findings(report)
@@ -184,27 +207,44 @@ def check_ruff():
     baseline = read_baseline()
     extra = new_findings(counts, baseline)
     for (name, code, message), count in extra:
-        print(f"fast-check: new ruff finding: {name} {code} {message} (x{count})", flush=True)
+        print(
+            f"fast-check: new ruff finding: {name} {code} {message} (x{count})",
+            flush=True,
+        )
     if extra:
         name, code, message = extra[0][0]
         raise RuntimeError(
             f"{sum(count for _, count in extra)} Ruff findings are not in the baseline; "
-            f"first: {name} {code} {message}")
+            f"first: {name} {code} {message}"
+        )
     return f"{sum(counts.values())} findings, all in the baseline"
 
 
 def mypy_command():
     """The pinned mypy command. Imports are followed silently, so only the
     target modules are reported on."""
-    return uvx_command("mypy", "--strict", "--follow-imports=silent", "--ignore-missing-imports",
-                       "--python-version", "3.9", *MYPY_TARGETS)
+    return uvx_command(
+        "mypy",
+        "--strict",
+        "--follow-imports=silent",
+        "--ignore-missing-imports",
+        "--python-version",
+        "3.9",
+        *MYPY_TARGETS,
+    )
 
 
 def check_mypy():
     """Run the pinned mypy over the target modules; any error fails the check."""
     require_tool("mypy")
-    result = subprocess.run(mypy_command(), cwd=ROOT, capture_output=True, text=True,
-                            timeout=300)
+    result = subprocess.run(
+        mypy_command(),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
     if result.returncode == 0:
         return f"{len(MYPY_TARGETS)} modules, no issues"
     lines = result.stdout.strip().splitlines()
@@ -214,14 +254,40 @@ def check_mypy():
             print(f"fast-check: mypy: {line}", flush=True)
         raise RuntimeError(f"{len(errors)} mypy errors; first: {errors[0]}")
     detail = (result.stderr or result.stdout).strip().splitlines()
-    raise RuntimeError(f"mypy exited {result.returncode}: {detail[0] if detail else 'no output'}")
+    raise RuntimeError(
+        f"mypy exited {result.returncode}: {detail[0] if detail else 'no output'}"
+    )
+
+
+FINDING_RULE_CHECKS = ("grep", "lint", "type", "property")
+
+
+def validate_finding_rule(rule):
+    missing = [key for key in ("id", "check", "message") if not rule.get(key)]
+    if missing:
+        raise ValueError(
+            f"finding rule {rule.get('id', '?')}: missing {', '.join(missing)}"
+        )
+    if rule["check"] not in FINDING_RULE_CHECKS:
+        raise ValueError(
+            f"finding rule {rule['id']}: check {rule['check']!r} is not one of "
+            f"{', '.join(FINDING_RULE_CHECKS)}"
+        )
+    if rule["check"] == "grep" and not (rule.get("paths") and rule.get("pattern")):
+        raise ValueError(
+            f"finding rule {rule['id']}: a grep rule needs paths and pattern"
+        )
 
 
 def check_finding_rules(paths, rules=None):
     if rules is None:
         rules = json.loads((ROOT / FINDING_RULES).read_text())
+    for rule in rules:
+        validate_finding_rule(rule)
     found = []
     for rule in rules:
+        if rule["check"] != "grep":
+            continue
         for path in paths:
             if fnmatch(str(path), rule["paths"]) and (ROOT / path).is_file():
                 text = (ROOT / path).read_text(errors="replace")
@@ -236,7 +302,9 @@ def git(*args):
 
 def load_isolation():
     """The fake `gh` and temp logs every suite this check launches runs under."""
-    loader = SourceFileLoader("gh_isolation", str(ROOT / "coordinator/bin/gh_isolation.py"))
+    loader = SourceFileLoader(
+        "gh_isolation", str(ROOT / "coordinator/bin/gh_isolation.py")
+    )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
@@ -313,13 +381,15 @@ def check_isolation(run, isolation, env):
         root = isolation.make_dir(f"{isolation.CALLER}-check-{name}-")
         roots[name] = root
         child_env = {**env, isolation.ROOT_VAR: str(root)}
-        results[name] = run(command, timeout=timeout, check=False, capture=True,
-                            child_env=child_env)
+        results[name] = run(
+            command, timeout=timeout, check=False, capture=True, child_env=child_env
+        )
         for fake in ("gh", "t3mcp"):
             if not (root / "bin" / fake).is_file():
                 raise AssertionError(
                     f"the {name} entry point did not install the isolation: no fake "
-                    f"`{fake}` in {root}, so the run reached the real one")
+                    f"`{fake}` in {root}, so the run reached the real one"
+                )
         refusals = root / "refusals.log"
         if refusals.is_file():
             refused.extend(refusals.read_text().splitlines())
@@ -327,22 +397,35 @@ def check_isolation(run, isolation, env):
     # gives them. A run that is red here is a finding about the isolation,
     # not the machine's own state, so it fails the check.
     isolation_tests = run(
-        ["python3", "-m", "unittest", "tests.test_tick_external_call_bounds.IsolationTests"],
-        timeout=120, check=False, capture=True,
-        child_env={**env, isolation.ROOT_VAR: str(roots["unittest"])})
+        [
+            "python3",
+            "-m",
+            "unittest",
+            "tests.test_tick_external_call_bounds.IsolationTests",
+        ],
+        timeout=120,
+        check=False,
+        capture=True,
+        child_env={**env, isolation.ROOT_VAR: str(roots["unittest"])},
+    )
     after = live_log_counts(isolation)
     if after[:2] != before[:2]:
         raise AssertionError(
             f"the run wrote to the live logs: gh-usage rows for {isolation.CALLER} "
-            f"{before[0]} -> {after[0]}, skips.log lines {before[1]} -> {after[1]}")
+            f"{before[0]} -> {after[0]}, skips.log lines {before[1]} -> {after[1]}"
+        )
     if refused:
         raise AssertionError(
-            f"the run needed a call the fake `gh` does not answer: {refused[0]}")
+            f"the run needed a call the fake `gh` does not answer: {refused[0]}"
+        )
     if isolation_tests.returncode != 0:
-        tail = (isolation_tests.stdout + isolation_tests.stderr).strip().splitlines()[-3:]
+        tail = (
+            (isolation_tests.stdout + isolation_tests.stderr).strip().splitlines()[-3:]
+        )
         raise AssertionError(
             f"the isolation tests failed under the check's own environment: "
-            f"{' | '.join(tail)}")
+            f"{' | '.join(tail)}"
+        )
     suite = results["unittest"]
     selftest = results["selftest"]
     ran = re.search(r"^Ran (\d+) tests? in ", suite.stdout + suite.stderr, re.MULTILINE)
@@ -350,36 +433,53 @@ def check_isolation(run, isolation, env):
         found = ran.group(1) if ran else "no test count"
         raise AssertionError(
             f"the suite did not run: {found} tests, expected at least {MIN_TESTS} "
-            f"(unittest exited {suite.returncode})")
+            f"(unittest exited {suite.returncode})"
+        )
     if suite.returncode != 0:
-        failing = [line for line in (suite.stdout + suite.stderr).splitlines()
-                   if line.startswith(('FAIL:', 'ERROR:'))]
+        failing = [
+            line
+            for line in (suite.stdout + suite.stderr).splitlines()
+            if line.startswith(("FAIL:", "ERROR:"))
+        ]
         raise AssertionError(
             f"the unittest suite is red (exited {suite.returncode}): "
-            f"{' | '.join(failing)}")
+            f"{' | '.join(failing)}"
+        )
     if selftest.returncode != 0:
         raise AssertionError(
-            f"the overnight selftest did not run: exited {selftest.returncode}")
+            f"the overnight selftest did not run: exited {selftest.returncode}"
+        )
     for root in roots.values():
         shutil.rmtree(root, ignore_errors=True)
-    return (f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
-            f"{before[1]}, unchanged after the run; gh-usage lines in total "
-            f"{before[2]} -> {after[2]}; both entry points installed the fake "
-            f"`gh` and `t3mcp` themselves; no call the fake `gh` refused; the isolation "
-            f"tests passed; {ran.group(1)} tests ran (unittest exited "
-            f"{suite.returncode}, selftest exited {selftest.returncode})")
+    return (
+        f"gh-usage rows for {isolation.CALLER} {before[0]}, skips.log lines "
+        f"{before[1]}, unchanged after the run; gh-usage lines in total "
+        f"{before[2]} -> {after[2]}; both entry points installed the fake "
+        f"`gh` and `t3mcp` themselves; no call the fake `gh` refused; the isolation "
+        f"tests passed; {ran.group(1)} tests ran (unittest exited "
+        f"{suite.returncode}, selftest exited {selftest.returncode})"
+    )
 
 
 def installed_selftest(root):
     tmp = Path(tempfile.mkdtemp(prefix="installed-selftest-"))
     home = tmp / "home"
-    code = ("import json, sys\nfrom pathlib import Path\n"
-            "sys.path.insert(0, sys.argv[1])\nimport install_coordinator\n"
-            "print(json.dumps([[str(s), str(d), m] for s, d, m in "
-            "install_coordinator.plan(Path(sys.argv[1]), Path(sys.argv[2]))]))\n")
+    code = (
+        "import json, sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\nimport install_coordinator\n"
+        "print(json.dumps([[str(s), str(d), m] for s, d, m in "
+        "install_coordinator.plan(Path(sys.argv[1]), Path(sys.argv[2]))]))\n"
+    )
     base_env = {"PATH": os.environ["PATH"], "PYTHONDONTWRITEBYTECODE": "1"}
-    built = subprocess.run([sys.executable, "-B", "-c", code, str(root), str(home)],
-                           cwd=root, env=base_env, capture_output=True, text=True, timeout=60)
+    built = subprocess.run(
+        [sys.executable, "-B", "-c", code, str(root), str(home)],
+        cwd=root,
+        env=base_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
     if built.returncode != 0:
         first = built.stderr.strip().splitlines()
         return False, "plan could not be built: " + (first[0] if first else "no output")
@@ -388,12 +488,24 @@ def installed_selftest(root):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, dst)
     isolation = load_isolation()
-    env = isolation.environment({**base_env, "HOME": str(home),
-                                 "COORD_INBOX_DIR": str(tmp / "inbox"),
-                                 isolation.ROOT_VAR: str(tmp / "isolation")})
+    env = isolation.environment(
+        {
+            **base_env,
+            "HOME": str(home),
+            "COORD_INBOX_DIR": str(tmp / "inbox"),
+            isolation.ROOT_VAR: str(tmp / "isolation"),
+        }
+    )
     try:
-        result = subprocess.run([sys.executable, "selftest.py"], cwd=home / ".local/bin",
-                                env=env, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            [sys.executable, "selftest.py"],
+            cwd=home / ".local/bin",
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         shutil.rmtree(tmp, ignore_errors=True)
         return False, "installed selftest timed out"
@@ -413,7 +525,11 @@ def imports(path):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            package = module_name(path.parent / "__init__.py") if path.name != "__init__.py" else module_name(path)
+            package = (
+                module_name(path.parent / "__init__.py")
+                if path.name != "__init__.py"
+                else module_name(path)
+            )
             module = node.module or ""
             if node.level:
                 module = importlib.util.resolve_name("." * node.level + module, package)
@@ -459,6 +575,7 @@ class Proof:
             self.rows.append((name, command, "not run", str(exc)))
             return False
         except Exception as exc:
+            logging.exception("fast-check: %s failed", name)
             self.failed = True
             detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
             self.rows.append((name, command, "failed", detail))
@@ -469,7 +586,9 @@ class Proof:
 
     def write(self, head, dirty):
         """Write the proof file of this run."""
-        result = "failed" if self.failed else "incomplete" if self.incomplete else "passed"
+        result = (
+            "failed" if self.failed else "incomplete" if self.incomplete else "passed"
+        )
         lines = [
             "# Check proof",
             "",
@@ -504,18 +623,34 @@ def check_lane_selection():
     loader.exec_module(module)
 
     def issue(repo, number, priority=1, stage="todo", body=""):
-        return {"repository": {"nameWithOwner": repo}, "number": number,
-                "labels": [f"priority:{priority}", f"stage:{stage}"], "body": body}
+        return {
+            "repository": {"nameWithOwner": repo},
+            "number": number,
+            "labels": [f"priority:{priority}", f"stage:{stage}"],
+            "body": body,
+        }
 
-    rows = [issue("a/b", 1), issue("a/b", 2, stage="started"),
-            issue("a/c", 9, 2), issue("a/c", 8), issue("a/c", 7),
-            issue("a/d", 1), issue("a/e", 10, body="## Blocked by\n#3"),
-            issue("a/e", 11, body="## Blocked by\n#2")]
+    rows = [
+        issue("a/b", 1),
+        issue("a/b", 2, stage="started"),
+        issue("a/c", 9, 2),
+        issue("a/c", 8),
+        issue("a/c", 7),
+        issue("a/d", 1),
+        issue("a/e", 10, body="## Blocked by\n#3"),
+        issue("a/e", 11, body="## Blocked by\n#2"),
+    ]
     # A stale stage:started label is a claim, not evidence: a/b#2 carries it
     # with no live thread and no open pull request, so a/b#1 is a candidate.
     selected = module.lane_candidates(rows, {"a/d"})
     assert [(r["repository"]["nameWithOwner"], r["number"]) for r in selected] == [
-        ("a/b", 1), ("a/c", 7), ("a/e", 11), ("a/c", 8), ("a/e", 10), ("a/c", 9)]
+        ("a/b", 1),
+        ("a/c", 7),
+        ("a/e", 11),
+        ("a/c", 8),
+        ("a/e", 10),
+        ("a/c", 9),
+    ]
     # A live lane thread still makes its repo busy.
     assert module.lane_candidates([issue("a/b", 1)], {"a/b"}) == []
     # An open, non-draft pull request that refs an open ticket makes its repo
@@ -534,7 +669,8 @@ def check_lane_selection():
     config = {"repos": {"a/b": {"key": "AB"}, "a/c": {"key": "AC"}}}
     snapshots = [
         (0, '{"threads":[{"threadId":"one","title":"AB-1 build"}],"nextCursor":1}'),
-        (0, '{"threads":[{"threadId":"two","clientRequestId":"gate:a/c#2:head"}]}')]
+        (0, '{"threads":[{"threadId":"two","clientRequestId":"gate:a/c#2:head"}]}'),
+    ]
     with tempfile.TemporaryDirectory() as scratch:
         asked = []
 
@@ -542,7 +678,10 @@ def check_lane_selection():
             asked.append(args)
             return snapshots[len(asked) - 1]
 
-        with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=threads):
+        with (
+            patch.object(module, "DIR", scratch),
+            patch.object(module, "call", side_effect=threads),
+        ):
             assert module.live_lane_repositories(config) == {"a/b#AB-1", "a/c#pr2"}
         # A thread that waits for an answer is still a builder in flight, so
         # the lane read asks for it: the ticket CLI counts it as live.
@@ -554,45 +693,77 @@ def check_lane_selection():
         one_repo = Path(scratch) / "one-repo.json"
         one_repo.write_text(__import__("json").dumps({"repos": {"a/b": {"key": "AB"}}}))
         from types import SimpleNamespace
-        snapshot = [[{"number": 1, "title": "busy", "labels": ["stage:started"],
-                      "updated_at": "now"},
-                     {"number": 2, "title": "todo", "labels": ["stage:todo"],
-                      "updated_at": "now"}]]
+
+        snapshot = [
+            [
+                {
+                    "number": 1,
+                    "title": "busy",
+                    "labels": ["stage:started"],
+                    "updated_at": "now",
+                },
+                {
+                    "number": 2,
+                    "title": "todo",
+                    "labels": ["stage:todo"],
+                    "updated_at": "now",
+                },
+            ]
+        ]
 
         def gateway(pulls, calls=None):
             """The gateway answer for one pass: the issue snapshot for the
             issue read, and `pulls` for the pull request read. The pull read
             is recorded, so the check can see how it was asked for."""
+
             def run(argv, **kwargs):
                 if "/pulls?" in argv[-1]:
                     if calls is not None:
                         calls.append((argv, kwargs))
-                    body = pulls if isinstance(pulls, str) else __import__("json").dumps(pulls)
+                    body = (
+                        pulls
+                        if isinstance(pulls, str)
+                        else __import__("json").dumps(pulls)
+                    )
                     return SimpleNamespace(returncode=0, stdout=body)
-                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(snapshot))
+                return SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(snapshot)
+                )
+
             return run
 
         def board(pulls, calls=None):
             logged = []
-            with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
-                    patch.object(module, "live_lane_repositories", return_value=set()), \
-                    patch.object(module, "log", side_effect=logged.append), \
-                    patch.object(module.gh_gateway, "run", side_effect=gateway(pulls, calls)):
+            with (
+                patch.object(module, "TICKETS_CONFIG", str(one_repo)),
+                patch.object(module, "live_lane_repositories", return_value=set()),
+                patch.object(module, "log", side_effect=logged.append),
+                patch.object(
+                    module.gh_gateway, "run", side_effect=gateway(pulls, calls)
+                ),
+            ):
                 return [row["number"] for row in module.board_candidates()], logged
 
         # No open pull request: the stale started ticket is logged and does
         # not block its repo, and the todo ticket is the candidate.
-        assert board([]) == ([2], ["refill: #1 is stage:started with no live thread or open PR"])
+        assert board([]) == (
+            [2],
+            ["refill: #1 is stage:started with no live thread or open PR"],
+        )
         # An open, non-draft pull request that refs the started ticket is
         # evidence, so nothing is logged and the repo stays busy.
         assert board([{"number": 5, "draft": False, "body": "Refs #1"}]) == ([], [])
         # A draft pull request is not a builder in flight.
         assert board([{"number": 5, "draft": True, "body": "Refs #1"}]) == (
-            [2], ["refill: #1 is stage:started with no live thread or open PR"])
+            [2],
+            ["refill: #1 is stage:started with no live thread or open PR"],
+        )
         # A pull request that refs a number that is not an open ticket of the
         # repo is not evidence for this repo.
         assert board([{"number": 5, "draft": False, "body": "Refs #9"}]) == (
-            [2], ["refill: #1 is stage:started with no live thread or open PR"])
+            [2],
+            ["refill: #1 is stage:started with no live thread or open PR"],
+        )
         # The pull read is one fresh page, so a cached or paginated read can
         # never hide a pull request that is open now.
         calls = []
@@ -611,18 +782,28 @@ def check_lane_selection():
             except (RuntimeError, ValueError):
                 pass
             else:
-                raise AssertionError(f"unreadable pull request snapshot accepted: {pulls!r:.40}")
-        with patch.object(module, "TICKETS_CONFIG", str(one_repo)), \
-                patch.object(module, "live_lane_repositories", return_value=set()), \
-                patch.object(module.gh_gateway, "run", return_value=SimpleNamespace(
-                    returncode=1, stdout="", stderr="boom")):
+                raise AssertionError(
+                    f"unreadable pull request snapshot accepted: {pulls!r:.40}"
+                )
+        with (
+            patch.object(module, "TICKETS_CONFIG", str(one_repo)),
+            patch.object(module, "live_lane_repositories", return_value=set()),
+            patch.object(
+                module.gh_gateway,
+                "run",
+                return_value=SimpleNamespace(returncode=1, stdout="", stderr="boom"),
+            ),
+        ):
             try:
                 module.board_candidates()
             except RuntimeError:
                 pass
             else:
                 raise AssertionError("failed pull request read accepted")
-        with patch.object(module, "DIR", scratch), patch.object(module, "call", return_value=(1, "failed")):
+        with (
+            patch.object(module, "DIR", scratch),
+            patch.object(module, "call", return_value=(1, "failed")),
+        ):
             try:
                 module.live_lane_repositories(config)
             except RuntimeError:
@@ -636,10 +817,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--lane-selection", action="store_true")
-    parser.add_argument("--proof", default=DEFAULT_PROOF,
-                        help="the proof file this run writes")
-    parser.add_argument("--write-ruff-baseline", action="store_true",
-                        help="write the Ruff baseline file and stop")
+    parser.add_argument(
+        "--proof", default=DEFAULT_PROOF, help="the proof file this run writes"
+    )
+    parser.add_argument(
+        "--write-ruff-baseline",
+        action="store_true",
+        help="write the Ruff baseline file and stop",
+    )
     args = parser.parse_args()
     if args.write_ruff_baseline:
         write_baseline(ruff_counts())
@@ -649,61 +834,117 @@ def main():
         check_lane_selection()
         return
     base = git("merge-base", "origin/main", "HEAD").decode().strip()
-    changes = set(os.fsdecode(p) for p in git("diff", "--name-only", "--no-renames", "-z", base).split(b"\0") if p)
-    untracked = set(os.fsdecode(p) for p in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if p)
+    changes = {
+        os.fsdecode(p)
+        for p in git("diff", "--name-only", "--no-renames", "-z", base).split(b"\0")
+        if p
+    }
+    untracked = {
+        os.fsdecode(p)
+        for p in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+        if p
+    }
     changes.update(untracked)
-    tracked = set(os.fsdecode(p) for p in git("ls-files", "-z").split(b"\0") if p)
-    python_files = sorted(ROOT / name for name in tracked | untracked if name.endswith(".py") and (ROOT / name).is_file())
+    tracked = {os.fsdecode(p) for p in git("ls-files", "-z").split(b"\0") if p}
+    python_files = sorted(
+        ROOT / name
+        for name in tracked | untracked
+        if name.endswith(".py") and (ROOT / name).is_file()
+    )
     modules = {module_name(path): path for path in python_files}
     dependencies = {name: imports(path) for name, path in modules.items()}
     affected = {module_name(ROOT / name) for name in changes if name.endswith(".py")}
     loaded = [Path(name).name for name in LOADED_SCRIPTS if name in changes]
-    affected |= {name for name, path in modules.items()
-                 if path.parent == ROOT / "tests"
-                 and any(f'"{script}"' in path.read_text() for script in loaded)}
+    affected |= {
+        name
+        for name, path in modules.items()
+        if path.parent == ROOT / "tests"
+        and any(f'"{script}"' in path.read_text() for script in loaded)
+    }
     while True:
-        new = affected | {name for name, deps in dependencies.items() if any(dep == changed or dep.startswith(changed + ".") for dep in deps for changed in affected)}
+        new = affected | {
+            name
+            for name, deps in dependencies.items()
+            if any(
+                dep == changed or dep.startswith(changed + ".")
+                for dep in deps
+                for changed in affected
+            )
+        }
         if new == affected:
             break
         affected = new
-    tests = sorted(str(path.relative_to(ROOT)) for name, path in modules.items() if name in affected and path.parent == ROOT / "tests" and path.name.startswith("test_") and path.name.endswith(".py"))
-    changed_python = sorted(name for name in changes if name.endswith(".py") and (ROOT / name).is_file())
-    changed_python = sorted(
-        set(changed_python)
-        | {name for name in SUFFIXLESS_PYTHON if name in changes}
+    tests = sorted(
+        str(path.relative_to(ROOT))
+        for name, path in modules.items()
+        if name in affected
+        and path.parent == ROOT / "tests"
+        and path.name.startswith("test_")
+        and path.name.endswith(".py")
     )
-    changed_shell = sorted(name for name in changes if name.endswith(".sh") and (ROOT / name).is_file())
+    changed_python = sorted(
+        name for name in changes if name.endswith(".py") and (ROOT / name).is_file()
+    )
+    changed_python = sorted(
+        set(changed_python) | {name for name in SUFFIXLESS_PYTHON if name in changes}
+    )
+    changed_shell = sorted(
+        name for name in changes if name.endswith(".sh") and (ROOT / name).is_file()
+    )
     print(f"fast-check: base={base}", flush=True)
     print(f"fast-check: changed={sorted(changes)}", flush=True)
-    print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
+    print(
+        f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}",
+        flush=True,
+    )
     if args.plan:
         return
     isolation = load_isolation()
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-           **isolation.environment(),
-           "COORD_JOURNAL_DIR": isolation.make_dir("check-journal-"),
-           "COORDQ_DIR": isolation.make_dir("check-queue-")}
+    env = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        **isolation.environment(),
+        "COORD_JOURNAL_DIR": isolation.make_dir("check-journal-"),
+        "COORDQ_DIR": isolation.make_dir("check-queue-"),
+    }
     # The suites that prove the entry points install the isolation run under
     # this environment instead: it carries no fake `gh` on PATH and no temp
     # log path, so an entry point that lost its installer is not covered for
     # by this side.
-    entry_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-                 "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"],
-                 "COORDQ_DIR": env["COORDQ_DIR"]}
+    entry_env = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "COORD_JOURNAL_DIR": env["COORD_JOURNAL_DIR"],
+        "COORDQ_DIR": env["COORDQ_DIR"],
+    }
     proof = Proof(args.proof)
     head = git("rev-parse", "HEAD").decode().strip()
-    dirty = [line for line in git("status", "--porcelain", "--untracked-files=all").decode().splitlines()
-             if line[3:].strip() != args.proof]
+    dirty = [
+        line
+        for line in git("status", "--porcelain", "--untracked-files=all")
+        .decode()
+        .splitlines()
+        if line[3:].strip() != args.proof
+    ]
 
     def run(command, cwd=ROOT, timeout=300, check=True, capture=False, child_env=None):
         actual = [sys.executable if part == "python3" else part for part in command]
-        return subprocess.run(actual, cwd=cwd, env=child_env or env, check=check, timeout=timeout,
-                              capture_output=capture, text=capture)
+        return subprocess.run(
+            actual,
+            cwd=cwd,
+            env=child_env or env,
+            check=check,
+            timeout=timeout,
+            capture_output=capture,
+            text=capture,
+        )
 
     lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
     proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
     selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
-    proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
+    proof.check(
+        "overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60)
+    )
 
     def installed():
         ok, detail = installed_selftest(ROOT)
@@ -712,18 +953,30 @@ def main():
         return detail
 
     proof.check("installed selftest", "installed_selftest(ROOT)", installed)
-    proof.check("test isolation: no live gh call or log row",
-                "python3 -m unittest; " + shlex.join(selftest),
-                lambda: check_isolation(run, isolation, entry_env))
+    proof.check(
+        "test isolation: no live gh call or log row",
+        "python3 -m unittest; " + shlex.join(selftest),
+        lambda: check_isolation(run, isolation, entry_env),
+    )
     for name in changed_python:
-        command = ["python3", "-c",
-                   "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]
-        proof.check(f"python syntax: {name}", shlex.join(command),
-                    lambda command=command: run(command, timeout=120))
+        command = [
+            "python3",
+            "-c",
+            "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]",
+            name,
+        ]
+        proof.check(
+            f"python syntax: {name}",
+            shlex.join(command),
+            lambda command=command: run(command, timeout=120),
+        )
     for name in changed_shell:
         command = ["/bin/sh", "-n", name]
-        proof.check(f"shell syntax: {name}", shlex.join(command),
-                    lambda command=command: run(command, timeout=120))
+        proof.check(
+            f"shell syntax: {name}",
+            shlex.join(command),
+            lambda command=command: run(command, timeout=120),
+        )
 
     ruff = ruff_command()
     proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
@@ -739,12 +992,31 @@ def main():
 
     scratch = isolation.make_dir("heavy-queue-tlc-")
     model_dir = ROOT / "formal" / "heavy-queue"
-    java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java" if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file() else "java")
-    jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
-    tlc_command = [java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
-                   "tlc2.TLC", "-workers", "1", "-noGenerateSpecTE",
-                   "-metadir", str(scratch / "states"), "-config", "HeavyQueue.cfg",
-                   "HeavyQueue.tla"]
+    java = os.environ.get(
+        "MAC_OPS_JAVA_BIN",
+        "/opt/homebrew/opt/openjdk@17/bin/java"
+        if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file()
+        else "java",
+    )
+    jar = os.environ.get(
+        "MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar")
+    )
+    tlc_command = [
+        java,
+        "-Xmx128m",
+        f"-Djava.io.tmpdir={scratch}",
+        "-cp",
+        jar,
+        "tlc2.TLC",
+        "-workers",
+        "1",
+        "-noGenerateSpecTE",
+        "-metadir",
+        str(scratch / "states"),
+        "-config",
+        "HeavyQueue.cfg",
+        "HeavyQueue.tla",
+    ]
 
     def tlc():
         for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
@@ -757,15 +1029,20 @@ def main():
     for name in tests:
         module = name[:-3].replace("/", ".")
         command = ["python3", "-m", "unittest", module]
-        proof.check(f"tests: {module}", shlex.join(command),
-                    lambda command=command: run(command, timeout=300))
+        proof.check(
+            f"tests: {module}",
+            shlex.join(command),
+            lambda command=command: run(command, timeout=300),
+        )
     proof.write(head, bool(dirty))
     if proof.failed:
         print(f"fast-check: failed; the proof file is {args.proof}", flush=True)
         sys.exit(1)
     if proof.incomplete:
-        print(f"fast-check: incomplete; a check did not run and the proof file is {args.proof}",
-              flush=True)
+        print(
+            f"fast-check: incomplete; a check did not run and the proof file is {args.proof}",
+            flush=True,
+        )
         sys.exit(1)
     print("fast-check: passed; selected checks are not the full suite", flush=True)
 
