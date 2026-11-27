@@ -20,15 +20,24 @@ measured: cursor has the lowest turns_per_solved (1.5) among 2 within noise of t
 exit=0
 ```
 
-## Real journal, read-only
+## Real Harbor runs, read-only (~/Code/strata/jobs, 31 trials, 3 models)
 
 ```
-cases: every resolved card (journal cards closed or abandoned, type any; turns are lane starts)
+cases: 10 shared by every measured model (all cases (Harbor logs carry no held-out flag))
 model                        runs solved   pass turns/solved     $/solved  tokens/solved
-router                        254    252    99%          1.3          n/a              ?
-would pick: router (measured: router has the lowest turns_per_solved (1.254) among 1 within noise of the best pass rate 0.99)
-cases: every resolved card (journal cards closed or abandoned, type risky; turns are lane starts)
-model                        runs solved   pass turns/solved     $/solved  tokens/solved
-router                        116    115    99%          1.5          n/a              ?
-would pick: router (measured: router has the lowest turns_per_solved (1.478) among 1 within noise of the best pass rate 0.99)
+MiniMax-M2                     10      1    10%        116.0          n/a         169278
+MiniMax-M2.7                   10      0     0%            ?          n/a              ?
+claude-sonnet-4-20250514       11      1     9%        142.0          n/a         209901
+would pick: router (unsure: no measured model is in the build list, default stays)
 ```
+
+## mac-ops Harbor example run (evals/harbor/logs)
+
+```
+cases: 1 shared by every measured model (all cases (Harbor logs carry no held-out flag))
+model                        runs solved   pass turns/solved     $/solved  tokens/solved
+MiniMax-M3.1-Flash              1      1   100%          2.0          n/a           3400
+would pick: router (unsure: no measured model is in the build list, default stays)
+```
+
+Every Harbor result.json on this Mac (541 files) has `cost_usd` null, so $/solved is n/a; tokens and turns are recorded.
