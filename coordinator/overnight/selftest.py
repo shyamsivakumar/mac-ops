@@ -2953,6 +2953,28 @@ def build_here():
                     exact(len(rows), 0 if expect_card else 1)
                     exact(first.startswith("skip #21"), not expect_card)
                     exact(again, first)
+            pr = dict(number=22, state="OPEN", headRefOid=head, mergeable="MERGEABLE", body="Refs #10\nOwner: t1j")
+            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+            ledger = {}
+            start = 1_800_000_000.0
+            for hours, expect_card in ((0, False), (1, False), (7, True)):
+                with tempfile.TemporaryDirectory() as journal_dir, \
+                     patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir}), \
+                     patch.object(lane, "CFG", {repo: dict(key="MO", projectId="fixture", build="here")}), \
+                     patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                     patch.object(lane.time, "time", return_value=start + hours * 3600), \
+                     patch.object(lane, "builder_thread", return_value=("10", "ended-builder")), \
+                     patch.object(lane, "gate_verdict", return_value=("none", None, "")), \
+                     patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=22, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
+                     patch.object(lane, "run", side_effect=AssertionError("live command forbidden")), \
+                     patch.object(lane, "t3", return_value={"thread": {"status": "completed"}}):
+                    result = lane.act_on_pr(repo, 22, ledger)
+                    exact(result.startswith("skip #22"), not expect_card)
+                    exact("herdr-build-MO-22" in [item["id"] for board in decisions.parent.glob("*.json")
+                                                  for item in json.loads(board.read_text())["items"]], expect_card)
+                    expired = "owner_grace_expired" in Path(lane.journal.journal_path(start + hours * 3600)).read_text() \
+                        if Path(lane.journal.journal_path(start + hours * 3600)).exists() else False
+                    exact(expired, expect_card)
 
 
 def stale_started_refill():
