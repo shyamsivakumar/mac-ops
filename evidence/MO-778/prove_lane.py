@@ -55,7 +55,7 @@ def scenario(name, receipts, replies, running=(), replied_hours_ago=0, ledger=No
     ledger = {} if ledger is None else ledger
     verdict, _gate, text = lane.gate_verdict(REPO, NUMBER, HEAD, BASE, ledger)
     print(
-        f"--- {name}\nlane verdict: {verdict}"
+        f"--- {name}\nlane verdict: {verdict}; ledger keys {[k[:10] for k in sorted(ledger)]}"
         + (f"\n{text}" if text and verdict != "PASS" else "")
     )
     print()
