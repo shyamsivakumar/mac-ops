@@ -63,7 +63,7 @@ A FAIL reply returns FAIL in every arm; nothing scores it.
     fail2 partial drop report body: findings=2 dropped=1 verdict FAIL -> FAIL remaining_majors=1 complete_pass=False unchanged=False
        dropped: Major — scripts/coord_wake_metrics.py:116 and :139. GitHub reconciliation checks mac-ops PRs, but the script collects PR numbers from every repository in the in
     Second pass scored these below the merge bar and dropped them:
-    - Major — scripts/coord_wake_metrics.py:116 and :139. GitHub reconciliation checks mac-ops PRs, but the script collects PR numbers from every repository in the in
+    - dropped: Major — scripts/coord_wake_metrics.py:116 and :139. GitHub reconciliation checks mac-ops PRs, but the script collects PR numbers from every repository in the in
     
     
     
@@ -76,6 +76,12 @@ A FAIL reply returns FAIL in every arm; nothing scores it.
     PROVIDES: PASS 5fa26488da21ce4a78b3572fbf1ee442d20b83d4
     CHECK: PASS 5fa26488da21ce4a78b3572fbf1ee442d20b83d4
     VERDICT: FAIL
+    two consecutive Majors, parsed: 2
+    two consecutive Majors, first scored low: findings=2 dropped=1 verdict -> FAIL unchanged=False
+    two consecutive Majors, both scored low: findings=2 dropped=2 verdict -> PASS unchanged=False
+    bulleted Majors, first scored low: findings=2 dropped=1 verdict -> FAIL unchanged=False
+    numbered Majors, first scored low: findings=2 dropped=1 verdict -> FAIL unchanged=False
+    mismatch (2 Major lines in the text, 1 finding in the json block, scored low): dropped=0 unchanged=True verdict=FAIL
     a PASS report is untouched: True
 
 ## After: one real cheap-model call (python3 -I evidence/MO-779/proof.py real)
@@ -88,11 +94,11 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[7, 8]\n'
+    raw model answer: '[7, 9]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: ''
+    raw model answer: '[7, 9]\n'
 
 A score of 7 or more keeps the finding.
 

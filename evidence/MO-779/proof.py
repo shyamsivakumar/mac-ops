@@ -64,6 +64,32 @@ if mode == "fake":
         show(name + " CHECK PASS (edited), call raises", ok, raises)
     partial = show("fail2 partial drop report body", check_pass(Path(REPORTS[1]).read_text()), lambda _p: "[2, 9]")
     print(partial)
+    tail = "\n\nCHECK: PASS abc\nPROVIDES: PASS abc\nVERDICT: FAIL"
+    consecutive = "Major - a.py:1 first bug.\nMajor - b.py:2 second bug." + tail
+    print("two consecutive Majors, parsed:", len(gate_score.findings_of(consecutive)))
+    show_cases = (
+        ("two consecutive Majors, first scored low", consecutive, "[2, 9]"),
+        ("two consecutive Majors, both scored low", consecutive, "[2, 3]"),
+        ("bulleted Majors, first scored low", "- Major: a.py:1 x.\n- Major: b.py:2 y." + tail, "[2, 9]"),
+        ("numbered Majors, first scored low", "1. Major: a.py:1 x.\n2. Critical: b.py:2 y." + tail, "[2, 9]"),
+    )
+    for label, text, answer in show_cases:
+        new, dropped = gate_score.score_findings(text, lambda _p, a=answer: a)
+        print(
+            f"{label}: findings={len(gate_score.findings_of(text))} dropped={len(dropped)} "
+            f"verdict -> {gate_policy.read_verdict(new)[0]} unchanged={new == text}"
+        )
+    json_report = (
+        "Major - a.py:1 first bug.\nMajor - b.py:2 second bug.\n\n```json\n"
+        + json.dumps({"verdict": "FAIL", "findings": [
+            {"id": "F1", "severity": "major", "bar_clause": "x", "path": "a.py", "line": 1, "text": "first bug.", "fixed_when": "y"}]})
+        + "\n```" + tail
+    )
+    new, dropped = gate_score.score_findings(json_report, lambda _p: "[1]")
+    print(
+        "mismatch (2 Major lines in the text, 1 finding in the json block, scored low): "
+        f"dropped={len(dropped)} unchanged={new == json_report} verdict={gate_policy.read_verdict(new)[0]}"
+    )
     passing = "All good.\n\nCHECK: PASS abc\nPROVIDES: PASS abc\nVERDICT: PASS"
     show_new = gate_score.score_findings(passing, lambda _p: "[1]")
     print("a PASS report is untouched:", show_new == (passing, []))

@@ -7,7 +7,7 @@ import models
 from gate_bar import SEVERITY_BAR
 
 KEEP_AT = 7
-LEAD = re.compile(r"(Critical|Major)\b")
+LEAD = re.compile(r"^[ \t]*(?:[-*>][ \t]+|\d+[.)][ \t]+)?[*_`]*(?:Critical|Major)\b", re.MULTILINE)
 SCORES = re.compile(r"\[[\d,\s]*\]")
 
 ASK = """{bar}
@@ -18,16 +18,25 @@ Reply with only a JSON list of {count} integers, one per finding, in order.
 {findings}"""
 
 
+def prose_findings(report):
+    found, open_item = [], False
+    for line in report.splitlines():
+        if LEAD.match(line):
+            found.append([line])
+            open_item = True
+        elif line.strip() and open_item:
+            found[-1].append(line)
+        else:
+            open_item = False
+    return [{"text": "\n".join(lines).strip()} for lines in found]
+
+
 def findings_of(report):
     return [
         f
         for f in gate_policy.read_verdict(report)[1]
         if f.get("severity") in ("critical", "major")
-    ] or [
-        {"text": p.strip()}
-        for p in re.split(r"\n\s*\n", report)
-        if LEAD.match(p.strip())
-    ]
+    ] or prose_findings(report)
 
 
 def scores_for(findings, call):
@@ -62,6 +71,8 @@ def score_findings(report, call):
     ):
         return report, []
     findings = findings_of(report)
+    if len(LEAD.findall(report)) > len(findings):
+        return report, []
     scores = scores_for(findings, call) if findings else None
     if scores is None:
         return report, []
@@ -78,7 +89,7 @@ def score_findings(report, call):
     titles = [f["text"].splitlines()[0][:160] for f in dropped]
     return (
         "Second pass scored these below the merge bar and dropped them:\n"
-        + "\n".join(f"- {t}" for t in titles)
+        + "\n".join(f"- dropped: {t}" for t in titles)
         + "\n\n"
         + report,
         titles,
