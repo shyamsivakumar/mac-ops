@@ -148,6 +148,7 @@ def factory_experiments():
 
 PROMOTION_DAYS = 14
 HOLDBACK_PERCENT = 20
+SETTLE_DAYS = 7
 
 
 def factory_state_dir():
