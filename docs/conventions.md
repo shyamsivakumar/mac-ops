@@ -76,6 +76,6 @@ The sources are:
 - `lanes`: `~/Library/Logs/coordinator/lanes.log` (error lines only)
 - `journal`: error events like `close_failed`, `refused`, `alarm_raised`
 
-`--tail` caps the lines per source at 200 by default.
+`--tail` caps the lines per source at 200 by default. It must be 1 or more.
 An unreadable source prints one stderr line, and the command exits 1.
 The other sources still print.

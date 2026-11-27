@@ -33,7 +33,7 @@ UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
 SECRET = re.compile(
     r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}"
     r"|(?i:bearer)\s+[A-Za-z0-9._~+/=-]{12,}"
-    r"|(?i:[\w-]*(?:token|secret|password|passwd|key)[\w-]*)\s*[=:]\s*[^\s,;\"']+)"
+    r"|(?i:[\w-]*(?:token|secret|password|passwd|key)[\w-]*)[\"']?\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+))"
 )
 
 
@@ -119,6 +119,9 @@ def read_source(name, queue_dir, cutoff):
 
 
 def run(names, queue_dir, since, grep, tail, out, err, now=None):
+    if tail < 1:
+        print(f"coordq logs: --tail {tail}: use 1 or more", file=err)
+        return 2
     try:
         cutoff = since_cutoff(since, now or time.time()) if since else None
         pattern = re.compile(grep, re.IGNORECASE) if grep else None

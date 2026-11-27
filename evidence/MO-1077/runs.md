@@ -30,6 +30,24 @@ coordq logs: dispatch: cannot read <tmp>/q/dispatch.log: No such file or directo
 exit 1
 ```
 
+## Quoted JSON secrets and --tail (second round)
+
+Fixture line: `{"password": "hunter two", "x": 1} {"api_token":"abc123"} token=abc123XYZ Bearer abcdefghijklmnop ghp_abcdefghijklmnopqrstuvwxyz1234`
+
+```
+$ coordq logs ticks --tail 5
+== ticks (2 of 2 lines) ==
+2026-11-27 10:01:00 {"[redacted], "x": 1} {"[redacted]} [redacted] [redacted] [redacted]
+plain line ok
+exit 0
+$ coordq logs ticks --tail 0
+coordq logs: --tail 0: use 1 or more
+exit 2
+$ coordq logs ticks --tail -3
+coordq logs: --tail -3: use 1 or more
+exit 2
+```
+
 ## Finding rules on a fixture
 
 ```
@@ -37,4 +55,5 @@ exit 1
 x.py containing subprocess.run("git stash")    -> ['no-git-stash']
 x.py containing print("hi")                     -> []
 ci.yml outside .github/workflows                -> []
+.woodpecker.yml, .woodpecker.yaml, .woodpecker/build.yml -> ['no-woodpecker-workflows']
 ```
