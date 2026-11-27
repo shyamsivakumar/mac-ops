@@ -22,6 +22,7 @@ SEVERITY_BAR = """Severity bar (Shyam, 2026-11-19). This applies to every gate:
 _REST = """Convergence rule (Shyam, 2026-11-18 09:55 PT, from Fable's review). This applies to every gate:
 - Round 1 must list every critical and major found, not just the first.
 - Round 2 and later: raise only findings in lines changed since the previous reviewed head, plus any earlier critical or major still open. Anything else you notice is a minor under 'Left for later'.
+- Every round lists all blocking findings it can find on the allowed lines, most severe first, and never stops at the first. End the findings with a `Failure paths checked:` line naming the failure paths you walked.
 - Earlier findings: confirm each is fixed; an unfixed earlier major still blocks.
 - After 3 review rounds without PASS, the PR is re-cut into smaller PRs or brought to Shyam; no 4th review as is.
 
