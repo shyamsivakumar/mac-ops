@@ -78,7 +78,9 @@ def score_findings(report, call):
     ):
         return report, []
     findings = findings_of(report)
-    if len(LEAD.findall(report)) > len(findings):
+    if len(BLOCKING_WORD.findall(report)) > len(findings) or any(
+        len(BLOCKING_WORD.findall(f["text"])) > 1 for f in findings
+    ):
         return report, []
     scores = scores_for(findings, call) if findings else None
     if scores is None:
