@@ -560,11 +560,11 @@ def measured_pick(list_name, stats=None):
     if best < floor:
         return default, f"unsure: best pass rate {best:.2f} is under the floor {floor}, default stays"
     near = {i: s for i, s in scored.items() if best - s["pass_rate"] <= rule.get("noise", 0.1)}
-    for key in ("cost_per_solved", "tokens_per_solved"):
+    for key in ("cost_per_solved", "tokens_per_solved", "turns_per_solved"):
         if all(s.get(key) is not None for s in near.values()):
             pick = min(near, key=lambda i: near[i][key])
             return listed[pick], f"measured: {pick} has the lowest {key} ({near[pick][key]:.4g}) among {len(near)} within noise of the best pass rate {best:.2f}"
-    return default, "unsure: the models within noise share no cost or token figure, default stays"
+    return default, "unsure: the models within noise share no cost, token or turn figure, default stays"
 
 
 def main(argv):
