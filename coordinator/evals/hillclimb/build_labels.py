@@ -22,10 +22,34 @@ import hashlib
 import json
 import os
 import re
+import sys
+from pathlib import Path
 
 HOME = os.path.expanduser("~")
 SESS = f"{HOME}/.pi/agent-coordinator/sessions/--Users-shyamsivakumar-Code-coordinator--"
-OUT = f"{HOME}/Code/coordinator/evals/hillclimb"
+
+
+def pull_data_arg(argv):
+    if "--data" not in argv:
+        return None
+    i = argv.index("--data")
+    path = os.path.expanduser(argv[i + 1])
+    del argv[i : i + 2]
+    return path
+
+
+DATA_ARG = pull_data_arg(sys.argv)
+
+
+def data_dir(beside):
+    if DATA_ARG:
+        return Path(DATA_ARG)
+    if (beside / "labels.jsonl").exists():
+        return beside
+    return Path(f"{HOME}/Code/coordinator/evals/hillclimb")
+
+
+OUT = str(data_dir(Path(__file__).resolve().parent))
 TMP = os.environ.get("TMPDIR", "/tmp")
 
 # ---------------------------------------------------------------- sources

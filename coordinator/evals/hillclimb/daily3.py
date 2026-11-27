@@ -31,12 +31,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import build_labels as B  # noqa: E402  (same split rule, same normalisation)
 
+DATA = B.data_dir(HERE)
+
 DECISIONS = Path(os.path.expanduser("~/Code/coordinator/decisions.json"))
-GUESSES = HERE / "daily3_guesses.jsonl"
-LABELS = HERE / "labels.jsonl"
-SPLIT = HERE / "split.json"
-BURST = HERE / "burst_queue.jsonl"
-HARD = HERE / "hard_set.jsonl"
+GUESSES = DATA / "daily3_guesses.jsonl"
+LABELS = DATA / "labels.jsonl"
+SPLIT = DATA / "split.json"
+BURST = DATA / "burst_queue.jsonl"
+HARD = DATA / "hard_set.jsonl"
 SCORE_PY = Path(os.environ.get("SCORE_PY", os.path.expanduser("~/Code/mac-ops/evals/ladder/score.py")))
 
 
@@ -220,7 +222,7 @@ def relock():
         print(f"daily3: score.py not found at {SCORE_PY}; run the lock by hand", file=sys.stderr)
         return False
     done = subprocess.run(
-        [sys.executable, str(SCORE_PY), "lock", "--labels", str(HERE)],
+        [sys.executable, str(SCORE_PY), "lock", "--labels", str(DATA)],
         capture_output=True,
         text=True,
     )
