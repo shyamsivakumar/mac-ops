@@ -7,3 +7,6 @@ evals/ladder/score.lock
 # Harbor eval snapshots
 evals/harbor/.cache/
 evals/harbor/tasks/*/environment/snapshot.tar
+
+# Full local holdout replay inputs. The tracked manifest.json is the stripped public index.
+reviewer_audit/manifest.local.json
