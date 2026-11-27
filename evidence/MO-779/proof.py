@@ -79,6 +79,34 @@ if mode == "fake":
             f"{label}: findings={len(gate_score.findings_of(text))} dropped={len(dropped)} "
             f"verdict -> {gate_policy.read_verdict(new)[0]} unchanged={new == text}"
         )
+    variants = [
+        "Major \u2014 a.py:1 x.", "[major] a.py:1 x.", "**Critical**: a.py:1 x.", "- major: a.py:1 x.",
+        "1) MAJOR a.py:1 x.", "`Major` a.py:1 x.", "> Critical - a.py:1 x.", "[Critical] a.py:1 x.",
+    ]
+    print("all-format variants, each alone, scored low flips only when nothing else blocks:")
+    for variant in variants:
+        text = variant + tail
+        new, dropped = gate_score.score_findings(text, lambda _p: "[1]")
+        print(f"  {variant!r}: findings={len(gate_score.findings_of(text))} dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
+    for first in variants[:4]:
+        for second in variants[4:]:
+            text = first + "\n" + second + tail
+            new, dropped = gate_score.score_findings(text, lambda _p: "[1, 9]")
+            print(f"  mixed {first!r} + {second!r}, first scored low: findings={len(gate_score.findings_of(text))} dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
+    mixed = "Major \u2014 a.py:1 first.\n[major] b.py:2 second.\n" + "Left for later\n\nMinor \u2014 c.py:3 tidy." + tail
+    new, dropped = gate_score.score_findings(mixed, lambda _p: "[2, 9]")
+    print(f"mixed Major and [major], one scored low: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
+    new, dropped = gate_score.score_findings(mixed, lambda _p: "[2, 3]")
+    print(f"mixed Major and [major], both scored low, minor kept: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
+    json_left = (
+        "Major \u2014 a.py:1 first bug.\n\n```json\n"
+        + json.dumps({"verdict": "FAIL", "findings": [
+            {"id": "F1", "severity": "Major", "bar_clause": "x", "path": "a.py", "line": 1, "text": "first bug.", "fixed_when": "y"},
+            {"id": "F2", "severity": "critical", "bar_clause": "x", "path": "b.py", "line": 2, "text": "second bug.", "fixed_when": "y"}]})
+        + "\n```" + tail
+    )
+    new, dropped = gate_score.score_findings(json_left, lambda _p: "[1, 9]")
+    print(f"json block with a kept critical, one dropped: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
     json_report = (
         "Major - a.py:1 first bug.\nMajor - b.py:2 second bug.\n\n```json\n"
         + json.dumps({"verdict": "FAIL", "findings": [
