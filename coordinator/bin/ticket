@@ -66,6 +66,7 @@ BARE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
 COMMENT_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/\d+#(issuecomment-\d+)")
 DETAILS_BLOCK = re.compile(r"(?is)<details\b.*?</details>")
 SECTION_NAME = "Blocked by"
+REQUIRES_NAME = "Requires"
 REF_STATE = {}
 KEY_ISSUE = {}
 COMMENT_TEXT = {}
@@ -1082,16 +1083,26 @@ def blocked_by_section(cfg, body):
     preserved contract inside one, the blocker check skips it, so a body
     whose only `Blocked by` sits inside `<details>` passes the blocker check.
     """
+    sections = blocker_sections(cfg, body)
+    return "\n".join(sections) if sections else None
+
+
+def blocker_sections(cfg, body):
+    """The text of the first `Blocked by` and the first `Requires` section."""
     lines = own_body(body).splitlines()
-    markers = template_markers(cfg, lines)
-    for start, section, level, rest in markers:
-        if section != SECTION_NAME:
+    markers = template_markers(dict(cfg, template=cfg["template"] + [REQUIRES_NAME]), lines)
+    found = []
+    for name in (SECTION_NAME, REQUIRES_NAME):
+        marker = next((m for m in markers if m[1] == name), None)
+        if marker is None:
             continue
+        start, _, level, rest = marker
         if level:
             stops = [m[0] for m in markers if m[0] > start]
             stops += [j for j in range(start + 1, len(lines)) if (h := HEADING.match(lines[j])) and len(h.group(1)) <= level]
             end = min(stops, default=len(lines))
-            return re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
+            found.append(re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip())
+            continue
         content = [rest]
         pending = []
         next_marker = min((m[0] for m in markers if m[0] > start), default=len(lines))
@@ -1105,8 +1116,8 @@ def blocked_by_section(cfg, body):
             content.extend(pending)
             pending = []
             content.append(follow)
-        return "\n".join(content).strip()
-    return None
+        found.append("\n".join(content).strip())
+    return found
 
 
 def resolve_key_issue(repo, key, number):
@@ -1164,14 +1175,13 @@ def verdict_recorded(repo, issue):
 
 def section_blocker_reasons(cfg, repo, issue):
     """Every reference in the `Blocked by` section that is not met yet."""
-    section = blocked_by_section(cfg, issue.get("body") or "")
-    if not section:
-        return []
-    text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
+    texts = []
+    for section in blocker_sections(cfg, issue.get("body") or ""):
+        text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
+        if text and text.splitlines()[0].strip().lower().rstrip(".:") not in ("none", "n/a", "nil", "-"):
+            texts.append(text)
+    text = "\n".join(texts)
     if not text:
-        return []
-    first = text.splitlines()[0].strip().lower().rstrip(".:")
-    if first in ("none", "n/a", "nil", "-"):
         return []
     key = cfg["repos"][repo]["key"]
     reasons = []

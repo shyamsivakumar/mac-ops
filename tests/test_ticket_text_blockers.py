@@ -153,6 +153,14 @@ class SectionBlockerTest(unittest.TestCase):
         cfg = dict(CFG, template=CFG["template"] + ["Scope and non-goals"])
         self.assertEqual(ticket.section_blocker_reasons(cfg, REPO, issue(body)), [])
 
+    def test_a_closed_pull_request_in_requires_still_refuses(self):
+        self.states[(REPO, 816)] = "unmerged"
+        cfg = dict(CFG, template=CFG["template"] + ["Scope and non-goals"])
+        heading = "## Blocked by\nNone.\n\n## Requires\n#816 must land.\n\n## Scope and non-goals\nA re-cut of #490.\n"
+        line = "**Requires:** #816 must land.\n\n**Scope and non-goals:** A re-cut of #490.\n"
+        for body in (heading, line):
+            self.assertEqual(ticket.section_blocker_reasons(cfg, REPO, issue(body)), [f"{REPO}#816 is not merged"])
+
     def test_merged_pull_request_passes(self):
         body = "## Blocked by\nB1 #898 is complete.\n"
         self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue(body)), [])
