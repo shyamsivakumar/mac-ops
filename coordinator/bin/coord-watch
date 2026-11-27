@@ -324,6 +324,11 @@ def log_events(paths, previous, slow, limit):
                 if not stat.S_ISREG(info.st_mode):
                     continue
                 identity = f"{info.st_dev}:{info.st_ino}"
+                if not old:
+                    source.seek(max(0, info.st_size - 128))
+                    offsets[key] = {"identity": identity, "generation": 0, "offset": info.st_size,
+                                    "anchor": hashlib.sha256(source.read(128)).hexdigest(), "skipping": False}
+                    continue
                 same_file = old.get("identity") == identity
                 generation = old.get("generation", 0)
                 if old and not same_file:

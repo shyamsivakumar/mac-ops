@@ -51,11 +51,13 @@ Cycle 2 on the same state file: nothing (once per run id).
 
 Config read: the same fixture with `slowTickMinutes` = 30 prints no alarm.
 
-## Real data
+## Fresh install seeding
 
-Input was a copy of the live ticks.log (1803 lines), fresh state, two cycles.
-origin/main printed 0 slow-tick events. The branch printed 64.
-The first 64 KB chunk held no cap rows; the second chunk held them.
-The existing reader consumes 64 KB per cycle.
-An install replays the old backlog once over a few cycles.
-After that, only new rows alarm.
+The earlier revision replayed the old backlog on a fresh state (64 alarms on the live log copy).
+Now a log with no stored offset is seeded to its current end on the first cycle and raises nothing.
+Only rows appended afterwards alarm. The two fixture cycles above therefore need the rows appended
+after a seeding cycle; the run below shows the whole flow on a copy of the live ticks.log (1808 lines).
+
+    cycle 1 (fresh state) slow-tick events: 0
+    cycle 2 (after appending one 11.0 min cap row) slow-tick events: 1
+    cycle 3 (no new rows) slow-tick events: 0
