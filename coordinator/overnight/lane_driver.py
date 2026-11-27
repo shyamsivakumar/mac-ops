@@ -1914,6 +1914,25 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
     return unstick(repo, ledger, excl)
 
 
+def ticket_started_at(repo, number):
+    """Return the epoch of the newest ticket_started row for a ticket, or None when no row is readable."""
+    latest = None
+    now = time.time()
+    for path in {journal.journal_path(now), journal.journal_path(now - 31 * 86400)}:
+        if not os.path.exists(path):
+            continue
+        with open(path) as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("event") == "ticket_started" and row.get("repo") == repo and row.get("ticket") == number \
+                        and isinstance(row.get("ts"), (int, float)):
+                    latest = max(latest or 0, row["ts"])
+    return latest
+
+
 LIVE_THREAD_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 
 
@@ -1944,6 +1963,9 @@ def unstick(repo, ledger, excl=frozenset()):
             if n in held:
                 thread = best and t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
                 if (thread or {}).get("status") in LIVE_THREAD_STATUSES or re.search(rf"#{n}\b", live_titles):
+                    continue
+                started_at = ticket_started_at(repo, n)
+                if started_at is None or time.time() - started_at < 1800:
                     continue
                 if not DRY:
                     run(["gh", "issue", "edit", str(n), "-R", repo, "--remove-label", "stage:started", "--add-label", "stage:todo"])

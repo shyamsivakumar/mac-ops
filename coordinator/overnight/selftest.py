@@ -2947,15 +2947,24 @@ def stale_started_refill():
             return {"thread": {"status": "running"}}
         return {"threads": []}
     actions = []
-    with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
-         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
-         patch("builtins.open", mock_open(read_data=receipts)), \
-         patch.object(lane, "run", lambda cmd, timeout=150: actions.append(cmd) or ""):
-        with patch.object(lane, "DRY", True):
-            exact(lane.unstick(repo, {}), "DRY release [7]")
-            exact(actions, [])
-        with patch.object(lane, "DRY", False):
-            exact(lane.unstick(repo, {}), "release [7]")
+    ages = {}
+    def run_pass(dry):
+        with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch("builtins.open", mock_open(read_data=receipts)), \
+             patch.object(lane, "ticket_started_at", lambda r, n: ages.get(n)), \
+             patch.object(lane, "DRY", dry), \
+             patch.object(lane, "run", lambda cmd, timeout=150: actions.append(cmd) or ""):
+            return lane.unstick(repo, {})
+    now = time.time()
+    exact(run_pass(False), "nothing ready")
+    ages[7] = now - 300
+    exact(run_pass(False), "nothing ready")
+    exact(actions, [])
+    ages[7] = now - 7200
+    exact(run_pass(True), "DRY release [7]")
+    exact(actions, [])
+    exact(run_pass(False), "release [7]")
     exact([cmd[2:3] + cmd[3:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
     exact("stage:todo" in actions[0] and "stage:started" in actions[0], True)
 
