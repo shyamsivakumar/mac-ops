@@ -2930,6 +2930,58 @@ def build_here():
             exact(head[:8] in items[0]["title"], True)
 
 
+def stale_started_refill():
+    import lane_driver as lane
+    from datetime import datetime, timezone
+    repo = "shyamsivakumar/mac-ops"
+    started = [{"name": "stage:started"}]
+    snapshot = {"repos": {repo: {"issues": [
+        {"number": 7, "title": "stale", "labels": started},
+        {"number": 8, "title": "has pull request", "labels": started},
+        {"number": 9, "title": "live builder", "labels": started},
+        {"number": 10, "title": "ready", "labels": [{"name": "stage:todo"}]}],
+        "prs": [{"number": 80, "body": "Refs #8"}]}}}
+    receipts = json.dumps({f"ticket:{repo}#9:a1": "live"})
+    def t3(tool, args):
+        if tool == "t3_thread_read":
+            return {"thread": {"status": "running"}}
+        return {"threads": []}
+    actions = []
+    ages = {}
+    def run_pass(dry):
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
+             patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "RECEIPTS", str(Path(scratch, "receipts.json"))), \
+             patch.object(lane.time, "time", return_value=now), \
+             patch.object(lane, "DRY", dry), \
+             patch.object(lane, "run", lambda cmd, timeout=150: actions.append(cmd) or ""):
+            Path(lane.RECEIPTS).write_text(receipts)
+            Path(scratch, "events-2099-01.jsonl").write_bytes(b"\xff\xfe")
+            Path(scratch, "events-2024-12.jsonl").write_text("not json\n")
+            for number, ts in ages.items():
+                with open(lane.journal.journal_path(ts), "a") as handle:
+                    handle.write(json.dumps({"event": "ticket_started", "repo": repo,
+                                             "ticket": number, "ts": ts}) + "\n")
+            return lane.unstick(repo, {})
+    now = datetime(2025, 3, 1, 0, 30, tzinfo=timezone.utc).timestamp()
+    exact(run_pass(False), "nothing ready")
+    ages[7] = now - 300
+    exact(run_pass(False), "nothing ready")
+    exact(actions, [])
+    ages[7] = now - 7200
+    exact(run_pass(True), "DRY release [7]")
+    exact(actions, [])
+    exact(run_pass(False), "release [7]")
+    exact([cmd[2:3] + cmd[3:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
+    exact("stage:todo" in actions[0] and "stage:started" in actions[0], True)
+    actions.clear()
+    ages[7] = now - 90 * 86400
+    exact(run_pass(False), "release [7]")
+    exact([cmd[2:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
+
+
 def refill_busy():
     coordq = load_coordq()
     repo = "shyamsivakumar/mac-ops"
@@ -6472,7 +6524,7 @@ def held_merge():
         exact(os.listdir(queue_dir), [])
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
 
 
 def main():
