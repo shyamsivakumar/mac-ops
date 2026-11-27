@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Group worker knowledge-gap rows and propose playbook edits as decision cards.
+
+    curator --days 14 --min 2 --dry-run
+
+Read-only toward playbooks and skills: it only reads gap rows from the journal
+and raises one card per recurring topic on the decisions board.
+"""
+import argparse
+import collections
+import glob
+import hashlib
+import json
+import os
+import sys
+import time
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, BIN)
+sys.path.append(os.path.join(BIN, "..", "overnight"))
+import alarms
+import journal
+
+
+def gap_rows(since):
+    for path in sorted(glob.glob(os.path.join(journal.journal_dir(), "events-*.jsonl"))):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if (isinstance(row, dict) and row.get("event") == "gap" and isinstance(row.get("data"), dict)
+                        and isinstance(row.get("ts"), (int, float)) and row["ts"] >= since
+                        and row["data"].get("topic") and row["data"].get("missing")):
+                    yield row
+
+
+def group(rows):
+    topics = collections.defaultdict(list)
+    for row in rows:
+        topics[row["data"]["topic"]].append(row)
+    return topics
+
+
+def gap_item(topic, rows):
+    cards = sorted({r["data"].get("card") or str(r.get("ticket")) for r in rows})
+    looked = sorted({r["data"].get("looked") for r in rows if r["data"].get("looked")})
+    return {
+        "id": "gap-" + hashlib.sha256(topic.encode()).hexdigest()[:10],
+        "group": "Coordinator",
+        "kind": "ask",
+        "title": f"Playbook gap: {len(rows)} workers lacked '{topic}'",
+        "cause": f"{len(rows)} gap rows on cards {', '.join(cards)}",
+        "why": f"Missing: {rows[-1]['data']['missing']}. Workers looked in: {'; '.join(looked) or 'unrecorded'}.",
+        "options": [{"label": "Add it to the playbook the workers read", "detail": "", "recommended": True}],
+    }
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="curator")
+    ap.add_argument("--days", type=float, default=14)
+    ap.add_argument("--min", type=int, default=2, dest="threshold")
+    ap.add_argument("--decisions", default=alarms.DECISIONS_PATH)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args(argv)
+    failed = 0
+    for topic, rows in sorted(group(gap_rows(time.time() - args.days * 86400)).items()):
+        if len(rows) < args.threshold:
+            continue
+        item = gap_item(topic, rows)
+        if args.dry_run:
+            print(json.dumps(item, indent=2))
+        elif alarms.route_update(args.decisions, item["id"], "raise", item) != "wrote":
+            print(f"curator: card {item['id']} not written", file=sys.stderr)
+            failed = 1
+        else:
+            print(f"raised {item['id']}")
+    return failed
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
