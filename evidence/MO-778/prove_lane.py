@@ -42,7 +42,7 @@ def reply(outcome, check="PASS", findings=()):
     return f"{block}\nsummary\n\nPROVIDES: PASS {HEAD}\nCHECK: {check} {HEAD}\nVERDICT: {outcome}"
 
 
-def scenario(name, receipts, replies, running=(), replied_hours_ago=0):
+def scenario(name, receipts, replies, running=(), replied_hours_ago=0, ledger=None):
     path = Path(tempfile.mkdtemp(prefix="mo778-lane-")) / "receipts.json"
     path.write_text(
         json.dumps({**receipts, **{f"base:{t}": BASE for t in ("T1", "T2", "T3")}})
@@ -50,9 +50,10 @@ def scenario(name, receipts, replies, running=(), replied_hours_ago=0):
     lane.RECEIPTS = str(path)
     lane.gate_in_flight = lambda thread: thread in running
     lane.last_reply = lambda thread: replies.get(thread, "")
-    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - replied_hours_ago * 3600))
-    lane.reply_updated_at = lambda thread: stamp
-    verdict, _gate, text = lane.gate_verdict(REPO, NUMBER, HEAD, BASE)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - (replied_hours_ago or 0) * 3600))
+    lane.reply_updated_at = lambda thread: None if replied_hours_ago is None else stamp
+    ledger = {} if ledger is None else ledger
+    verdict, _gate, text = lane.gate_verdict(REPO, NUMBER, HEAD, BASE, ledger)
     print(
         f"--- {name}\nlane verdict: {verdict}"
         + (f"\n{text}" if text and verdict != "PASS" else "")
@@ -107,3 +108,8 @@ scenario("primary done 3 h ago, neither voter launched: FAIL, not the primary al
 scenario("primary and voter 2 done, voter 3 in flight 1 h after the primary replied: still running", BOTH, {"T1": FAIL_A, "T2": FAIL_B, "T3": "partial text"}, running={"T3"}, replied_hours_ago=1)
 scenario("primary and voter 2 done, voter 3 in flight 3 h after the primary replied: merge of 2", BOTH, {"T1": FAIL_A, "T2": FAIL_B, "T3": "partial text"}, running={"T3"}, replied_hours_ago=3)
 scenario("primary done, both voters in flight 3 h later: FAIL, not the primary alone", BOTH, {"T1": PASS, "T2": "x", "T3": "y"}, running={"T2", "T3"}, replied_hours_ago=3)
+NO_REPLY = {"T1": "", "T2": FAIL_A, "T3": FAIL_B}
+LATER = {"T2": "partial", "T3": "partial"}
+scenario("primary ended with no reply, voters in flight, first tick: running, wait recorded", BOTH, {"T1": "", "T2": "p", "T3": "p"}, running={"T2", "T3"}, replied_hours_ago=None)
+scenario("same, 3 h after the stored time, voters 2 and 3 finished: merge of the two valid voters", BOTH, NO_REPLY, replied_hours_ago=None, ledger={f"vote-wait:{KEY}": time.time() - 3 * 3600})
+scenario("same, 3 h after the stored time, voters still in flight: FAIL", BOTH, {"T1": "", "T2": "p", "T3": "p"}, running={"T2", "T3"}, replied_hours_ago=None, ledger={f"vote-wait:{KEY}": time.time() - 3 * 3600})

@@ -25,11 +25,14 @@ def voter_args(args, key, paths):
     return ballots
 
 
-def voters_overdue(replied_at):
+def replied_epoch(replied_at):
     if not replied_at:
-        return True
-    replied = datetime.fromisoformat(replied_at.replace("Z", "+00:00")).timestamp()
-    return time.time() - replied >= VOTER_WAIT_HOURS * 3600
+        return None
+    return datetime.fromisoformat(replied_at.replace("Z", "+00:00")).timestamp()
+
+
+def overdue(since):
+    return time.time() - since >= VOTER_WAIT_HOURS * 3600
 
 
 def vote_threads(receipts, key):
