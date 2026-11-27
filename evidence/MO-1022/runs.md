@@ -1,41 +1,51 @@
 # MO-1022 runs
 
-Proof: `bash evidence/MO-1022/proof1022.sh <root>`.
-`<root>` holds `coordinator/bin/coordq`.
+Run: `bash evidence/MO-1022/proof1022.sh <dir with coordinator/bin/coordq>`.
 It builds a temp COORDQ_DIR, a fake t3mcp and a temp T3 database. config.json has
-`spendCapTokens` 1000 and `stallMinutes` 30. Card 1 has 5000 tokens, card 2 has
-10 tokens and is fresh, card 3 has 10 tokens and is 2 h idle. It runs
-`coordq spend`.
+`spendCapTokens` 1000 and `stallMinutes` 30. The fake thread list has 2 pages.
+Page 1 holds card 2 (10 tokens, fresh) and card 3 (10 tokens, idle 2 h). Page 2
+holds card 1 (5000 tokens). The script first runs `coordq spend` with page 2
+unreadable, then with page 2 readable.
 
 ## origin/main (red)
 
-```text
---- spend run
-usage: coordq [-h]
-            {start,create,list,drop,status,wait,waits,dispatch,gatekeep,gate,fix}
-            ...
-coordq: error: argument cmd: invalid choice: 'spend' (choose from ...)
-exit 2
---- status stuck
-[]
-```
+`coordq: error: argument cmd: invalid choice: 'spend'`, exit 2.
 
-## branch head (green)
+## Previous head 7d0fe65b, one page only (red for the paging fix)
 
 ```text
---- spend run
-stop o/r#1 th-over: spend cap: 5000 tokens, cap 1000
+--- page 2 unreadable: nothing stopped
 stop o/r#3 th-stalled: stall: no progress for 120 min, limit 30
 exit 0
+interrupt count: 1
+--- spend run (over-cap card on page 2)
+exit 0
 --- interrupt calls
-t3_thread_interrupt {"threadId": "th-over", "stop": true}
 t3_thread_interrupt {"threadId": "th-stalled", "stop": true}
+```
+
+Page 2 is never read: the over-cap card is missed, and a partial view is acted on.
+
+## Branch head (green)
+
+<!-- markdownlint-disable MD013 -->
+```text
+--- page 2 unreadable: nothing stopped
+spend: cannot read every thread, nothing stopped: page 2 unreadable
+exit 1
+interrupt count: 0
+--- spend run (over-cap card on page 2)
+stop o/r#3 th-stalled: stall: no progress for 120 min, limit 30
+stop o/r#1 th-over: spend cap: 5000 tokens, cap 1000
+exit 0
+--- interrupt calls
+t3_thread_interrupt {"threadId": "th-stalled", "stop": true}
+t3_thread_interrupt {"threadId": "th-over", "stop": true}
 --- second run, interrupt count
 2
 --- status stuck
-['o/r#1 th-over spend cap: 5000 tokens, cap 1000',
- 'o/r#3 th-stalled stall: no progress for 120 min, limit 30']
+['o/r#1 th-over spend cap: 5000 tokens, cap 1000', 'o/r#3 th-stalled stall: no progress for 120 min, limit 30']
 ```
+<!-- markdownlint-enable MD013 -->
 
-Card 2 (under the cap, fresh) is never stopped. The second run stops nothing
-more (interrupt count stays 2).
+Card 2 (under the cap, fresh) is never stopped. The second run stops nothing more.
