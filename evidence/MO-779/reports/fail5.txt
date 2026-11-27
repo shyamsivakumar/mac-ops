@@ -1,0 +1,15 @@
+Major — `reviewer_audit/manifest.json:714`. The PR description confirms that `metrics.py` raises when `read_task` receives the new task IDs. Every metrics run that reaches the first new bundle encounters this failure. The existing 23 bundles are preserved and the known-bad count reaches 42, but the metrics path cannot consume the expanded holdout.
+
+Major — `reviewer_audit/manifest.json:713`. The PR description also confirms that every normal `reviewer_audit freeze` rebuild drops all 26 additions because its seed source omits them. The freeze input needs to preserve these bundles across rebuilds.
+
+Applied the standard merge bar because the diff changes review data and evidence only. Both findings affect normal use.
+
+The earlier re-cut decision was explicitly superseded by the instruction to review the whole head. The PR conversation contains no earlier defect findings. No ticket Provides claims were assigned.
+
+All 11 checks in `evidence/check-proof.md` record `passed`. Its checked commit `eff5dcdb` is outside the head’s ancestry, and the trees differ beyond the proof file. That receipt predates this PR. The PR-specific receipt at `evidence/MO-775/check-proof.md:5` names ancestor `466f3097`, records every check as passed, and is the only file added between that commit and the head.
+
+Reconfirmed the live PR head and the exact PR-body line `Builder check: PASS e11157e05066f32ebc085cb92ac9d4ae7a615a4e`.
+
+PROVIDES: PASS e11157e05066f32ebc085cb92ac9d4ae7a615a4e
+CHECK: FAIL e11157e05066f32ebc085cb92ac9d4ae7a615a4e
+VERDICT: FAIL
