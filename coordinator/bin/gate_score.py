@@ -73,7 +73,7 @@ def score_findings(report, call):
     scores = scores_for(findings, call) if findings else None
     if scores is None:
         return report, []
-    dropped = [f for f, s in zip(findings, scores, strict=True) if s < KEEP_AT]
+    dropped = [f for i, f in enumerate(findings) if scores[i] < KEEP_AT]
     if not dropped:
         return report, []
     report = without(report, dropped)

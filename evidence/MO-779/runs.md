@@ -84,16 +84,15 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[8, 8]\n'
-
-    model spec: morph/morph-dsv41flash
-    fail2 CHECK PASS edited (real cheap model): findings=2 dropped=1 verdict FAIL -> FAIL remaining_majors=1 complete_pass=False unchanged=False
-       dropped: Major — scripts/coord_wake_metrics.py:116 and :139. GitHub reconciliation checks mac-ops PRs, but the script collects PR numbers from every repository in the in
-    raw model answer: '[6, 8]\n'
+    raw model answer: ''
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[8, 9]\n'
+    raw model answer: ''
+
+    model spec: morph/morph-dsv41flash
+    fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
+    raw model answer: ''
 
 A score of 7 or more keeps the finding.
 
