@@ -5,7 +5,7 @@ Reports in reports/ are the last-message FAIL reports of five real mac-ops gate 
 ## Before (origin/main)
 
     $ git show origin/main:coordinator/overnight/lane_driver.py | grep -n "def gate_verdict\|gate_score"
-    559:def gate_verdict(repo, number, head, base):
+    575:def gate_verdict(repo, number, head, base, ledger):
     $ git cat-file -e origin/main:coordinator/bin/gate_score.py; echo $?
     128
 
@@ -132,7 +132,7 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[7, 9]\n'
+    raw model answer: '[7, 8]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
@@ -140,7 +140,7 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[9, 7]\n'
+    raw model answer: ''
 
 A score of 7 or more keeps the finding.
 
@@ -158,3 +158,35 @@ pi_call, last_reply, the receipts file and the journal dir are replaced by temp 
     PR 7, model call raises, tick 1: verdict=FAIL model_calls=1 score2='failed'
     PR 7, model call raises, tick 2: verdict=FAIL model_calls=1 score2='failed'
     journal rows: [('gate_score_dropped', 7, 2)]
+
+## After merging #778 (python3 evidence/MO-778/prove_lane.py)
+
+The merged gate_verdict keeps the #778 vote handling; the second pass runs on the final merged reply. The #778 lane proof still runs to the end with these verdicts:
+
+    lane verdict: running; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: PASS; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: PASS; ledger keys []
+    lane verdict: PASS; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: running; ledger keys ['vote-wait:']
+    lane verdict: FAIL; ledger keys ['vote-wait:']
+    lane verdict: FAIL; ledger keys ['vote-wait:']
+    lane verdict: FAIL; ledger keys []
+    lane verdict: PASS; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: PASS; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: running; ledger keys []
+    lane verdict: PASS; ledger keys []
+    lane verdict: FAIL; ledger keys []
+    lane verdict: absent; ledger keys []
