@@ -9,6 +9,9 @@ Two commands:
           to daily3_guesses.jsonl BEFORE the questions are printed, so the guess
           can never be edited after seeing the answer.
 
+  post    Run pick once a day and raise each question as a card on the decision
+          inbox, with the logged guess as the recommended option.
+
   record  Take Shyam's choice and a one-line reason, append the label to
           labels.jsonl, route it into split.json with the same hash rule the
           rest of the set uses, and re-run `score.py lock`.
@@ -31,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import build_labels as B  # noqa: E402  (same split rule, same normalisation)
 
-DECISIONS = Path(os.path.expanduser("~/Code/coordinator/decisions.json"))
+DECISIONS = Path(os.environ.get("COORDINATOR_DECISIONS") or os.path.expanduser("~/Code/coordinator/decisions.json"))
 GUESSES = HERE / "daily3_guesses.jsonl"
 LABELS = HERE / "labels.jsonl"
 SPLIT = HERE / "split.json"
@@ -147,32 +150,36 @@ def guess_of(item):
 # --------------------------------------------------------------------- pick
 
 
-def cmd_pick(args):
+def choose(n, today=None):
     asked = {r.get("label_id") for r in read_jsonl(GUESSES)}
     pool = [i for i in live_items() if i["id"] not in asked]
-    if len(pool) < args.n:
+    if len(pool) < n:
         pool += [i for i in backlog_items() if i["id"] not in asked and i["id"] not in {p["id"] for p in pool}]
-    chosen = pool[: args.n]
-    if not chosen:
-        print("daily3: nothing to ask; the inbox and the backlog are both empty", file=sys.stderr)
-        return 1
-
-    # Write every guess first, and flush to disk, before printing anything.
+    chosen = [i for i in pool if len(i["options"]) >= 2][:n]
     ts = now()
     for item in chosen:
         guess, guess_opt, source = guess_of(item)
-        append_jsonl(
-            GUESSES,
-            {
-                "ts": ts,
-                "label_id": item["id"],
-                "kind": item["kind"],
-                "item_text": item["item_text"],
-                "options": item["options"],
-                "guess": guess_opt or guess,
-                "guess_source": source,
-            },
-        )
+        item["guess_option"] = guess_opt
+        row = {
+            "ts": ts,
+            "label_id": item["id"],
+            "kind": item["kind"],
+            "item_text": item["item_text"],
+            "options": item["options"],
+            "guess": guess_opt or guess,
+            "guess_source": source,
+        }
+        if today:
+            row["day"] = today
+        append_jsonl(GUESSES, row)
+    return chosen, ts
+
+
+def cmd_pick(args):
+    chosen, ts = choose(args.n)
+    if not chosen:
+        print("daily3: nothing to ask; the inbox and the backlog hold no question with two options", file=sys.stderr)
+        return 1
 
     # Only now show the questions, with the guess hidden.
     print(f"Daily 3 ({ts}) — guess logged to {GUESSES.name} before this line.\n")
@@ -184,6 +191,57 @@ def cmd_pick(args):
     print("Answer with: python3 daily3.py record --id <id> --choice '<option>' [--reason '<one line>']")
     print("ids: " + ", ".join(i["id"] for i in chosen))
     return 0
+
+
+# --------------------------------------------------------------------- post
+
+
+def alarms_module():
+    for folder in (HERE.parent.parent / "overnight", Path.home() / ".local/bin"):
+        if (folder / "alarms.py").is_file():
+            sys.path.insert(0, str(folder))
+            import alarms
+            return alarms
+    raise SystemExit("daily3: alarms.py not found beside the repo or in ~/.local/bin")
+
+
+def cmd_post(args):
+    today = datetime.now().strftime("%Y-%m-%d")
+    if any(r.get("posted") == today for r in read_jsonl(GUESSES)):
+        print(f"daily3: already posted on {today}; nothing to do")
+        return 0
+    alarms = alarms_module()
+    logged = [r for r in read_jsonl(GUESSES) if r.get("day") == today]
+    if logged:
+        chosen = [
+            {"id": r["label_id"], "kind": r["kind"], "item_text": r["item_text"], "options": r["options"],
+             "guess_option": r["guess"] if r["guess"] in r["options"] else None}
+            for r in logged
+        ]
+    else:
+        chosen, _ = choose(args.n, today)
+    if not chosen:
+        print("daily3: nothing to ask; the inbox and the backlog hold no question with two options", file=sys.stderr)
+        return 1
+    failed = 0
+    for item in chosen:
+        card = {
+            "id": f"daily3-{today}-{item['id']}",
+            "group": "Daily 3",
+            "kind": "ask",
+            "title": item["item_text"],
+            "why": f"Daily 3 question ({item['kind']}). Your answer becomes a scored label: daily3.py record --id {item['id']} --choice '<option>'",
+            "options": [
+                {"label": o, "detail": "", "recommended": o == item["guess_option"]} for o in item["options"]
+            ],
+        }
+        if alarms.route_update(str(DECISIONS), card["id"], "raise", card) != "wrote":
+            print(f"daily3: card {card['id']} could not be published", file=sys.stderr)
+            failed += 1
+    if not failed:
+        append_jsonl(GUESSES, {"ts": now(), "posted": today})
+    print(f"daily3: posted {len(chosen) - failed} of {len(chosen)} cards to {DECISIONS}")
+    return 1 if failed else 0
 
 
 # ------------------------------------------------------------------- record
@@ -318,6 +376,10 @@ def main(argv=None):
     p = sub.add_parser("pick", help="choose and print the next three decisions")
     p.add_argument("-n", type=int, default=3)
     p.set_defaults(func=cmd_pick)
+
+    q = sub.add_parser("post", help="raise today's questions as decision cards, once a day")
+    q.add_argument("-n", type=int, default=3)
+    q.set_defaults(func=cmd_post)
 
     r = sub.add_parser("record", help="record Shyam's answer as a label")
     r.add_argument("--id", required=True)
