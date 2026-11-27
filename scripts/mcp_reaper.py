@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+import argparse
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+LOGS_DB = Path.home() / ".codex" / "logs_2.sqlite"
+HOST = re.compile(r"/codex (?:.* )?app-server .*thread_unload_delay_secs=0")
+SERVERS = (
+    ("pen", re.compile(r"/mcp-server-darwin-arm64( |$)")),
+    ("paper", re.compile(r"/paper mcp$")),
+    ("node_repl", re.compile(r"/cua_node/bin/node_repl( |$)")),
+    ("xcodebuildmcp", re.compile(r"(npm exec xcodebuildmcp|/xcodebuildmcp mcp$)")),
+)
+MATCH_WINDOW_SECS = 3
+GRACE_SECS = 10
+
+
+def snapshot():
+    out = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,lstart=,command="], capture_output=True, text=True, check=True
+    ).stdout
+    procs = {}
+    for line in out.splitlines():
+        m = re.match(r"\s*(\d+)\s+(\d+)\s+(\w{3} \w{3}\s+\d+ [\d:]{8} \d{4})\s+(.*)", line)
+        pid, ppid, lstart, command = m.groups()
+        procs[int(pid)] = {
+            "ppid": int(ppid),
+            "start": int(time.mktime(time.strptime(re.sub(r"\s+", " ", lstart), "%a %b %d %H:%M:%S %Y"))),
+            "command": command,
+        }
+    return procs
+
+
+def server_name(command):
+    return next((name for name, pattern in SERVERS if pattern.search(command)), None)
+
+
+def descendants(procs, pid):
+    kids = [p for p, info in procs.items() if info["ppid"] == pid]
+    return kids + [d for k in kids for d in descendants(procs, k)]
+
+
+def mcp_sets(procs, host_pid):
+    sets = {}
+    for pid, info in procs.items():
+        if info["ppid"] == host_pid and server_name(info["command"]):
+            sets.setdefault(info["start"], []).append(pid)
+    return {
+        start: sorted({m for pid in pids for m in [pid, *descendants(procs, pid)]})
+        for start, pids in sets.items()
+    }
+
+
+def host_threads(host_pid):
+    db = sqlite3.connect(f"file:{LOGS_DB}?mode=ro", uri=True)
+    rows = db.execute(
+        "SELECT thread_id, MIN(ts), MAX(ts), MAX(feedback_log_body LIKE '%Agent loop exited%')"
+        " FROM logs WHERE process_uuid LIKE ? AND thread_id IS NOT NULL GROUP BY thread_id",
+        (f"pid:{host_pid}:%",),
+    ).fetchall()
+    return [{"id": r[0], "first": r[1], "last": r[2], "exited": bool(r[3])} for r in rows]
+
+
+def classify(set_start, threads, idle_secs, now):
+    matches = [t for t in threads if abs(t["first"] - set_start) <= MATCH_WINDOW_SECS]
+    if not matches:
+        return "unknown", "-"
+    ids = ",".join(t["id"] for t in matches)
+    if all(t["exited"] or (idle_secs is not None and now - t["last"] >= idle_secs) for t in matches):
+        return "stale", ids
+    return "live", ids
+
+
+def identity(pid):
+    out = subprocess.run(["ps", "-o", "lstart=,command=", "-p", str(pid)], capture_output=True, text=True).stdout
+    return re.sub(r"\s+", " ", out.strip())
+
+
+def stop(pids):
+    expected = {pid: identity(pid) for pid in pids}
+    same = [pid for pid in pids if expected[pid] and identity(pid) == expected[pid]]
+    for pid in same:
+        subprocess.run(["kill", "-TERM", str(pid)])
+    time.sleep(GRACE_SECS)
+    for pid in same:
+        if identity(pid) == expected[pid]:
+            subprocess.run(["kill", "-KILL", str(pid)])
+            print(f"sigkill pid={pid}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--idle-secs", type=int, default=None)
+    args = parser.parse_args()
+    procs = snapshot()
+    now = time.time()
+    hosts = [pid for pid, info in procs.items() if HOST.search(info["command"])]
+    if not hosts:
+        print("mcp_reaper: no codex app-server host found", file=sys.stderr)
+        return 2
+    keep = stale = unknown = 0
+    for host in hosts:
+        try:
+            threads = host_threads(host)
+        except sqlite3.Error as e:
+            print(f"mcp_reaper: cannot read {LOGS_DB}: {e}", file=sys.stderr)
+            return 2
+        for start, pids in sorted(mcp_sets(procs, host).items()):
+            verdict, thread_ids = classify(start, threads, args.idle_secs, now)
+            names = ",".join(f"{server_name(procs[p]['command']) or 'child'}:{p}" for p in pids)
+            print(f"{verdict} host={host} set_start={time.strftime('%H:%M:%S', time.localtime(start))} thread={thread_ids} {names}")
+            if verdict == "stale":
+                stale += 1
+                if not args.dry_run:
+                    stop(pids)
+            elif verdict == "live":
+                keep += 1
+            else:
+                unknown += 1
+    print(f"mcp_reaper: stale_sets={stale} live_sets={keep} unknown_sets={unknown} dry_run={args.dry_run}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
