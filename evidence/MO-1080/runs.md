@@ -1,56 +1,33 @@
 # MO-1332 proof runs (Refs #1080)
 
-## Red on origin/main (906862ac), head test file against main code
+## Red on origin/main (906862ac): head proof.sh and head test file against main code
 ```
-ask
-ticket proof python exit 1
-hook present exit 1
-...........F.........F.........
-======================================================================
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+KeyError: 'push_personal'
+ticket proof exit 1
+ERROR: test_hook_constants_match_the_list (tests.test_install_deny_rules.ListTest)
 FAIL: test_pushes_are_decided_from_the_command_destinations (tests.test_install_deny_rules.HookTest)
-----------------------------------------------------------------------
-Traceback (most recent call last):
-  File "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.2nPz1FTU5S/main/tests/test_install_deny_rules.py", line 488, in test_pushes_are_decided_from_the_command_destinations
-    self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
-AssertionError: 'ask' != 'deny'
-- ask
-+ deny
- : git push origin main
-
-======================================================================
-FAIL: test_install_writes_every_enforcement_point (tests.test_install_deny_rules.InstallTest)
-----------------------------------------------------------------------
-Traceback (most recent call last):
-  File "/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.2nPz1FTU5S/main/tests/test_install_deny_rules.py", line 84, in test_install_writes_every_enforcement_point
-    self.assertIn("Bash(git push origin main:*)", rules["deny"])
-AssertionError: 'Bash(git push origin main:*)' not found in ['Edit(~/.ssh/**)', 'Edit(//var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-test-2yw0c6mk/.ssh/**)', 'Edit(**/.env)', 'Edit(**/.env.*)', 'Edit(**/auth.json)', 'Edit(**/*.pem)', 'Edit(**/*.key)', 'Edit(**/id_rsa*)', 'Edit(**/id_dsa*)', 'Edit(**/id_ed25519*)', 'Edit(**/id_ecdsa*)', 'Edit(**/credentials)', 'Edit(**/credentials.json)', 'Edit(**/.netrc)', 'Edit(**/.npmrc)', 'Edit(**/.pypirc)', 'Edit(**/*token*.json)', 'Edit(**/*token*.txt)', 'Edit(**/*token*.yaml)', 'Edit(**/*token*.yml)', 'Bash(git push --force:*)', 'Bash(git push -f:*)', 'Bash(git push --force-with-lease:*)', 'Bash(git push --force-if-includes:*)']
-
-----------------------------------------------------------------------
-Ran 31 tests in 8.633s
-
-FAILED (failures=2)
+Ran 31 tests in 8.386s
+FAILED (failures=1, errors=1)
 ```
 
 ## Green on head
 ```
-----------------------------------------------------------------------
-Ran 31 tests in 10.622s
-
-OK
-```
-
-## Ticket proof and bare-repo pushes on the head
-
-```
-deny
+deny ask
 ticket proof exit 0
+guard personal repo, push origin main: deny
+guard other remote, push origin main: ask
+guard unresolvable remote, push origin main: deny
+guard personal repo, push origin work: allow
+guard personal repo, force push: deny
 --- new work branch
 To <tmp>/remote.git
  * [new branch]      work -> work
 exit 0
 --- fast-forward work branch
 To <tmp>/remote.git
-   8e670bf..9c2a56b  work -> work
+   3ed2bb0..59fce73  work -> work
 exit 0
 --- push to main
 pre-push refused: pushes to main are blocked; push a work branch
@@ -64,7 +41,7 @@ exit 1
 pre-push refused: pushes to main are blocked; push a work branch
 error: failed to push some refs to '<tmp>/remote.git'
 exit 1
-main still at 8e670bfbde35511bfb6089b97f66d2b2c9c0b154
+main still at 3ed2bb0424403fa9663661b0639365c40147dee3
 --- force push work branch
 pre-push refused: refs/heads/work is not a fast-forward (force push or git error)
 error: failed to push some refs to '<tmp>/remote.git'
@@ -84,4 +61,6 @@ exit 0
 --- remote refs
 refs/heads/main
 refs/heads/work2
+Ran 31 tests in 11.342s
+OK
 ```
