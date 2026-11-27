@@ -61,6 +61,16 @@ CASES = {
         report("FAIL", ("major", PROOF, 268)),
     ],
     "two voters dead: fewer than 2 readable, FAIL not the primary alone": [report("PASS"), "no verdict", ""],
+    "bare VERDICT: PASS without its own CHECK and PROVIDES lines is not counted, and no line is borrowed": [
+        report("PASS"),
+        "all fine\n\nVERDICT: PASS",
+        "all fine\n\nVERDICT: PASS",
+    ],
+    "valid voters 1 and 2, voter 3 bare PASS: merge of 2, lines are voter 1 and 2's own": [
+        report("PASS"),
+        report("PASS"),
+        "all fine\n\nVERDICT: PASS",
+    ],
     "one voter CHECK FAIL: merged CHECK FAIL, findings still voted": [
         report("PASS"),
         report("PASS").replace(f"CHECK: PASS {HEAD}", f"CHECK: FAIL {HEAD}"),

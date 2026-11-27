@@ -57,7 +57,8 @@ def show(pr, picked):
     for order in itertools.islice(itertools.permutations(range(3)), 0, 6, 5):
         merged = gate_vote.merge_reports([reports[i] for i in order], head)
         print(f"voter order {order}:\n{merged}\n")
-    for row, report in zip(picked, reports, strict=True):
+    for index, row in enumerate(picked):
+        report = reports[index]
         outcome, findings = gate_vote.read_verdict(report)
         print(
             f"  voter {head_of(row['key'])[:8]}: {outcome}, findings "
