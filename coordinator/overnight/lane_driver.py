@@ -32,7 +32,11 @@ if _BIN_DIR not in sys.path:
 import gh_gateway
 import close_check
 import gate_policy
+<<<<<<< HEAD
 import gate_score
+=======
+import gate_vote
+>>>>>>> origin/main
 import journal
 from gate_policy import (LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode, parse_verdict,
                          read_verdict, report_for_builder)
@@ -227,6 +231,12 @@ def last_reply(thread_id):
     msgs = [i.get("text") or i.get("message") or "" for i in items
             if i.get("type") in {"assistant_message", "error", "run_error", "provider_error"}]
     return (msgs[-1] if msgs else "").rstrip()
+
+
+def reply_updated_at(thread_id):
+    items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 1}).get("items") or []
+    stamps = [i.get("updatedAt") for i in items if i.get("type") == "assistant_message"]
+    return stamps[-1] if stamps else None
 
 
 def busy(repo):
@@ -557,6 +567,7 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
+<<<<<<< HEAD
 def gate_score_on(repo, number):
     if not journal.factory_experiments():
         return False
@@ -584,18 +595,34 @@ def second_pass(reply, repo, number, head, thread, ledger):
     if dropped:
         journal_once("gate_score_dropped", repo, number, head, ledger, f"journal-{key}", thread=thread, dropped=dropped)
     return scored
+=======
+def vote_wait_start(finished, key, ledger):
+    stamps = [e for e in (gate_vote.replied_epoch(reply_updated_at(t)) for t in finished) if e is not None]
+    if stamps:
+        return min(stamps)
+    if f"vote-wait:{key}" not in ledger and not DRY:
+        ledger[f"vote-wait:{key}"] = time.time()
+    return ledger.get(f"vote-wait:{key}", time.time())
+>>>>>>> origin/main
 
 
 def gate_verdict(repo, number, head, base, ledger):
     receipts = json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}
     key = f"gate:{repo}#{number}:{head}"
-    current = receipts.get(key)
+    launched = receipts.get(key)
+    voters = gate_vote.vote_threads(receipts, key)
+    current = launched or next(iter(voters), None)
     if not current:
         return "absent", None, ""
     gate = {"threadId": current}
-    if gate_in_flight(current):
+    ballots = [current, *[thread for thread in voters if thread != current]]
+    waiting = not launched or len(ballots) < receipts.get(f"voters:{current}", 1)
+    unfinished = [thread for thread in ballots if gate_in_flight(thread)]
+    finished = [thread for thread in ballots if thread not in unfinished]
+    voted = len(ballots) > 1 or waiting
+    if (unfinished or waiting) and not (voted and finished and gate_vote.overdue(vote_wait_start(finished, key, ledger))):
         return "running", gate, ""
-    reply = last_reply(current)
+    reply = gate_vote.merge_reports(list(map(last_reply, finished)), head) if voted else last_reply(current)
     primary = read_verdict(reply)[0]
     if primary == "FAIL" and gate_score_on(repo, number):
         reply = second_pass(reply, repo, number, head, current, ledger)

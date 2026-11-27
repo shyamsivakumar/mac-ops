@@ -1,6 +1,6 @@
 # MO-779 runs
 
-Reports in reports/ are the last-message FAIL reports of five real mac-ops gate threads (read-only via t3_thread_read). They are free prose, so findings are the paragraphs that open with Critical or Major. All five carry CHECK: FAIL, so they are shown as they are (must stay FAIL) and again with the CHECK line edited to PASS (marked edited) to exercise the drop paths. Keep threshold is 7: a score under 7 drops the finding. Flip rule: after the dropped findings are removed, the VERDICT becomes PASS only when the remaining report has no case-insensitive whole word critical or major anywhere (headings, prose, tables, JSON). Before scoring, a report is also left unchanged when the whole-word count of critical or major in it exceeds the number of findings found, or when one finding text holds more than one such word. Prose such as no major risk or no critical or major finding remains therefore blocks scoring or the flip; that is accepted as fail-safe.
+Reports in reports/ are the last-message FAIL reports of five real mac-ops gate threads (read-only via t3_thread_read). They are free prose, so findings are the paragraphs that open with Critical or Major. All five carry CHECK: FAIL, so they are shown as they are (must stay FAIL) and again with the CHECK line edited to PASS (marked edited) to exercise the drop paths. Keep threshold is 7: a score under 7 drops the finding. Flip rule: after the dropped findings are removed, the VERDICT becomes PASS only when the remaining report has no case-insensitive whole word critical or major anywhere (headings, prose, tables, JSON). Before scoring, a report is also left unchanged when the whole-word count of critical or major in it exceeds the number of findings found, or when one finding text holds more than one such word. The scoring reply must parse in full as a JSON list (optionally fenced) of exactly N integers 0 to 10, else scoring failed and the report is unchanged. A finding ends at the first CHECK:, PROVIDES:, VERDICT:, Builder check: or Left for later line, and a rewrite that changes any footer line other than VERDICT FAIL to PASS is discarded. Prose such as no major risk or no critical or major finding remains therefore blocks scoring or the flip; that is accepted as fail-safe.
 
 ## Before (origin/main)
 
@@ -114,6 +114,15 @@ A FAIL reply returns FAIL in every arm; nothing scores it.
     prose 'no major risk' left after the only finding is dropped: dropped=0 verdict -> FAIL
     Major line with a ### Critical heading directly under it, Major scored low: dropped=0 verdict -> FAIL
     clean report, every finding dropped, no other severity word: dropped=1 verdict -> PASS
+    reply 'Initial score [3]. final score [9]': dropped=0 verdict -> FAIL unchanged=True
+    reply with a fenced json list: dropped=1 verdict -> PASS unchanged=False
+    reply with a bare fence: dropped=1 verdict -> PASS unchanged=False
+    reply with a score of 11: dropped=0 verdict -> FAIL unchanged=True
+    reply with a boolean: dropped=0 verdict -> FAIL unchanged=True
+    reply with a float: dropped=0 verdict -> FAIL unchanged=True
+    reply with trailing prose: dropped=0 verdict -> FAIL unchanged=True
+    footer directly after the last finding, scored low: dropped=1 verdict -> PASS unchanged=False
+       footer lines kept: ['Builder check: PASS abc', 'CHECK: PASS abc', 'PROVIDES: PASS abc', 'VERDICT: PASS']
     mismatch (2 Major lines in the text, 1 finding in the json block, scored low): dropped=0 unchanged=True verdict=FAIL
     a PASS report is untouched: True
 
@@ -123,7 +132,7 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[7, 8]\n'
+    raw model answer: '[7, 9]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
@@ -131,7 +140,7 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: ''
+    raw model answer: '[9, 7]\n'
 
 A score of 7 or more keeps the finding.
 
