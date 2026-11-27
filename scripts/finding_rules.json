@@ -5,5 +5,19 @@
     "paths": "*.py",
     "pattern": "\\bzip\\([^\\n]*\\bstrict\\s*=",
     "message": "zip(strict=...) needs Python 3.10; the fast check runs on 3.9"
+  },
+  {
+    "id": "no-github-workflows",
+    "check": "grep",
+    "paths": ".github/workflows/*",
+    "pattern": ".",
+    "message": "GitHub Actions and Woodpecker workflows are banned in this repo (docs/conventions.md)"
+  },
+  {
+    "id": "no-git-stash",
+    "check": "grep",
+    "paths": "*.py",
+    "pattern": "\\bgit\\s+stash\\b",
+    "message": "git stash is shared by every worktree; commit a WIP instead (docs/conventions.md)"
   }
 ]
