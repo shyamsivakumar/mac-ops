@@ -563,10 +563,10 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
-def vote_wait_start(thread_id, key, ledger):
-    replied = gate_vote.replied_epoch(reply_updated_at(thread_id))
-    if replied is not None:
-        return replied
+def vote_wait_start(finished, key, ledger):
+    stamps = [e for e in (gate_vote.replied_epoch(reply_updated_at(t)) for t in finished) if e is not None]
+    if stamps:
+        return min(stamps)
     if f"vote-wait:{key}" not in ledger and not DRY:
         ledger[f"vote-wait:{key}"] = time.time()
     return ledger.get(f"vote-wait:{key}", time.time())
@@ -580,16 +580,14 @@ def gate_verdict(repo, number, head, base, ledger):
         return "absent", None, ""
     gate = {"threadId": current}
     voters = gate_vote.vote_threads(receipts, key)
-    waiting = len(voters) + 1 < receipts.get(f"voters:{current}", 1)
-    if gate_in_flight(current):
+    ballots = [current, *voters]
+    waiting = len(ballots) < receipts.get(f"voters:{current}", 1)
+    unfinished = [thread for thread in ballots if gate_in_flight(thread)]
+    finished = [thread for thread in ballots if thread not in unfinished]
+    voted = len(ballots) > 1 or waiting
+    if (unfinished or waiting) and not (voted and finished and gate_vote.overdue(vote_wait_start(finished, key, ledger))):
         return "running", gate, ""
-    stalled = [thread for thread in voters if gate_in_flight(thread)]
-    if (stalled or waiting) and not gate_vote.overdue(vote_wait_start(current, key, ledger)):
-        return "running", gate, ""
-    reply = last_reply(current)
-    if voters or waiting:
-        finished = [thread for thread in voters if thread not in stalled]
-        reply = gate_vote.merge_reports([reply, *map(last_reply, finished)], head)
+    reply = gate_vote.merge_reports(list(map(last_reply, finished)), head) if voted else last_reply(current)
     primary = read_verdict(reply)[0]
     if primary == "FAIL":
         return "FAIL", gate, reply

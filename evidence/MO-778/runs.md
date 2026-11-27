@@ -11,14 +11,14 @@ Findings were lifted from the prose by prove_merge.py into the JSON block voters
 voter order (0, 1, 2):
 Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
 PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-CHECK: FAIL e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-VERDICT: FAIL
+CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+VERDICT: PASS
 
 voter order (2, 1, 0):
 Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
 PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-CHECK: FAIL e2adfac8d754ec1f09bba7b92731ab594fb6b55d
-VERDICT: FAIL
+CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+VERDICT: PASS
 
   voter e2adfac8: FAIL, findings [major] bot2/trade_machine.js:482; [major] scripts/bot2_two_lane_admission_proof.cjs:271
   voter 199c1c07: FAIL, findings [major] bot2/trade_machine.js:3546; [major] scripts/bot2_two_lane_admission_proof.cjs:174
@@ -101,7 +101,14 @@ CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 VERDICT: PASS
 lane reads: verdict=PASS complete_pass=True
 
---- one voter CHECK FAIL: merged CHECK FAIL, findings still voted
+--- one voter CHECK FAIL, two PASS: majority decides, merged CHECK PASS
+Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
+PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+CHECK: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
+VERDICT: PASS
+lane reads: verdict=PASS complete_pass=True
+
+--- two voters CHECK FAIL, one PASS: merged CHECK FAIL, VERDICT FAIL
 Merged gate review of 3 reports on e2adfac8d754ec1f09bba7b92731ab594fb6b55d: a finding stays when 2 agree on file, line within 5 and severity.
 PROVIDES: PASS e2adfac8d754ec1f09bba7b92731ab594fb6b55d
 CHECK: FAIL e2adfac8d754ec1f09bba7b92731ab594fb6b55d
@@ -139,11 +146,7 @@ Merged gate review of 3 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: onl
 VERDICT: FAIL
 
 --- one voter CHECK FAIL
-lane verdict: FAIL; ledger keys []
-Merged gate review of 3 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a finding stays when 2 agree on file, line within 5 and severity.
-PROVIDES: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-CHECK: FAIL aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-VERDICT: FAIL
+lane verdict: PASS; ledger keys []
 
 --- control arm: no voters recorded, primary alone as today
 lane verdict: PASS; ledger keys []
@@ -196,25 +199,52 @@ lane verdict: FAIL; ledger keys ['vote-wait:']
 Merged gate review of 1 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: only 0 carried a verdict with its own CHECK and PROVIDES lines for this head.
 VERDICT: FAIL
 
+--- primary stalled in flight, voters 2 and 3 finished and agree on a major, 3 h after: their merged verdict
+lane verdict: FAIL; ledger keys []
+Merged gate review of 2 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a finding stays when 2 agree on file, line within 5 and severity.
+[major] a.py:10 t
+PROVIDES: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CHECK: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+VERDICT: FAIL
+
+--- primary stalled in flight, voters 2 and 3 finished PASS, 3 h after: their merged PASS
+lane verdict: PASS; ledger keys []
+
+--- primary stalled in flight, voters 2 and 3 finished, 1 h after: still running
+lane verdict: running; ledger keys []
+
+--- no ballot finished, all in flight: running
+lane verdict: running; ledger keys []
+
+--- one dissenter with CHECK FAIL and a major, two PASS: PASS
+lane verdict: PASS; ledger keys []
+
+--- two voters CHECK FAIL, one PASS: FAIL
+lane verdict: FAIL; ledger keys []
+Merged gate review of 3 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a finding stays when 2 agree on file, line within 5 and severity.
+PROVIDES: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CHECK: FAIL aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+VERDICT: FAIL
+
 ```
 
 ## 4. cmd_gatekeep with a fake candidate, temp COORDQ_DIR and COORD_JOURNAL_DIR (prove_gatekeep.py)
 
 ```
 == dry run, arm treatment (vote3)
-2026-11-26 20:29:48 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 20:29:48 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 20:29:48 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == dry run, arm control
-2026-11-26 20:29:48 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == temp-queue run, arm treatment
-2026-11-26 20:29:48 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 20:29:48 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 20:29:48 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 == temp-queue run, arm control
-2026-11-26 20:29:48 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 20:44:26 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 1 gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | T-778 review #1 aaaaaaaa | arm treatment
 2 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 | T-778 review #1 aaaaaaaa vote 2 | arm treatment
 3 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 | T-778 review #1 aaaaaaaa vote 3 | arm treatment
