@@ -11,6 +11,7 @@ LEAD = re.compile(
     r"^[\s>*_`\[(\-]*(?:\d+[.)][\s>*_`\[(\-]*)?(?:critical|major)\b",
     re.MULTILINE | re.IGNORECASE,
 )
+BLOCKING_WORD = re.compile(r"\b(?:critical|major)\b", re.IGNORECASE)
 SCORES = re.compile(r"\[[\d,\s]*\]")
 
 ASK = """{bar}
@@ -86,7 +87,7 @@ def score_findings(report, call):
     if not dropped:
         return report, []
     report = without(report, dropped)
-    if not LEAD.search(report) and not findings_of(report):
+    if not BLOCKING_WORD.search(report):
         report = re.sub(
             r'("verdict":\s*)"FAIL"',
             r'\1"PASS"',

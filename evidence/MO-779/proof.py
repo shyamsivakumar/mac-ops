@@ -107,6 +107,15 @@ if mode == "fake":
     )
     new, dropped = gate_score.score_findings(json_left, lambda _p: "[1, 9]")
     print(f"json block with a kept critical, one dropped: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
+    word_cases = (
+        ("### Critical: heading plus Major: line, Major scored low", "### Critical: a.py:1 x.\n\nMajor: b.py:2 y." + tail, "[1]"),
+        ("table row with Critical plus Major: line, Major scored low", "| Critical | a.py:1 |\n\nMajor: b.py:2 y." + tail, "[1]"),
+        ("prose 'no major risk' left after the only finding is dropped", "Major: a.py:1 x.\n\nI see no major risk elsewhere." + tail, "[1]"),
+        ("clean report, every finding dropped, no other severity word", "Major: a.py:1 x.\n\nThe diff is otherwise fine." + tail, "[1]"),
+    )
+    for label, text, answer in word_cases:
+        new, dropped = gate_score.score_findings(text, lambda _p, a=answer: a)
+        print(f"{label}: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
     json_report = (
         "Major - a.py:1 first bug.\nMajor - b.py:2 second bug.\n\n```json\n"
         + json.dumps({"verdict": "FAIL", "findings": [
