@@ -177,6 +177,9 @@ def main():
     typed = B.load_typed(recs)
     board_ids = {b["id"] for b in board}
 
+    if not LABELS.exists():
+        print(f"burst: {LABELS} is missing; run build_labels.py first", file=sys.stderr)
+        return 1
     labels = [json.loads(l) for l in LABELS.read_text().splitlines() if l.strip()]
 
     live_ids = set()
