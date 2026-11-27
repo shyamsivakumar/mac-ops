@@ -13,10 +13,10 @@ usage: daily3.py [-h] {pick,record} ...
 daily3.py: error: argument command: invalid choice: '/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.bswhrKm2aC' (choose from 'pick', 'record')
 ```
 
-## Green on the head
+## Green on the head (rebased onto 906862ac after the history scrub)
 
 ```
-daily3: nothing to ask; the inbox and the backlog are both empty
+daily3: nothing to ask; the inbox and the backlog hold no question with two options
 exit=0
 ```
 
