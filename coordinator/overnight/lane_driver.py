@@ -1948,22 +1948,24 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
 
 
 def ticket_started_at(repo, number):
-    """Return the epoch of the newest ticket_started row for a ticket, or None when no row is readable."""
-    latest = None
-    now = time.time()
-    for path in {journal.journal_path(now), journal.journal_path(now - 31 * 86400)}:
-        if not os.path.exists(path):
+    """Return the epoch of the newest ticket_started row for a ticket across every journal file, or None when no row is readable."""
+    for path in sorted(Path(journal.journal_dir()).glob("events-*.jsonl"), reverse=True):
+        try:
+            lines = path.read_text().splitlines()
+        except (OSError, ValueError):
             continue
-        with open(path) as handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if row.get("event") == "ticket_started" and row.get("repo") == repo and row.get("ticket") == number \
-                        and isinstance(row.get("ts"), (int, float)):
-                    latest = max(latest or 0, row["ts"])
-    return latest
+        stamps = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("event") == "ticket_started" and row.get("repo") == repo \
+                    and row.get("ticket") == number and isinstance(row.get("ts"), (int, float)):
+                stamps.append(row["ts"])
+        if stamps:
+            return max(stamps)
+    return None
 
 
 LIVE_THREAD_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
