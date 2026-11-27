@@ -28,15 +28,27 @@ open(__file__ + ".calls", "a").write(tool + " " + json.dumps(args) + "\n")
 now = datetime.datetime.now(datetime.timezone.utc)
 iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 if tool == "t3_thread_list":
-    rows = [{"threadId": "th-over", "updatedAt": iso(now)},
-            {"threadId": "th-under", "updatedAt": iso(now)},
-            {"threadId": "th-stalled", "updatedAt": iso(now - datetime.timedelta(hours=2))}]
-    print(json.dumps({"threads": rows, "total": 3}))
+    import os
+    if args.get("cursor") == 1:
+        if os.path.exists(os.path.dirname(__file__) + "/fail2"):
+            print("page 2 unreadable", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps({"threads": [{"threadId": "th-over", "updatedAt": iso(now)}], "total": 3}))
+    else:
+        rows = [{"threadId": "th-under", "updatedAt": iso(now)},
+                {"threadId": "th-stalled", "updatedAt": iso(now - datetime.timedelta(hours=2))}]
+        print(json.dumps({"threads": rows, "nextCursor": 1, "total": 3}))
 else:
     print("{}")
 SH
 chmod +x "$W"/t3mcp
-echo "--- spend run"
+echo "--- page 2 unreadable: nothing stopped"
+touch "$W"/fail2
+python3 "$ROOT"/coordinator/bin/coordq spend 2>&1
+echo "exit $?"
+echo "interrupt count: $(grep -c interrupt "$W"/t3mcp.calls)"
+rm "$W"/fail2
+echo "--- spend run (over-cap card on page 2)"
 python3 "$ROOT"/coordinator/bin/coordq spend 2>&1
 echo "exit $?"
 echo "--- interrupt calls"

@@ -2077,13 +2077,23 @@ def cmd_spend(a):
     receipts, db_path = sources
     cards = {thread: (m[1], int(m[2])) for key, thread in receipts.items()
              if (m := re.match(r"^ticket:([^#]+)#(\d+):a\d+$", key))}
-    code, out = call("t3_thread_list", {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES,
-                                        "includeSubagents": False})
-    if code:
-        die(f"spend: cannot list threads: {out}")
+    rows = []
+    cursor = None
+    while True:
+        args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES, "includeSubagents": False}
+        if cursor is not None:
+            args["cursor"] = cursor
+        code, out = call("t3_thread_list", args)
+        if code:
+            die(f"spend: cannot read every thread, nothing stopped: {out}")
+        page = json.loads(out)
+        rows += page["threads"]
+        cursor = page.get("nextCursor")
+        if cursor is None:
+            break
     stopped = load().get("cardStops") or {}
     now = time.time()
-    for row in json.loads(out)["threads"]:
+    for row in rows:
         thread = row["threadId"]
         if thread not in cards or thread in stopped:
             continue
