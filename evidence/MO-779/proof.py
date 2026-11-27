@@ -111,6 +111,7 @@ if mode == "fake":
         ("### Critical: heading plus Major: line, Major scored low", "### Critical: a.py:1 x.\n\nMajor: b.py:2 y." + tail, "[1]"),
         ("table row with Critical plus Major: line, Major scored low", "| Critical | a.py:1 |\n\nMajor: b.py:2 y." + tail, "[1]"),
         ("prose 'no major risk' left after the only finding is dropped", "Major: a.py:1 x.\n\nI see no major risk elsewhere." + tail, "[1]"),
+        ("Major line with a ### Critical heading directly under it, Major scored low", "Major: a.py:1 x.\n### Critical: b.py:2 y." + tail, "[1]"),
         ("clean report, every finding dropped, no other severity word", "Major: a.py:1 x.\n\nThe diff is otherwise fine." + tail, "[1]"),
     )
     for label, text, answer in word_cases:
