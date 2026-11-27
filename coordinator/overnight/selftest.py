@@ -2562,7 +2562,7 @@ def prereview_findings_cases():
             exact((act({}), sends), (None, []))
             state["running"] = False
             ledger = {}
-            exact(act(ledger).startswith(f"#40 prereview fix: sent"), True)
+            exact(act(ledger).startswith("#40 prereview fix: sent"), True)
             exact((len(sends), sends[0][:2], "stalled voter" in sends[0][2], "PREREVIEW: FINDINGS" in sends[0][2]),
                   (1, ("builder-1", sent_key), True, False))
             exact((act(ledger), len(sends)), (None, 1))
