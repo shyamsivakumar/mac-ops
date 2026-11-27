@@ -1506,17 +1506,27 @@ def bar_visible(t):
     return journal.treatment_names(arm(t), "builder", "severity_bar")
 
 
+def brief_prefix():
+    return "\n\n".join([ANSWER_FORMAT, SIZE_RULE])
+
+
+def brief_prefix_sha():
+    return hashlib.sha256(brief_prefix().encode()).hexdigest()
+
+
 def assemble_brief(cfg, t, request_id, issue):
-    """The brief the builder receives: the ticket body, the concrete run id and
-    every coordinator decision comment, which override the body."""
+    """The brief the builder receives. The static prefix comes first and is
+    byte-identical for every ticket, so prompt caches hit. The arm-dependent
+    severity bar follows it, then the card text: ticket, body, decisions."""
     body = fill_run_ids(t["body"], request_id)
     filled = request_id in body
     head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
     if not filled:
         head.append(f"Run id: `{request_id}`")
-    parts = ["\n".join(head), ANSWER_FORMAT, SIZE_RULE, body]
+    parts = [brief_prefix()]
     if bar_visible(t):
         parts.append(builder_bar_section())
+    parts += ["\n".join(head), body]
     decisions = coordinator_decisions(issue)
     if decisions:
         parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))
@@ -1653,6 +1663,7 @@ def cmd_start(a):
         print("command:\n" + shlex.join(command) + "\n")
         print(f"receipt comment (after coordq):\n<!-- coordinator-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"coordq\":\"<coordq output>\"}} -->\n")
         print(f"then swap label stage:{t['stage']} for {STARTED_LABEL} in one edit")
+        print(f"brief prefix sha256: {brief_prefix_sha()}")
         if a.print_brief:
             print("brief:\n" + brief)
         return
@@ -1668,7 +1679,7 @@ def cmd_start(a):
     output = result.stdout.strip()
     print(output)
     journal.emit("ticket_started", "ticket", builder=t["builderAlias"], reviewer=t["reviewerAlias"],
-                 taskType=payload.get("taskType"), coordq=output, **arms, **journal.parse_request_id(request_id))
+                 taskType=payload.get("taskType"), coordq=output, promptPrefixSha=brief_prefix_sha(), **arms, **journal.parse_request_id(request_id))
     receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "coordq": output}
     receipt_text = f"{t['key']} attempt {attempt}: coordq says \"{output}\".\n\n{machine_line(receipt)}"
     posted = False
