@@ -225,6 +225,12 @@ def last_reply(thread_id):
     return (msgs[-1] if msgs else "").rstrip()
 
 
+def reply_updated_at(thread_id):
+    items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 1}).get("items") or []
+    stamps = [i.get("updatedAt") for i in items if i.get("type") == "assistant_message"]
+    return stamps[-1] if stamps else None
+
+
 def busy(repo):
     pid = CFG[repo]["projectId"]
     live = t3("t3_thread_list", {"projectId": pid, "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20}).get("threads") or []
@@ -562,10 +568,12 @@ def gate_verdict(repo, number, head, base):
     gate = {"threadId": current}
     voters = gate_vote.vote_threads(receipts, key)
     waiting = len(voters) + 1 < receipts.get(f"voters:{current}", 1)
-    if waiting or any(gate_in_flight(thread) for thread in [current, *voters]):
+    if any(gate_in_flight(thread) for thread in [current, *voters]):
+        return "running", gate, ""
+    if waiting and not gate_vote.voters_overdue(reply_updated_at(current)):
         return "running", gate, ""
     reply = last_reply(current)
-    if voters:
+    if voters or waiting:
         reply = gate_vote.merge_reports([reply, *map(last_reply, voters)], head)
     primary = read_verdict(reply)[0]
     if primary == "FAIL":

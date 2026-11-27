@@ -121,25 +121,41 @@ VERDICT: PASS
 --- control arm: no voters recorded, primary alone as today
 lane verdict: PASS
 
+--- primary done 1 h ago, voter 3 never launched: still waiting
+lane verdict: running
+
+--- primary done 3 h ago, voter 3 never launched: merge of 2
+lane verdict: FAIL
+Merged gate review of 2 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: a finding stays when 2 agree on file, line within 5 and severity.
+[major] a.py:10 t
+PROVIDES: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CHECK: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+VERDICT: FAIL
+
+--- primary done 3 h ago, neither voter launched: FAIL, not the primary alone
+lane verdict: FAIL
+Merged gate review of 1 reports on aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: only 1 ended with a readable verdict.
+VERDICT: FAIL
+
 ```
 
 ## 4. cmd_gatekeep with a fake candidate, temp COORDQ_DIR and COORD_JOURNAL_DIR (prove_gatekeep.py)
 
 ```
 == dry run, arm treatment (vote3)
-2026-11-26 18:47:29 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:47:29 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:47:29 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 would queue gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 would queue vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == dry run, arm control
-2026-11-26 18:47:29 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 would queue gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 queue items after dry run: 0
 == temp-queue run, arm treatment
-2026-11-26 18:47:29 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:47:29 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
-2026-11-26 18:47:29 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 queued gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 queued vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 reviewer claudeAgent claude-sonnet-5-5
 == temp-queue run, arm control
-2026-11-26 18:47:29 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
+2026-11-26 19:19:57 queued gate:o/r#2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa reviewer claudeAgent claude-sonnet-5-5
 1 gate:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | T-778 review #1 aaaaaaaa | arm treatment
 2 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:2 | T-778 review #1 aaaaaaaa vote 2 | arm treatment
 3 vote:o/r#1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:3 | T-778 review #1 aaaaaaaa vote 3 | arm treatment
