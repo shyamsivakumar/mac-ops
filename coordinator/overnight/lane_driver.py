@@ -2640,7 +2640,7 @@ def undo_experiment(name, state_dir=None, now=None):
 
 
 def compare_decision(name, since=None, until=None):
-    arguments = argparse.Namespace(experiment=name, journal_dir=None, target=None, since=since, until=until)
+    arguments = argparse.Namespace(experiment=name, journal_dir=None, target=None, since=since, until=until, now=None)
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):
