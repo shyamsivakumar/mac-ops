@@ -21,6 +21,8 @@ MAX_REPOS = 40
 MAX_PAGES = 3
 TTL = 300
 MAX_BYTES = 8 * 1024 * 1024
+SLOW_TICK_MINUTES = 10
+SLOW_TICK = re.compile(rb"^- cap (?:hit|mis-sized) (\S+) \| \S+ \| (.*) \| (run:[\w%:.-]+) \| (\d+(?:\.\d+)?) min$")
 
 
 def read_json(path):
@@ -296,7 +298,20 @@ def runtime_events(raw, previous, now):
     return events, seen
 
 
-def log_events(paths, previous, seen):
+def slow_tick_event(line, limit, slow):
+    match = SLOW_TICK.match(line.rstrip(b"\r\n"))
+    if not match or float(match[4]) <= limit or match[3].decode() in slow:
+        return None
+    slow.append(match[3].decode())
+    day = match[1][:10].decode("ascii", errors="replace")
+    title = re.sub(r"[^\w .#:-]", "", match[2].decode("utf-8", errors="replace"))[:60]
+    return (f"EVENT slow-tick {match[4].decode()}min limit={limit:g} {title} | fix it per "
+            "~/.claude/skills/slowness-is-a-bug/SKILL.md, then log: "
+            f"slow-turn {day} {title} | slowest step: <step> <seconds before> | fix: <one phrase> | "
+            "after: <seconds> | spent: <minutes> | saved per run: <seconds> | runs per week: <n> | kept|reverted")
+
+
+def log_events(paths, previous, slow, limit):
     offsets = dict(previous.get("logOffsets", {}))
     events = []
     for path in paths:
@@ -309,6 +324,11 @@ def log_events(paths, previous, seen):
                 if not stat.S_ISREG(info.st_mode):
                     continue
                 identity = f"{info.st_dev}:{info.st_ino}"
+                if not old:
+                    source.seek(max(0, info.st_size - 128))
+                    offsets[key] = {"identity": identity, "generation": 0, "offset": info.st_size,
+                                    "anchor": hashlib.sha256(source.read(128)).hexdigest(), "skipping": False}
+                    continue
                 same_file = old.get("identity") == identity
                 generation = old.get("generation", 0)
                 if old and not same_file:
@@ -335,6 +355,8 @@ def log_events(paths, previous, seen):
                             events.append("EVENT rate-limit")
                         elif b"Traceback (most recent call last):" in line:
                             events.append("EVENT traceback " + path.name)
+                        elif alarm := slow_tick_event(line, limit, slow):
+                            events.append(alarm)
                     position += len(line)
                     skipping = False
                 next_offset = offset + consumed
@@ -356,9 +378,11 @@ def cycle(args, cfg, previous, ticket, adapter):
     board = snapshot(cfg, raw, previous, ticket["normalize_issue"], adapter["linked_ticket"])
     events, detection = detect(board, raw, previous)
     alarms, seen = runtime_events(raw, previous, raw.get("now", time.time()) if args.fake_input else time.time())
-    logs, offsets = log_events(args.log, previous, seen)
+    slow = list(previous.get("slowRuns", []))
+    limit = float(cfg.get("limits", {}).get("slowTickMinutes", SLOW_TICK_MINUTES))
+    logs, offsets = log_events(args.log, previous, slow, limit)
     state = {"github": raw["github"], "items": board["items"], **detection,
-             "runtimeEvents": sorted(seen), "logOffsets": offsets}
+             "runtimeEvents": sorted(seen), "logOffsets": offsets, "slowRuns": slow[-200:]}
     return state, events + alarms + logs, board
 
 
@@ -377,7 +401,8 @@ def main():
                                path.name.startswith(".env") for path in args.log):
         parser.error("at most 16 logs with plain basenames are allowed")
     if not args.log and not args.fake_input:
-        args.log = [Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))) / "dispatch.log"]
+        args.log = [Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))) / "dispatch.log",
+                    Path(os.environ.get("MAC_OPS_COORDINATOR_DIR") or Path.home() / "Code/coordinator") / "loop/ticks.log"]
     if any(part.startswith(".env") or part.lower() in {"credentials", "secrets", ".ssh"}
            for path in args.log for part in path.parts):
         parser.error("secret paths are forbidden")
