@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "id": "zip-strict-py39",
+    "check": "grep",
+    "paths": "*.py",
+    "pattern": "\\bzip\\([^\\n]*\\bstrict\\s*=",
+    "message": "zip(strict=...) needs Python 3.10; the fast check runs on 3.9"
+  }
+]
