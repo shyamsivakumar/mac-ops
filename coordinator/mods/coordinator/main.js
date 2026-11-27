@@ -312,6 +312,7 @@ export default class Coordinator extends View {
     }
     try {
       this.decisions = { items: JSON.parse(file.stdout).items.map(askOf), error: "", at };
+      await exec(`${home()}/.local/bin/coordq`, ["decision", "sync"]);
     } catch (error) {
       this.decisions = { items: [], error: `decisions.json: ${error.message}`, at };
     }
@@ -699,6 +700,7 @@ export default class Coordinator extends View {
     setShared("co.decided", decided);
     this.setDrafts(drafts);
     this.setTyping(typing);
+    await exec(`${home()}/.local/bin/coordq`, ["decision", "answered", ...answered.map((x) => x.id)]);
     // The answer is the acknowledgement: the alarm stays quiet for
     // four hours. The shift reads the record, so the alarm comes
     // back on its own when the four hours are over.
