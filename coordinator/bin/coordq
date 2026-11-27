@@ -3015,11 +3015,12 @@ def prereview_gate(settings, repo, number, event, gate_key, dry_run):
         status = None
         if thread_id:
             code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
-            if not code:
-                try:
-                    status = (json.loads(out).get("thread") or {}).get("status")
-                except ValueError:
-                    pass
+            if code:
+                return prereview_skip(key, "the pre-review thread could not be read", dry_run)
+            try:
+                status = (json.loads(out).get("thread") or {}).get("status")
+            except ValueError:
+                return prereview_skip(key, "the pre-review thread read was not valid JSON", dry_run)
         if status == "completed":
             return True
         if status in ("failed", "interrupted"):
@@ -3039,6 +3040,8 @@ def prereview_gate(settings, repo, number, event, gate_key, dry_run):
             "message": PREREVIEW_BRIEF.format(repo=repo, number=number, head=event["head"])}
     with model_list.blocked_lock(), Lock(True):
         queue = load()
+        if key in queue.get("prereviewHeads", {}):
+            return False
         queue["items"].append({"id": queue["next"], "tool": "t3_thread_launch", "args": args, "title": args["title"],
                                "priority": 5000, "builderModels": event.get("builderModels", [])})
         queue.setdefault("prereviewHeads", {})[key] = {"id": queue["next"], "at": time.time()}

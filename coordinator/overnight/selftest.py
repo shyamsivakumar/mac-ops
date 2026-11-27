@@ -2493,18 +2493,25 @@ def prereview_gate_cases():
             queue = coordq.load()
             queue["prereviewHeads"][key] = {"id": 1, "at": time.time()}
             coordq.save(queue)
-        thread["status"] = "running"
         with patch.object(coordq, "call", lambda tool, args, rules=None: (1, "unreadable")):
-            exact(gate(), False)
-            with coordq.Lock(True):
-                queue = coordq.load()
-                queue["prereviewHeads"][key]["at"] = time.time() - coordq.PREREVIEW_WAIT_SECONDS - 1
-                coordq.save(queue)
             exact((gate(dry=True), coordq.load()["prereviewHeads"][key].get("skipped")), (True, None))
             exact((gate(), gate(), rows(scratch).count("prereview_skipped")), (True, True, 2))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["prereviewHeads"][key] = {"id": 1, "at": time.time()}
+            coordq.save(queue)
+        with patch.object(coordq, "call", lambda tool, args, rules=None: (0, "not json")):
+            exact((gate(), gate(), rows(scratch).count("prereview_skipped")), (True, True, 3))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["prereviewHeads"][key] = {"id": 1, "at": time.time() - coordq.PREREVIEW_WAIT_SECONDS - 1}
+            coordq.save(queue)
+        thread["status"] = "running"
+        exact((gate(dry=True), coordq.load()["prereviewHeads"][key].get("skipped")), (True, None))
+        exact((gate(), gate(), rows(scratch).count("prereview_skipped")), (True, True, 4))
         with patch.object(coordq, "reviewer_model", lambda models: None):
             fresh = {**loop, "head": "c" * 40}
-            exact((coordq.prereview_gate(settings, repo, "31", fresh, "gate:x", False), rows(scratch).count("prereview_skipped")), (True, 3))
+            exact((coordq.prereview_gate(settings, repo, "31", fresh, "gate:x", False), rows(scratch).count("prereview_skipped")), (True, 5))
         with coordq.Lock(True):
             queue = coordq.load()
             queue["gatedHeads"] = {gate_key: {}}
