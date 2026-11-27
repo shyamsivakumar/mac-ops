@@ -33,6 +33,8 @@ def pull_data_arg(argv):
     if "--data" not in argv:
         return None
     i = argv.index("--data")
+    if i + 1 >= len(argv):
+        sys.exit("--data needs a directory")
     path = os.path.expanduser(argv[i + 1])
     del argv[i : i + 2]
     return path
