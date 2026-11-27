@@ -204,6 +204,10 @@ changes: no label, split, scorer lock or queue row, and no model call.
 A FAIL then PASS pair usually means the code was fixed between the heads, so a
 row is a question for Shyam and not a label.
 
+## Data dir
+
+`build_labels.py`, `daily3.py` and `burst.py` read and write their data in the dir given by `--data DIR`, default the script's own dir when it holds `labels.jsonl`, else `~/Code/coordinator/evals/hillclimb`. Run them from the repo copy with `--data` pointing at a scratch copy to try a change on real data without touching the installed files.
+
 ## Rebuild
 
 ```sh
