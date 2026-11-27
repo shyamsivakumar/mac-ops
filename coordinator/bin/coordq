@@ -1979,6 +1979,37 @@ def cmd_drop(a):
     print(f"dropped #{a.id}")
 
 
+def wait_ages(queue, now=None):
+    now = time.time() if now is None else now
+    rows = []
+    for key, row in sorted(queue.get("approvalWaits", {}).items()):
+        since = row.get("since") if isinstance(row, dict) else None
+        if isinstance(since, (int, float)) and not isinstance(since, bool):
+            rows.append({"id": key, "owner": row.get("owner", ""), "since": since,
+                         "ageMinutes": max(0, int((now - since) // 60))})
+    return rows
+
+
+def cmd_wait(a):
+    with Lock(True):
+        queue = load()
+        waits = queue.setdefault("approvalWaits", {})
+        if a.action == "start":
+            if not a.owner:
+                die("wait start needs --owner")
+            if a.id not in waits:
+                waits[a.id] = {"owner": a.owner, "since": time.time()}
+                journal.emit("approval_wait_started", "coordq", wait_id=a.id, owner=a.owner)
+        elif waits.pop(a.id, None) is not None:
+            journal.emit("approval_wait_ended", "coordq", wait_id=a.id)
+        save(queue)
+    print(json.dumps(wait_ages(queue)))
+
+
+def cmd_waits(a):
+    print(json.dumps(wait_ages(load())))
+
+
 def cmd_status(a):
     # A reservation outlives its launch when nothing reconciles it, so the read
     # reconciles before it reports: a slot a finished launch no longer needs
@@ -2007,7 +2038,8 @@ def cmd_status(a):
             queue = load()
         report = {"cap": cap(), "live": threads, "reserved": queue.get("reserved", {}),
                   "queued": len(queue["items"]), "failed": queue.get("failed", []),
-                  "stuck": stuck, "tickAlarm": tick_alarm(), "roundCap": round_cap_report()}
+                  "stuck": stuck, "tickAlarm": tick_alarm(), "roundCap": round_cap_report(),
+                  "approvalWaits": wait_ages(queue)}
     print(json.dumps(report))
 
 
@@ -3492,6 +3524,12 @@ def main():
     d.add_argument("id", type=int)
     d.set_defaults(fn=cmd_drop)
     sub.add_parser("status").set_defaults(fn=cmd_status)
+    w = sub.add_parser("wait", help="record that an approval wait started or ended, and who owns it")
+    w.add_argument("action", choices=("start", "end"))
+    w.add_argument("id", help="the card or action key the wait is about")
+    w.add_argument("--owner", help="who must answer: required for start")
+    w.set_defaults(fn=cmd_wait)
+    sub.add_parser("waits", help="list open approval waits with owner and age").set_defaults(fn=cmd_waits)
     d = sub.add_parser("dispatch")
     d.add_argument("--dry-run", action="store_true",
                    help="start nothing: the queue is left alone and the refill only reports")
