@@ -39,3 +39,7 @@ GREEN retained-month lookup: PASS stale-started-refill; real February and Decemb
 The fix scans all retained `events-YYYY-MM.jsonl` files in the existing journal directory. It does not depend on month length and does not discard older starts through an arbitrary time window. Cost grows with retained journal history; journal retention is unchanged.
 
 Device, handset and live-service testing was waived, not failed; no live cases were run. The unrelated root evidence/check-proof.md is left untouched; the ticket proof is evidence/MO-1004/check-proof.md.
+
+## Required heavy check result
+
+Both bounded invocations exited 124. The ordinary invocation printed the overnight selftest PASS cases, then was paused for capacity again. The review retry never started the check. The host reported global limit zero / capacity-unavailable. No capacity setting was changed and no full-check PASS is claimed. See check-proof.md for exact commands and results.
