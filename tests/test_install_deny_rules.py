@@ -81,7 +81,7 @@ class InstallTest(FakeHome):
             [e for e in rules["deny"] + rules["ask"] if "slash-eureka" in e]
         )
         self.assertIn("Edit(**/.env)", rules["deny"])
-        self.assertIn("Bash(git push origin main:*)", rules["ask"])
+        self.assertIn("Bash(git push origin main:*)", rules["deny"])
         self.assertFalse(set(rules["deny"]) & set(rules["ask"]))
         self.assertEqual(
             load(self.settings_path)["hooks"]["PreToolUse"][0]["matcher"],
@@ -325,7 +325,7 @@ HARD_PUSHES = [
     "git push origin :main",
     "git push origin --delete main",
 ]
-ASK_PUSHES = [
+MAIN_PUSHES = [
     "git push origin main",
     "git push -u origin main",
     "git push origin HEAD:main",
@@ -484,8 +484,8 @@ class HookTest(unittest.TestCase):
             )
         for command in HARD_PUSHES:
             self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
-        for command in ASK_PUSHES:
-            self.assertEqual(self.decided(command)["permissionDecision"], "ask", command)
+        for command in MAIN_PUSHES:
+            self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
         for command in ALLOWED_COMMANDS:
             self.assertIsNone(self.decided(command), command)
 

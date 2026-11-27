@@ -11,7 +11,7 @@ command that breaks it:
 Each rule belongs to a family, and FAMILY_MODES (from deny-rules.json) says
 whether the family asks the owner or is denied outright:
 
-- ask: `gh pr merge`, a push to main or master, commands on secret files,
+- ask: `gh pr merge`, commands on secret files,
   secret values printed by gcloud or heroku (`gcloud secrets versions access`,
   `heroku config`, `config:get`, a `--format` that shows a secret), and commands
   that touch the Ascend tree from a session that did not start there. Every
@@ -21,7 +21,7 @@ whether the family asks the owner or is denied outright:
   (bypassPermissions, dontAsk, anything new) no prompt is guaranteed, so the
   answer is deny. An internal error on a command that names a guarded tool is
   a deny ("guard error").
-- deny, even with approval: force-push in any form, remote and cloud deletes
+- deny, even with approval: a push to main or master, force-push in any form, remote and cloud deletes
   (including `gh api`, `curl` and `http` DELETE requests), removal commands
   aimed at secret files or the Ascend tree, and `git stash` in any form
   except `list` and `show`.
@@ -44,7 +44,7 @@ PREFIX = "mac-ops deny rules (#530): "
 MERGE_REASON = "gh pr merge needs the owner's approval; merges belong to the lane and the merge pass"
 FORCE_REASON = "force-push in any form is denied"
 DELETE_REASON = "remote and cloud deletes are denied"
-PROTECTED_REASON = "pushing to main or master needs the owner's approval; push a task branch instead"
+PROTECTED_REASON = "pushing to main or master is denied; push a task branch instead"
 NO_DESTINATION_REASON = (
     "this push names no explicit destination branch; name the branch, "
     "for example `git push -u origin <task-branch>`"
@@ -89,7 +89,7 @@ MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
 SECRET_DIRS = ["~/.ssh"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
-FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
+FAMILY_MODES = {"merge": "ask", "push_protected": "deny", "push_branch": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
 SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval"
 CLOUD_REASON = "printing secret values with gcloud or heroku needs the owner's approval"
