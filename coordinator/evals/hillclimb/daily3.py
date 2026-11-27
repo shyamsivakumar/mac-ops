@@ -181,7 +181,7 @@ def cmd_pick(args):
         for k, opt in enumerate(item["options"], 1):
             print(f"     {k}) {opt}")
         print()
-    print("Answer with: python3 daily3.py record --id <id> --choice '<option>' --reason '<one line>'")
+    print("Answer with: python3 daily3.py record --id <id> --choice '<option>' [--reason '<one line>']")
     print("ids: " + ", ".join(i["id"] for i in chosen))
     return 0
 
@@ -230,7 +230,14 @@ def relock():
     return True
 
 
+MAX_REASON = 200
+
+
 def cmd_record(args):
+    reason = (args.reason or "").strip()
+    if len(reason) > MAX_REASON or "\n" in reason or "\r" in reason:
+        print(f"daily3: --reason must be one line of at most {MAX_REASON} characters", file=sys.stderr)
+        return 2
     item = find_item(args.id)
     if item is None:
         print(f"daily3: no item with id {args.id!r} in the inbox, backlog or guess log", file=sys.stderr)
@@ -264,7 +271,7 @@ def cmd_record(args):
         "agree": agree,
         "ts": now(),
         "source": f"daily3 record <- {item.get('source', 'unknown')} (guess: {guess_source})",
-        "reason": args.reason.strip(),
+        "reason": reason,
     }
 
     if args.escaped_bug:
@@ -315,7 +322,7 @@ def main(argv=None):
     r = sub.add_parser("record", help="record Shyam's answer as a label")
     r.add_argument("--id", required=True)
     r.add_argument("--choice", required=True)
-    r.add_argument("--reason", required=True)
+    r.add_argument("--reason", default="")
     r.add_argument("--escaped-bug", action="store_true", help="route to hard_set.jsonl, never a split")
     r.add_argument("--allow-free-text", action="store_true")
     r.set_defaults(func=cmd_record)
