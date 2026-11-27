@@ -60,10 +60,11 @@ CASES = {
         "the thread ended with no verdict",
         report("FAIL", ("major", PROOF, 268)),
     ],
-    "one voter only reports, others died: primary returned unchanged": [
-        report("FAIL", ("major", PROOF, 271)),
-        "no verdict",
-        "no verdict",
+    "two voters dead: fewer than 2 readable, FAIL not the primary alone": [report("PASS"), "no verdict", ""],
+    "one voter CHECK FAIL: merged CHECK FAIL, findings still voted": [
+        report("PASS"),
+        report("PASS").replace(f"CHECK: PASS {HEAD}", f"CHECK: FAIL {HEAD}"),
+        report("PASS"),
     ],
 }
 for name, reports in CASES.items():

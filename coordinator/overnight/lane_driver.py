@@ -561,7 +561,8 @@ def gate_verdict(repo, number, head, base):
         return "absent", None, ""
     gate = {"threadId": current}
     voters = gate_vote.vote_threads(receipts, key)
-    if any(gate_in_flight(thread) for thread in [current, *voters]):
+    waiting = len(voters) + 1 < receipts.get(f"voters:{current}", 1)
+    if waiting or any(gate_in_flight(thread) for thread in [current, *voters]):
         return "running", gate, ""
     reply = last_reply(current)
     if voters:
