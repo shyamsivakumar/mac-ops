@@ -261,6 +261,12 @@ def emit(event, actor, **fields):
             _record_inbox(row)
 
 
+def emit_gap(actor, card, missing, looked, topic=None):
+    ticket = int(card) if str(card).isdigit() else None
+    emit("gap", actor, ticket=ticket, card=str(card), missing=missing, looked=looked,
+         topic=topic or " ".join(re.findall(r"[a-z0-9]+", missing.lower())))
+
+
 def _record_inbox(row):
     try:
         import inbox
