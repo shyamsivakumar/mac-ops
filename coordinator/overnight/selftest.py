@@ -2916,7 +2916,7 @@ def build_here():
                      patch.object(lane, "gate_verdict", return_value=verdict), \
                      patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
                      patch.object(lane, "run", side_effect=AssertionError("live command forbidden")), \
-                     patch.object(lane, "t3", side_effect=AssertionError("live T3 forbidden")), \
+                     patch.object(lane, "t3", return_value={"thread": {"status": "completed"}}), \
                      patch.object(lane, "send", send):
                     exact(lane.act_on_pr(repo, 20, {}), f"#20: {repo} is built in the Herdr session, board card raised")
             exact(sent, [])
@@ -2928,6 +2928,30 @@ def build_here():
             items = json.loads(owner_board.read_text())["items"]
             exact([item["id"] for item in items], [card_id])
             exact(head[:8] in items[0]["title"], True)
+            for status, expect_card in (("running", False), ({}, True)):
+                pr = dict(number=21, state="OPEN", headRefOid=head, mergeable="MERGEABLE", body="Refs #10")
+                snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+                reply = {"thread": {"status": status}} if status != {} else {}
+                ledger = {}
+                with tempfile.TemporaryDirectory() as journal_dir, \
+                     patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir}), \
+                     patch.object(lane, "CFG", {repo: dict(key="MO", projectId="fixture", build="here")}), \
+                     patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                     patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                     patch.object(lane, "gate_verdict", return_value=("none", None, "")), \
+                     patch.object(lane, "read_json", side_effect=pr_reads(lane, dict(number=21, state="OPEN", headRefName="builder/fixture", baseRefName="main"))), \
+                     patch.object(lane, "run", side_effect=AssertionError("live command forbidden")), \
+                     patch.object(lane, "t3", return_value=reply):
+                    first = lane.act_on_pr(repo, 21, ledger)
+                    again = lane.act_on_pr(repo, 21, ledger)
+                    cards = [item["id"] for board in decisions.parent.glob("*.json")
+                             for item in json.loads(board.read_text())["items"] if item["id"] == "herdr-build-MO-21"]
+                    rows = [json.loads(line) for line in Path(lane.journal.journal_path(time.time())).read_text().splitlines()
+                            if "fix_skipped_owned" in line] if Path(lane.journal.journal_path(time.time())).exists() else []
+                    exact(cards == ["herdr-build-MO-21"], expect_card)
+                    exact(len(rows), 0 if expect_card else 1)
+                    exact(first.startswith("skip #21"), not expect_card)
+                    exact(again, first)
 
 
 def stale_started_refill():

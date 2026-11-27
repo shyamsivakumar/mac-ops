@@ -1232,6 +1232,14 @@ def herdr_build_card(repo, number, head, need):
     return f"#{number}: {repo} is built in the Herdr session, board card raised"
 
 
+def owned_by_live_builder(repo, number, head, builder, ledger):
+    if not builder or not gate_in_flight(builder):
+        return None
+    journal_once("fix_skipped_owned", repo, number, head, ledger,
+                 f"fix-skipped-owned:{repo}#{number}:{head}", owner=builder)
+    return f"skip #{number}: builder thread {builder} owns the branch, no board card"
+
+
 def withdraw_decision(item_id):
     """Take one item off Shyam's board, once the pull request is settled."""
     return alarms.route_update(DECISIONS_PATH, item_id, "remove", None)
@@ -1792,7 +1800,7 @@ def act_on_pr(repo, number, ledger):
     if pr.get("mergeable") == "CONFLICTING" or not check_ok:
         why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
         if CFG[repo].get("build") == "here":
-            return herdr_build_card(repo, number, head, why)
+            return owned_by_live_builder(repo, number, head, builder, ledger) or herdr_build_card(repo, number, head, why)
         if not builder:
             return f"skip #{number}: {why}, no builder thread"
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
@@ -1829,7 +1837,8 @@ def act_on_pr(repo, number, ledger):
                 and gate_policy.partial_claim(body) is None):
             return park(repo, number, issue, head, reply, ledger, f"is over the {OVER_CAP_LINES} code line cap")
     if verdict == "FAIL" and CFG[repo].get("build") == "here":
-        return herdr_build_card(repo, number, head, "the gate returned FAIL findings")
+        return (owned_by_live_builder(repo, number, head, builder, ledger)
+                or herdr_build_card(repo, number, head, "the gate returned FAIL findings"))
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
