@@ -10,6 +10,7 @@ Acceptance and proof: Run tests/ticket_start_proof.py and read the three outputs
 CI: python3 -m unittest tests.test_ticket_section_headings.
 Must not cause: A missing section passing the check.
 Data/secrets and stop conditions: Repo files and the local ticket config only; no secrets and no network writes.
+Failure behavior: A missing input exits 2 and writes nothing.
 Rollback: Revert the change; the CLI returns to exact matching.
 Gate: A reviewer reads the diff and the three outputs.
 Finish: A ready PR that carries Refs #469 and the three outputs.

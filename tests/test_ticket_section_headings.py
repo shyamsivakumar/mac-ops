@@ -42,6 +42,7 @@ CONFIGURED = [
     "CI",
     "Must not cause",
     "Data/secrets and stop conditions",
+    "Failure behavior",
     "Rollback",
     "Gate",
     "Finish",
