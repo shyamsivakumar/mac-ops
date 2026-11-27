@@ -1094,7 +1094,8 @@ def blocked_by_section(cfg, body):
             return re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
         content = [rest]
         pending = []
-        for follow in lines[start + 1:]:
+        next_marker = min((m[0] for m in markers if m[0] > start), default=len(lines))
+        for follow in lines[start + 1:next_marker]:
             text = follow.strip()
             if not text:
                 pending.append(follow)
