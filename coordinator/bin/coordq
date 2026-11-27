@@ -20,6 +20,7 @@ from pr_refs import pr_ticket_refs
 import prompt_paths
 from tick_health import tick_alarm
 import alarms
+import gate_vote
 import gh_gateway
 import journal
 
@@ -990,6 +991,11 @@ def drain():
                     from gate_policy import brief_base, brief_merger
                     receipts["base:" + thread_id] = brief_base(item["args"].get("message", ""), request_id.split(":")[2])
                     receipts["brief:" + thread_id] = brief_merger(item["args"].get("message", ""))
+                    if item.get("voters"):
+                        receipts["voters:" + thread_id] = item["voters"]
+                elif request_id.startswith("vote:"):
+                    from gate_policy import brief_base
+                    receipts["base:" + thread_id] = brief_base(item["args"].get("message", ""), request_id.split(":")[2])
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
@@ -2510,7 +2516,8 @@ def pr_size(repo, number, pr):
     files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
     lines, count = code_size(files)
     whole = gate_whole(pr)
-    return {"size": size_class(files, whole), "lines": lines, "files": count, "whole": whole}
+    return {"size": size_class(files, whole), "lines": lines, "files": count, "whole": whole,
+            "paths": [f["filename"] for f in files]}
 
 
 def partial_head(repo, number, pr):
@@ -3150,18 +3157,25 @@ def cmd_gatekeep(a):
                         continue
                     args["modelSelection"] = chosen
                 attempted.add(key)
-                print(stamped(("would queue " if a.dry_run else "queued ") + key
-                              + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"]),
-                      flush=True)
-                if a.dry_run:
-                    continue
                 ids = journal.parse_request_id(key)
                 gate_arm = journal.assigned_arm(ids["repo"], event.get("scopeIssue"), gate=True)
-                item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
-                        "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", []),
-                        **({"arm": gate_arm} if gate_arm else {})}
-                queue["next"] += 1
-                queue["items"].append(item)
+                ballots = gate_vote.voter_args(args, key, event.get("paths") or []) if journal.treatment_names(gate_arm, "gate", "vote3") and not retries else [args]
+                for ballot in ballots:
+                    print(stamped(("would queue " if a.dry_run else "queued ") + (key if ballot is ballots[0] else ballot["clientRequestId"])
+                                  + " reviewer " + ballot["modelSelection"]["instanceId"] + " " + ballot["modelSelection"]["model"]),
+                          flush=True)
+                if a.dry_run:
+                    continue
+                items = []
+                for ballot in ballots:
+                    items.append({"id": queue["next"], "tool": "t3_thread_launch", "args": ballot,
+                                  "title": ballot["title"], "priority": 5000, "builderModels": event.get("builderModels", []),
+                                  **({"arm": gate_arm} if gate_arm else {})})
+                    queue["next"] += 1
+                item = items[0]
+                if len(items) > 1:
+                    item["voters"] = len(items)
+                queue["items"].extend(items)
                 heads[key] = {"id": item["id"], "retries": retries,
                               "at": time.time() if retries else None, "givenUp": False}
                 if retry_of:
