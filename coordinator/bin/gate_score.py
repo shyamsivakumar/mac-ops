@@ -7,7 +7,10 @@ import models
 from gate_bar import SEVERITY_BAR
 
 KEEP_AT = 7
-LEAD = re.compile(r"^[ \t]*(?:[-*>][ \t]+|\d+[.)][ \t]+)?[*_`]*(?:Critical|Major)\b", re.MULTILINE)
+LEAD = re.compile(
+    r"^[\s>*_`\[(\-]*(?:\d+[.)][\s>*_`\[(\-]*)?(?:critical|major)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
 SCORES = re.compile(r"\[[\d,\s]*\]")
 
 ASK = """{bar}
@@ -31,12 +34,15 @@ def prose_findings(report):
     return [{"text": "\n".join(lines).strip()} for lines in found]
 
 
+def blocking(finding):
+    return str(finding.get("severity")).lower() in ("critical", "major")
+
+
 def findings_of(report):
-    return [
-        f
-        for f in gate_policy.read_verdict(report)[1]
-        if f.get("severity") in ("critical", "major")
-    ] or prose_findings(report)
+    data = gate_policy.parse_verdict(report)
+    if data:
+        return [f for f in data["findings"] if blocking(f)]
+    return prose_findings(report)
 
 
 def scores_for(findings, call):
@@ -80,7 +86,7 @@ def score_findings(report, call):
     if not dropped:
         return report, []
     report = without(report, dropped)
-    if len(dropped) == len(findings):
+    if not LEAD.search(report) and not findings_of(report):
         report = re.sub(
             r'("verdict":\s*)"FAIL"',
             r'\1"PASS"',

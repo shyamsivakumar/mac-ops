@@ -5,7 +5,7 @@ Reports in reports/ are the last-message FAIL reports of five real mac-ops gate 
 ## Before (origin/main)
 
     $ git show origin/main:coordinator/overnight/lane_driver.py | grep -n "def gate_verdict\|gate_score"
-    555:def gate_verdict(repo, number, head, base):
+    559:def gate_verdict(repo, number, head, base):
     $ git cat-file -e origin/main:coordinator/bin/gate_score.py; echo $?
     128
 
@@ -81,6 +81,34 @@ A FAIL reply returns FAIL in every arm; nothing scores it.
     two consecutive Majors, both scored low: findings=2 dropped=2 verdict -> PASS unchanged=False
     bulleted Majors, first scored low: findings=2 dropped=1 verdict -> FAIL unchanged=False
     numbered Majors, first scored low: findings=2 dropped=1 verdict -> FAIL unchanged=False
+    all-format variants, each alone, scored low flips only when nothing else blocks:
+      'Major — a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '[major] a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '**Critical**: a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '- major: a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '1) MAJOR a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '`Major` a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '> Critical - a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      '[Critical] a.py:1 x.': findings=1 dropped=1 verdict -> PASS
+      mixed 'Major — a.py:1 x.' + '1) MAJOR a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed 'Major — a.py:1 x.' + '`Major` a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed 'Major — a.py:1 x.' + '> Critical - a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed 'Major — a.py:1 x.' + '[Critical] a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '[major] a.py:1 x.' + '1) MAJOR a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '[major] a.py:1 x.' + '`Major` a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '[major] a.py:1 x.' + '> Critical - a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '[major] a.py:1 x.' + '[Critical] a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '**Critical**: a.py:1 x.' + '1) MAJOR a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '**Critical**: a.py:1 x.' + '`Major` a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '**Critical**: a.py:1 x.' + '> Critical - a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '**Critical**: a.py:1 x.' + '[Critical] a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '- major: a.py:1 x.' + '1) MAJOR a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '- major: a.py:1 x.' + '`Major` a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '- major: a.py:1 x.' + '> Critical - a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+      mixed '- major: a.py:1 x.' + '[Critical] a.py:1 x.', first scored low: findings=2 dropped=1 verdict -> FAIL
+    mixed Major and [major], one scored low: dropped=1 verdict -> FAIL
+    mixed Major and [major], both scored low, minor kept: dropped=2 verdict -> PASS
+    json block with a kept critical, one dropped: dropped=1 verdict -> FAIL
     mismatch (2 Major lines in the text, 1 finding in the json block, scored low): dropped=0 unchanged=True verdict=FAIL
     a PASS report is untouched: True
 
@@ -90,15 +118,15 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[7, 8]\n'
+    raw model answer: ''
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[7, 9]\n'
+    raw model answer: '[8, 9]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[7, 9]\n'
+    raw model answer: ''
 
 A score of 7 or more keeps the finding.
 
