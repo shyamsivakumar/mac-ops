@@ -697,6 +697,12 @@ def cmd_compare(args):
         missing = [name for name in ("control", "treatment") if name not in present]
         hint = "; register an experiment in coordinator/config/factory.json" if not experiment else ""
         sys.exit(f"compare: no {' or '.join(missing)} assignments for {args.experiment} in the journal" + hint)
+    windowed = args.since is not None and args.until is not None
+    if windowed:
+        target = len(tickets)
+        print(f"window look: {target} tickets")
+        print(look(live, tickets, args, side, "final", target, args.now or today_ts(), args.until + SETTLE_DAYS * 86400))
+        return
     half = math.ceil(target / 2)
     print(f"target {target} tickets, {len(tickets)} assigned")
     if len(tickets) < half:
@@ -719,8 +725,8 @@ def iso_time(ts):
     return datetime.fromtimestamp(ts, TZ).isoformat(timespec="minutes")
 
 
-def look(live, tickets, args, side, name, size, now):
-    cutoff = tickets[size - 1][0] + SETTLE_DAYS * 86400
+def look(live, tickets, args, side, name, size, now, cutoff=None):
+    cutoff = cutoff or tickets[size - 1][0] + SETTLE_DAYS * 86400
     print(f"{name} cohort is the first {size} tickets, read at {iso_time(cutoff)}")
     if now < cutoff:
         return f"continue ({name} cohort settles at {iso_time(cutoff)})"
