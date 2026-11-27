@@ -8,6 +8,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,7 +42,7 @@ def reply(outcome, check="PASS", findings=()):
     return f"{block}\nsummary\n\nPROVIDES: PASS {HEAD}\nCHECK: {check} {HEAD}\nVERDICT: {outcome}"
 
 
-def scenario(name, receipts, replies, running=()):
+def scenario(name, receipts, replies, running=(), replied_hours_ago=0):
     path = Path(tempfile.mkdtemp(prefix="mo778-lane-")) / "receipts.json"
     path.write_text(
         json.dumps({**receipts, **{f"base:{t}": BASE for t in ("T1", "T2", "T3")}})
@@ -49,6 +50,8 @@ def scenario(name, receipts, replies, running=()):
     lane.RECEIPTS = str(path)
     lane.gate_in_flight = lambda thread: thread in running
     lane.last_reply = lambda thread: replies.get(thread, "")
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - replied_hours_ago * 3600))
+    lane.reply_updated_at = lambda thread: stamp
     verdict, _gate, text = lane.gate_verdict(REPO, NUMBER, HEAD, BASE)
     print(
         f"--- {name}\nlane verdict: {verdict}"
@@ -95,3 +98,9 @@ scenario(
 scenario(
     "control arm: no voters recorded, primary alone as today", {KEY: "T1"}, {"T1": PASS}
 )
+FAIL_A = reply("FAIL", findings=[("major", "a.py", 10)])
+FAIL_B = reply("FAIL", findings=[("major", "a.py", 12)])
+VOTER2_ONLY = {**EXPECT3, f"{VOTE}:2": "T2"}
+scenario("primary done 1 h ago, voter 3 never launched: still waiting", VOTER2_ONLY, {"T1": FAIL_A, "T2": FAIL_B}, replied_hours_ago=1)
+scenario("primary done 3 h ago, voter 3 never launched: merge of 2", VOTER2_ONLY, {"T1": FAIL_A, "T2": FAIL_B}, replied_hours_ago=3)
+scenario("primary done 3 h ago, neither voter launched: FAIL, not the primary alone", EXPECT3, {"T1": PASS}, replied_hours_ago=3)

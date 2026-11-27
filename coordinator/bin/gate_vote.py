@@ -1,11 +1,14 @@
 import random
 import re
+import time
+from datetime import datetime
 
 from gate_policy import JSON_VERDICT_ASK, read_verdict
 
 VOTERS = 3
 AGREE = 2
 LINE_WINDOW = 5
+VOTER_WAIT_HOURS = 2
 BLOCKING = ("critical", "major")
 
 
@@ -20,6 +23,13 @@ def voter_args(args, key, paths):
             ballot["title"] = f"{args['title']} vote {number}"
         ballots.append(ballot)
     return ballots
+
+
+def voters_overdue(replied_at):
+    if not replied_at:
+        return True
+    replied = datetime.fromisoformat(replied_at.replace("Z", "+00:00")).timestamp()
+    return time.time() - replied >= VOTER_WAIT_HOURS * 3600
 
 
 def vote_threads(receipts, key):
