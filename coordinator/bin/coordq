@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import argparse, fcntl, hashlib, json, os, re, shutil, signal, subprocess, sys, time
+import argparse, fcntl, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
+from datetime import datetime
 from pathlib import Path
 
 # The modules below live next to this script. A caller that loads this file
@@ -177,6 +178,20 @@ def log(message):
 def cap():
     with open(path("config.json")) as f:
         return json.load(f)["cap"]
+
+
+def card_limits():
+    with open(path("config.json")) as f:
+        config = json.load(f)
+    return config.get("spendCapTokens"), config.get("stallMinutes")
+
+
+def card_stop_reason(tokens, idle_seconds, token_cap, stall_minutes):
+    if token_cap is not None and tokens >= token_cap:
+        return f"spend cap: {tokens} tokens, cap {token_cap}"
+    if stall_minutes is not None and idle_seconds >= stall_minutes * 60:
+        return f"stall: no progress for {int(idle_seconds // 60)} min, limit {stall_minutes}"
+    return None
 
 
 def dispatch_stopped():
@@ -2024,6 +2039,8 @@ def cmd_status(a):
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
+    stuck += [f"{value['ticket']} {thread} {value['reason']}"
+              for thread, value in sorted((before.get("cardStops") or {}).items())]
     threads = live()
     # A start can enqueue between a read and a write, and saving an older
     # snapshot would drop the item it just queued. So the queue is read,
@@ -2042,6 +2059,62 @@ def cmd_status(a):
                   "approvalWaits": wait_ages(queue)}
     print(json.dumps(report))
 
+
+
+def scorecard_module():
+    loader = importlib.machinery.SourceFileLoader("coordq_scorecard", os.path.join(_BIN_DIR, "scorecard"))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq_scorecard", loader))
+    loader.exec_module(module)
+    return module
+
+
+def cmd_spend(a):
+    token_cap, stall_minutes = card_limits()
+    scorecard = scorecard_module()
+    sources = scorecard.load_cost_sources()
+    if sources is None:
+        die("spend: receipts file or T3 database unreadable")
+    receipts, db_path = sources
+    cards = {thread: (m[1], int(m[2])) for key, thread in receipts.items()
+             if (m := re.match(r"^ticket:([^#]+)#(\d+):a\d+$", key))}
+    rows = []
+    cursor = None
+    while True:
+        args = {"allProjects": True, "limit": 100, "statuses": LANE_STATUSES, "includeSubagents": False}
+        if cursor is not None:
+            args["cursor"] = cursor
+        code, out = call("t3_thread_list", args)
+        if code:
+            die(f"spend: cannot read every thread, nothing stopped: {out}")
+        page = json.loads(out)
+        rows += page["threads"]
+        cursor = page.get("nextCursor")
+        if cursor is None:
+            break
+    stopped = load().get("cardStops") or {}
+    now = time.time()
+    for row in rows:
+        thread = row["threadId"]
+        if thread not in cards or thread in stopped:
+            continue
+        repo, number = cards[thread]
+        tokens = scorecard.ticket_costs([(repo, number)], receipts, [], db_path)["tokens"]["total"] or 0
+        idle = now - datetime.fromisoformat(row["updatedAt"].replace("Z", "+00:00")).timestamp()
+        reason = card_stop_reason(tokens, idle, token_cap, stall_minutes)
+        if reason is None:
+            continue
+        print(stamped(f"stop {repo}#{number} {thread}: {reason}"), file=sys.stderr)
+        if a.dry_run:
+            continue
+        code, out = call("t3_thread_interrupt", {"threadId": thread, "stop": True})
+        if code:
+            print(stamped(f"stop {thread} failed, retried on the next run: {out}"), file=sys.stderr)
+            continue
+        with Lock(True):
+            queue = load()
+            queue.setdefault("cardStops", {})[thread] = {"ticket": f"{repo}#{number}", "reason": reason, "at": now}
+            save(queue)
+        journal.emit("card_stopped", "coordq", repo=repo, ticket=number, reason=reason)
 
 
 OPEN_PULLS = re.compile(r"repos/[^/]+/[^/]+/pulls\?state=open")
@@ -3524,6 +3597,9 @@ def main():
     d.add_argument("id", type=int)
     d.set_defaults(fn=cmd_drop)
     sub.add_parser("status").set_defaults(fn=cmd_status)
+    sp = sub.add_parser("spend", help="stop a ticket thread over its token cap or idle past the stall limit")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.set_defaults(fn=cmd_spend)
     w = sub.add_parser("wait", help="record that an approval wait started or ended, and who owns it")
     w.add_argument("action", choices=("start", "end"))
     w.add_argument("id", help="the card or action key the wait is about")
