@@ -993,6 +993,9 @@ def drain():
                     receipts["brief:" + thread_id] = brief_merger(item["args"].get("message", ""))
                     if item.get("voters"):
                         receipts["voters:" + thread_id] = item["voters"]
+                elif request_id.startswith("vote:"):
+                    from gate_policy import brief_base
+                    receipts["base:" + thread_id] = brief_base(item["args"].get("message", ""), request_id.split(":")[2])
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
