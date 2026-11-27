@@ -31,3 +31,21 @@ Ran 1 test in 0.000s
 
 OK
 ```
+
+## Requires case: red on origin/main
+```
++ ['shyamsivakumar/strategy-replay-workbench#816 is not merged']
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)
+```
+
+## Requires case: green on branch
+```
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK
+```
