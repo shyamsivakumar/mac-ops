@@ -117,6 +117,25 @@ if mode == "fake":
     for label, text, answer in word_cases:
         new, dropped = gate_score.score_findings(text, lambda _p, a=answer: a)
         print(f"{label}: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]}")
+    footer_text = "Major: a.py:1 x.\nBuilder check: PASS abc\nCHECK: PASS abc\nPROVIDES: PASS abc\nVERDICT: FAIL"
+    reply_cases = (
+        ("reply 'Initial score [3]. final score [9]'", "Major: a.py:1 x." + tail, "Initial score [3]. final score [9]"),
+        ("reply with a fenced json list", "Major: a.py:1 x." + tail, "```json\n[2]\n```"),
+        ("reply with a bare fence", "Major: a.py:1 x." + tail, "```\n[2]\n```"),
+        ("reply with a score of 11", "Major: a.py:1 x." + tail, "[11]"),
+        ("reply with a boolean", "Major: a.py:1 x." + tail, "[true]"),
+        ("reply with a float", "Major: a.py:1 x." + tail, "[2.0]"),
+        ("reply with trailing prose", "Major: a.py:1 x." + tail, "[2] done"),
+        ("footer directly after the last finding, scored low", footer_text, "[2]"),
+    )
+    for label, text, answer in reply_cases:
+        new, dropped = gate_score.score_findings(text, lambda _p, a=answer: a)
+        print(
+            f"{label}: dropped={len(dropped)} verdict -> {gate_policy.read_verdict(new)[0]} "
+            f"unchanged={new == text}"
+        )
+        if label.startswith("footer"):
+            print("   footer lines kept:", [l for l in new.splitlines() if l.startswith(("CHECK", "PROVIDES", "VERDICT", "Builder"))])
     json_report = (
         "Major - a.py:1 first bug.\nMajor - b.py:2 second bug.\n\n```json\n"
         + json.dumps({"verdict": "FAIL", "findings": [
