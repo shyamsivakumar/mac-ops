@@ -202,6 +202,10 @@ def scope_texts(body):
     return "\n".join(declared), "\n".join(exclusion)
 
 
+def strip_token(raw):
+    return raw.lstrip("([").rstrip(".,;:)]")
+
+
 def scope_tokens(body):
     """The files and paths the ticket permits.
 
@@ -215,13 +219,13 @@ def scope_tokens(body):
     tokens = set()
     text = token_text(permission)
     for match in PATH_TOKEN.finditer(text):
-        token = match.group(0).strip(".,;:()[]")
+        token = strip_token(match.group(0))
         if token and "://" not in token:
             tokens.add(token)
     for match in FILE_TOKEN.finditer(text):
-        tokens.add(match.group(0).strip(".,;:()[]"))
+        tokens.add(strip_token(match.group(0)))
     for match in DOCKERFILE_TOKEN.finditer(text):
-        tokens.add(match.group(0).strip(".,;:()[]"))
+        tokens.add(strip_token(match.group(0)))
     return {token for token in tokens if not token_matches_any(token, excluded)}
 
 
@@ -230,13 +234,13 @@ def exclusion_tokens(text):
     tokens = set()
     text = token_text(text)
     for match in PATH_TOKEN.finditer(text):
-        token = match.group(0).strip(".,;:()[]")
+        token = strip_token(match.group(0))
         if token and "://" not in token:
             tokens.add(token)
     for match in FILE_TOKEN.finditer(text):
-        tokens.add(match.group(0).strip(".,;:()[]"))
+        tokens.add(strip_token(match.group(0)))
     for match in DOCKERFILE_TOKEN.finditer(text):
-        tokens.add(match.group(0).strip(".,;:()[]"))
+        tokens.add(strip_token(match.group(0)))
     return tokens
 
 

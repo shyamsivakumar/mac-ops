@@ -34,6 +34,13 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("lane_driver.py", tokens)
         self.assertIn("herdr/*", tokens)
 
+    def test_a_dotfile_path_keeps_its_leading_dot(self):
+        check = close_check()
+        body = "In: `.claude/hooks/config.json` and (a/b.py). Not e.g. 3.9 or Foo.swift."
+        self.assertEqual(check.scope_tokens(body),
+                         {".claude/hooks/config.json", "a/b.py", "Foo.swift"})
+        self.assertEqual(check.exclusion_tokens("`.env.py`."), {".env.py"})
+
     def test_a_named_file_is_in_scope(self):
         check = close_check()
         ok, _ = check.in_scope("coordinator/overnight/lane_driver.py", {"lane_driver.py"})
