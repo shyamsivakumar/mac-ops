@@ -1,6 +1,6 @@
 # MO-779 runs
 
-Reports in reports/ are the last-message FAIL reports of five real mac-ops gate threads (read-only via t3_thread_read). They are free prose, so findings are the paragraphs that open with Critical or Major. All five carry CHECK: FAIL, so they are shown as they are (must stay FAIL) and again with the CHECK line edited to PASS (marked edited) to exercise the drop paths. Keep threshold is 7: a score under 7 drops the finding.
+Reports in reports/ are the last-message FAIL reports of five real mac-ops gate threads (read-only via t3_thread_read). They are free prose, so findings are the paragraphs that open with Critical or Major. All five carry CHECK: FAIL, so they are shown as they are (must stay FAIL) and again with the CHECK line edited to PASS (marked edited) to exercise the drop paths. Keep threshold is 7: a score under 7 drops the finding. Flip rule: after the dropped findings are removed, the VERDICT becomes PASS only when the remaining report has no case-insensitive whole word critical or major anywhere (headings, prose, tables, JSON). Prose such as no major risk therefore blocks the flip; that is accepted as fail-safe.
 
 ## Before (origin/main)
 
@@ -109,6 +109,10 @@ A FAIL reply returns FAIL in every arm; nothing scores it.
     mixed Major and [major], one scored low: dropped=1 verdict -> FAIL
     mixed Major and [major], both scored low, minor kept: dropped=2 verdict -> PASS
     json block with a kept critical, one dropped: dropped=1 verdict -> FAIL
+    ### Critical: heading plus Major: line, Major scored low: dropped=1 verdict -> FAIL
+    table row with Critical plus Major: line, Major scored low: dropped=1 verdict -> FAIL
+    prose 'no major risk' left after the only finding is dropped: dropped=1 verdict -> FAIL
+    clean report, every finding dropped, no other severity word: dropped=1 verdict -> PASS
     mismatch (2 Major lines in the text, 1 finding in the json block, scored low): dropped=0 unchanged=True verdict=FAIL
     a PASS report is untouched: True
 
@@ -118,11 +122,11 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: ''
+    raw model answer: '[7, 8]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: '[8, 9]\n'
+    raw model answer: '[8, 8]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
