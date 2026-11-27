@@ -56,7 +56,10 @@ SIZE_RULE = ("Size rule: count code lines as the gate does, added plus deleted, 
              "fixtures, proof scripts and edits to existing tests. Aim for this ticket's own cap. If the work would pass "
              "300, stop before 300 at a point that works on its own and open the PR with `Refs #n` (never Closes or "
              "Fixes), the line `Partial: yes` outside a code block, and the rest under `## Left for later`. Open no "
-             "issue for it; the Coordinator cuts the rest.")
+             "issue for it; the Coordinator cuts the rest.\n\n"
+             "Failure rule: the ticket's Failure behavior section lists the failure cases (missing data, unreadable "
+             "input, a stalled dependency, a malformed reply; the default is fail-safe). Prove each listed case and "
+             "name that proof in the PR.")
 RUN_ID = re.compile(r"ticket:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+:a\d+")
 TEXT_TRIGGERS = ("only after", "build only after", "before building")
 TEXT_KEYWORDS = ("review", "approval", "verdict")
@@ -1366,7 +1369,8 @@ def validate_start(cfg, repo, issue, check_text=True, alongside=False):
     for family, valid in (("builder", builder_ids()), ("reviewer", reviewer_ids())):
         if t[family] and t[family] not in valid:
             raise Refuse(f"unknown {family} alias {t[family]}")
-    bad = {s: v for s, v in template_status(cfg, t["body"]).items() if v != "ok"}
+    open_only = cfg.get("openOnlySections", [])
+    bad = {s: v for s, v in template_status(cfg, t["body"]).items() if v != "ok" and s not in open_only}
     if bad:
         raise Refuse("template sections " + ", ".join(f"{s} ({v})" for s, v in bad.items()))
     open_blockers = [b for b in blockers_of(issue) if b["state"] == "OPEN"]

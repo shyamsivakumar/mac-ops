@@ -85,10 +85,12 @@
     "CI",
     "Must not cause",
     "Data/secrets and stop conditions",
+    "Failure behavior",
     "Rollback",
     "Gate",
     "Finish"
   ],
+  "openOnlySections": ["Failure behavior"],
   "limits": {
     "maxCodeFiles": 3,
     "maxCodeLines": 150
