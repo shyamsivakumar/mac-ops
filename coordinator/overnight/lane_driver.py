@@ -575,13 +575,14 @@ def vote_wait_start(finished, key, ledger):
 def gate_verdict(repo, number, head, base, ledger):
     receipts = json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}
     key = f"gate:{repo}#{number}:{head}"
-    current = receipts.get(key)
+    launched = receipts.get(key)
+    voters = gate_vote.vote_threads(receipts, key)
+    current = launched or next(iter(voters), None)
     if not current:
         return "absent", None, ""
     gate = {"threadId": current}
-    voters = gate_vote.vote_threads(receipts, key)
-    ballots = [current, *voters]
-    waiting = len(ballots) < receipts.get(f"voters:{current}", 1)
+    ballots = [current, *[thread for thread in voters if thread != current]]
+    waiting = not launched or len(ballots) < receipts.get(f"voters:{current}", 1)
     unfinished = [thread for thread in ballots if gate_in_flight(thread)]
     finished = [thread for thread in ballots if thread not in unfinished]
     voted = len(ballots) > 1 or waiting

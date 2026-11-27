@@ -120,3 +120,8 @@ scenario("primary stalled in flight, voters 2 and 3 finished, 1 h after: still r
 scenario("no ballot finished, all in flight: running", BOTH, {}, running={"T1", "T2", "T3"}, replied_hours_ago=None)
 scenario("one dissenter with CHECK FAIL and a major, two PASS: PASS", BOTH, {"T1": DISSENT, "T2": PASS, "T3": PASS})
 scenario("two voters CHECK FAIL, one PASS: FAIL", BOTH, {"T1": PASS, "T2": reply("PASS", check="FAIL"), "T3": reply("PASS", check="FAIL")})
+NO_PRIMARY = {f"{VOTE}:2": "T2", f"{VOTE}:3": "T3"}
+scenario("no primary receipt, voters 2 and 3 finished PASS, 1 h after: running", NO_PRIMARY, {"T2": PASS, "T3": PASS}, replied_hours_ago=1)
+scenario("no primary receipt, voters 2 and 3 finished PASS, 3 h after: merged PASS", NO_PRIMARY, {"T2": PASS, "T3": PASS}, replied_hours_ago=3)
+scenario("no primary receipt, one voter finished, 3 h after: FAIL (fewer than 2)", NO_PRIMARY, {"T2": PASS, "T3": ""}, replied_hours_ago=3)
+scenario("no primary receipt and no vote receipt: absent", {}, {})
