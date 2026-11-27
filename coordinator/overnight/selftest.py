@@ -2928,8 +2928,9 @@ def build_here():
             items = json.loads(owner_board.read_text())["items"]
             exact([item["id"] for item in items], [card_id])
             exact(head[:8] in items[0]["title"], True)
-            for status, expect_card in (("running", False), ({}, True)):
-                pr = dict(number=21, state="OPEN", headRefOid=head, mergeable="MERGEABLE", body="Refs #10")
+            for status, expect_card, pr_body in (("running", False, "Refs #10"), ("waiting", False, "Refs #10"),
+                                                 ("completed", False, "Refs #10\nOwner: t1j"), ({}, True, "Refs #10")):
+                pr = dict(number=21, state="OPEN", headRefOid=head, mergeable="MERGEABLE", body=pr_body)
                 snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
                 reply = {"thread": {"status": status}} if status != {} else {}
                 ledger = {}
