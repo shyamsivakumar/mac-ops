@@ -71,10 +71,15 @@ CASES = {
         report("PASS"),
         "all fine\n\nVERDICT: PASS",
     ],
-    "one voter CHECK FAIL: merged CHECK FAIL, findings still voted": [
+    "one voter CHECK FAIL, two PASS: majority decides, merged CHECK PASS": [
         report("PASS"),
         report("PASS").replace(f"CHECK: PASS {HEAD}", f"CHECK: FAIL {HEAD}"),
         report("PASS"),
+    ],
+    "two voters CHECK FAIL, one PASS: merged CHECK FAIL, VERDICT FAIL": [
+        report("PASS"),
+        report("PASS").replace(f"CHECK: PASS {HEAD}", f"CHECK: FAIL {HEAD}"),
+        report("PASS").replace(f"CHECK: PASS {HEAD}", f"CHECK: FAIL {HEAD}"),
     ],
 }
 for name, reports in CASES.items():

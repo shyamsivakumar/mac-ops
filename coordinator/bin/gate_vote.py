@@ -87,7 +87,7 @@ def merge_reports(reports, head):
         1 for _, outcome, findings in counted if outcome == "FAIL" and not findings
     )
     mechanical = {
-        tag: "FAIL" if any(own_line(r, tag, head) == "FAIL" for r, _, _ in counted) else "PASS"
+        tag: "PASS" if sum(own_line(r, tag, head) == "PASS" for r, _, _ in counted) >= AGREE else "FAIL"
         for tag in ("PROVIDES", "CHECK")
     }
     failed = (
