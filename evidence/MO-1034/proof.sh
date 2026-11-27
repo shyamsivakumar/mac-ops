@@ -24,3 +24,8 @@ for p in sorted(glob.glob(sys.argv[1] + '/events-*.jsonl')):
         print(r['event'], r['item'], r['kind'])
 " "$T/j"
 python3 "$Q" actrate --days 7
+board "$(item d x),$(item e x)"
+python3 "$Q" decision sync
+board ""
+python3 "$Q" decision sync
+python3 "$Q" actrate --days 7

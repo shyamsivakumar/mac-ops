@@ -3639,6 +3639,10 @@ def cmd_actrate(a):
         closed = c["answered"] + c["expired"]
         rate = f"{100 * c['answered'] / closed:.0f}%" if closed else "-"
         print(f"{kind:<20}{c['shown']:>7}{c['answered']:>10}{c['expired']:>9}{c['shown'] - closed:>6}{rate:>10}")
+    answered = sum(c["answered"] for c in kinds.values())
+    closed = answered + sum(c["expired"] for c in kinds.values())
+    if closed and answered / closed < 0.5:
+        print(f"Act rate is low: {100 * answered / closed:.0f}% of closed items answered in {a.days} days, so the inbox is too noisy.")
 
 
 def main():
