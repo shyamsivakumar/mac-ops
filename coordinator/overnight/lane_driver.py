@@ -568,13 +568,15 @@ def gate_verdict(repo, number, head, base):
     gate = {"threadId": current}
     voters = gate_vote.vote_threads(receipts, key)
     waiting = len(voters) + 1 < receipts.get(f"voters:{current}", 1)
-    if any(gate_in_flight(thread) for thread in [current, *voters]):
+    if gate_in_flight(current):
         return "running", gate, ""
-    if waiting and not gate_vote.voters_overdue(reply_updated_at(current)):
+    stalled = [thread for thread in voters if gate_in_flight(thread)]
+    if (stalled or waiting) and not gate_vote.voters_overdue(reply_updated_at(current)):
         return "running", gate, ""
     reply = last_reply(current)
     if voters or waiting:
-        reply = gate_vote.merge_reports([reply, *map(last_reply, voters)], head)
+        finished = [thread for thread in voters if thread not in stalled]
+        reply = gate_vote.merge_reports([reply, *map(last_reply, finished)], head)
     primary = read_verdict(reply)[0]
     if primary == "FAIL":
         return "FAIL", gate, reply
