@@ -1,0 +1,11 @@
+Major — scripts/coord_wake_metrics.py:116 and :139. GitHub reconciliation checks mac-ops PRs, but the script collects PR numbers from every repository in the inbox. Whenever another fleet repository has enqueued the same number, the report hides a genuinely missing mac-ops event. Compare repository and PR number together.
+
+Major — scripts/coord_wake_metrics.py:127–128. When the launcher and event producers go quiet, the clock used to detect stuck rows freezes at the last recorded event. A pending row can remain unreported throughout an outage, however long an operator waits before running the report. Use the report cutoff for historical windows and wall-clock time for live reports.
+
+I applied the standard merge bar because this diff adds read-only reporting and does not change orders, exits, or stop logic. Both findings affect ordinary fleet use. The PR conversation contains no prior gate findings.
+
+GitHub confirmed the requested head and the exact body line `Builder check: PASS 5fa26488da21ce4a78b3572fbf1ee442d20b83d4`. All ten checks in the supplied proof say `passed`, but `ec72b752` is not an ancestor of the head and the trees differ in 489 files. That shared proof is unchanged from the PR base. The PR-specific receipt at evidence/MO-917/check-proof.md:5 names `b13f8cad`, whose tree differs from the reviewed head only in that receipt. I did not rerun the suite.
+
+PROVIDES: PASS 5fa26488da21ce4a78b3572fbf1ee442d20b83d4
+CHECK: FAIL 5fa26488da21ce4a78b3572fbf1ee442d20b83d4
+VERDICT: FAIL
