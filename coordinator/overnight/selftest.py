@@ -2932,7 +2932,7 @@ def build_here():
 
 def stale_started_refill():
     import lane_driver as lane
-    from unittest.mock import mock_open
+    from datetime import datetime, timezone
     repo = "shyamsivakumar/mac-ops"
     started = [{"name": "stage:started"}]
     snapshot = {"repos": {repo: {"issues": [
@@ -2949,14 +2949,21 @@ def stale_started_refill():
     actions = []
     ages = {}
     def run_pass(dry):
-        with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
+             patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
-             patch("builtins.open", mock_open(read_data=receipts)), \
-             patch.object(lane, "ticket_started_at", lambda r, n: ages.get(n)), \
+             patch.object(lane, "RECEIPTS", str(Path(scratch, "receipts.json"))), \
+             patch.object(lane.time, "time", return_value=now), \
              patch.object(lane, "DRY", dry), \
              patch.object(lane, "run", lambda cmd, timeout=150: actions.append(cmd) or ""):
+            Path(lane.RECEIPTS).write_text(receipts)
+            for number, ts in ages.items():
+                with open(lane.journal.journal_path(ts), "a") as handle:
+                    handle.write(json.dumps({"event": "ticket_started", "repo": repo,
+                                             "ticket": number, "ts": ts}) + "\n")
             return lane.unstick(repo, {})
-    now = time.time()
+    now = datetime(2025, 3, 1, 0, 30, tzinfo=timezone.utc).timestamp()
     exact(run_pass(False), "nothing ready")
     ages[7] = now - 300
     exact(run_pass(False), "nothing ready")
@@ -2967,6 +2974,10 @@ def stale_started_refill():
     exact(run_pass(False), "release [7]")
     exact([cmd[2:3] + cmd[3:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
     exact("stage:todo" in actions[0] and "stage:started" in actions[0], True)
+    actions.clear()
+    ages[7] = now - 90 * 86400
+    exact(run_pass(False), "release [7]")
+    exact([cmd[2:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
 
 
 def refill_busy():
