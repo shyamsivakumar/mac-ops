@@ -554,20 +554,27 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
 
 
 def gate_score_on(repo, number):
-    return (journal.assigned_arm(repo, number, gate=True) == "treatment"
-            and journal.treatment_names("treatment", "gate", "score2"))
+    if not journal.factory_experiments():
+        return False
+    pr = open_prs(repo).get(number) or read_json(["gh", "pr", "view", str(number), "-R", repo, "--json", "body"])
+    found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
+    return bool(found) and journal.assigned_arm(repo, found[1], gate=True) == "treatment" \
+        and journal.treatment_names("treatment", "gate", "score2")
 
 
 def second_pass(reply, repo, number, head, thread, ledger):
     key = f"score2:{thread}"
 
     def call(prompt):
-        if key not in ledger:
+        if key in ledger:
+            return ledger[key]
+        try:
             answer = gate_score.pi_call(prompt)
-            if not DRY and answer:
-                ledger[key] = answer
-            return answer
-        return ledger[key]
+        except (OSError, subprocess.SubprocessError):
+            answer = ""
+        if not DRY:
+            ledger[key] = answer or "failed"
+        return answer
 
     scored, dropped = gate_score.score_findings(reply, call)
     if dropped:

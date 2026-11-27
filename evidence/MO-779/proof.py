@@ -82,43 +82,65 @@ elif mode == "lane":
     import lane_driver as ld
 
     ld.journal.factory_experiments = lambda: [{"name": "score2-trial", "side": "gate", "split": 50, "names": ["score2"]}]
-    base_report = Path(REPORTS[1]).read_text()
-    report = base_report
-    head = head_of(report)
+    arms = {"42": "treatment", "7": "control"}
+    ld.journal.assigned_arm = lambda _repo, ticket, gate=False: arms.get(str(ticket))
+    prs = {
+        7: {"body": "Refs #42"},
+        42: {"body": "Refs #7"},
+        50: {"body": "no ticket named"},
+    }
+    ld.open_prs = lambda _repo: prs
+    ok = check_pass(Path(REPORTS[1]).read_text())
+    failed_check = Path(REPORTS[1]).read_text()
+    head = head_of(ok)
     tmp = tempfile.mkdtemp()
     ld.RECEIPTS = os.path.join(tmp, "receipts.json")
     Path(ld.RECEIPTS).write_text(
-        json.dumps({f"gate:r/x#1:{head}": "thread1", "base:thread1": "main"})
+        json.dumps({**{f"gate:r/x#{n}:{head}": f"t{n}" for n in prs}, **{f"base:t{n}": "main" for n in prs}})
     )
     ld.gate_in_flight = lambda _t: False
-    ld.last_reply = lambda _t: report
-    ld.gate_score.pi_call = lambda _prompt: "[1, 2]"
     ld.prompt_pull = lambda *_a, **_k: None
-    for label, arm in (
-        ("no experiment (assigned_arm None)", None),
-        ("control arm", "control"),
-        ("treatment arm", "treatment"),
+    calls = []
+
+    def fake_pi(_prompt):
+        calls.append(1)
+        return "[1, 2]"
+
+    ld.gate_score.pi_call = fake_pi
+    ld.last_reply = lambda _t: ok
+    for label, number in (
+        ("PR 7, ticket 42 (treatment)", 7),
+        ("PR 42, ticket 7 (control; PR number equals the treated ticket)", 42),
+        ("PR 50, no Refs (not in the arm)", 50),
     ):
         ledger = {}
-        ld.journal.assigned_arm = lambda *_args, a=arm, **_kwargs: a
-        verdict, gate, reply = ld.gate_verdict("r/x", 1, head, "main", ledger)
-        print(f"{label}: verdict={verdict} ledger_keys={sorted(ledger)}")
-    report = check_pass(base_report)
-    ld.gate_score.pi_call = lambda _prompt: "[1, 2]"
+        verdict, _gate, _reply = ld.gate_verdict("r/x", number, head, "main", ledger)
+        print(f"{label}: verdict={verdict} model_calls={len(calls)} ledger_keys={sorted(ledger)}")
+    ld.last_reply = lambda _t: failed_check
     ledger = {}
-    verdict, gate, reply = ld.gate_verdict("r/x", 1, head, "main", ledger)
-    print(f"treatment, CHECK PASS (edited), low scores: verdict={verdict} ledger_keys={sorted(ledger)}")
-    ld.gate_score.pi_call = lambda _prompt: "garbage"
+    verdict, _gate, _reply = ld.gate_verdict("r/x", 7, head, "main", ledger)
+    print(f"PR 7, treatment, CHECK: FAIL report, low scores: verdict={verdict}")
+    ld.last_reply = lambda _t: ok
+    calls.clear()
+    ld.gate_score.pi_call = lambda _prompt: calls.append(1) or ""
     ledger = {}
-    verdict, gate, reply = ld.gate_verdict("r/x", 1, head, "main", ledger)
-    print(
-        f"treatment, model returns garbage: verdict={verdict} ledger_keys={sorted(ledger)}"
-    )
+    for tick in (1, 2, 3):
+        verdict, _gate, _reply = ld.gate_verdict("r/x", 7, head, "main", ledger)
+        print(f"PR 7, model returns empty, tick {tick}: verdict={verdict} model_calls={len(calls)} score2={ledger.get('score2:t7')!r}")
+
+    def raising(_prompt):
+        calls.append(1)
+        raise OSError("pi missing")
+
+    ld.gate_score.pi_call = raising
+    calls.clear()
+    ledger = {}
+    for tick in (1, 2):
+        verdict, _gate, _reply = ld.gate_verdict("r/x", 7, head, "main", ledger)
+        print(f"PR 7, model call raises, tick {tick}: verdict={verdict} model_calls={len(calls)} score2={ledger.get('score2:t7')!r}")
     rows = [
-        json.loads(l)
-        for f in glob.glob(
-            os.path.join(os.environ["COORD_JOURNAL_DIR"], "events-*.jsonl")
-        )
-        for l in Path(f).read_text().splitlines()
+        json.loads(line)
+        for f in glob.glob(os.path.join(os.environ["COORD_JOURNAL_DIR"], "events-*.jsonl"))
+        for line in Path(f).read_text().splitlines()
     ]
-    print("journal rows:", [(r["event"], r["data"].get("dropped")) for r in rows])
+    print("journal rows:", [(r["event"], r["pr"], len(r["data"].get("dropped") or [])) for r in rows])

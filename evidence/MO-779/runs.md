@@ -84,11 +84,11 @@ Model: morph/morph-dsv41flash, the first available entry of models.pi_routes('qu
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: ''
+    raw model answer: '[7, 8]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
-    raw model answer: ''
+    raw model answer: '[7, 8]\n'
 
     model spec: morph/morph-dsv41flash
     fail2 CHECK PASS edited (real cheap model): findings=2 dropped=0 verdict FAIL -> FAIL remaining_majors=2 complete_pass=False unchanged=True
@@ -98,11 +98,15 @@ A score of 7 or more keeps the finding.
 
 ## After: lane gate_verdict in and out of the arm (python3 -I evidence/MO-779/proof.py lane)
 
-pi_call, last_reply, the receipts file and the journal dir are replaced by temp stand-ins; nothing is sent. The arm comes from the real journal.assigned_arm and journal.treatment_names (#997); only factory_experiments and assigned_arm are stubbed.
+pi_call, last_reply, the receipts file and the journal dir are replaced by temp stand-ins; nothing is sent. Arms are stamped per ticket: journal.assigned_arm is stubbed with a per-ticket table (ticket 42 treatment, ticket 7 control) and the real journal.treatment_names reads a stubbed factory_experiments. The ticket comes from the PR body Refs line.
 
-    no experiment (assigned_arm None): verdict=FAIL ledger_keys=[]
-    control arm: verdict=FAIL ledger_keys=[]
-    treatment arm: verdict=FAIL ledger_keys=[]
-    treatment, CHECK PASS (edited), low scores: verdict=PASS ledger_keys=['journal-score2:thread1', 'score2:thread1']
-    treatment, model returns garbage: verdict=FAIL ledger_keys=['score2:thread1']
-    journal rows: [('gate_score_dropped', ['Major — scripts/coord_wake_metrics.py:116 and :139. GitHub reconciliation checks mac-ops PRs, but the script collects PR numbers from every repository in the in', 'Major — scripts/coord_wake_metrics.py:127–128. When the launcher and event producers go quiet, the clock used to detect stuck rows freezes at the last recorded '])]
+    PR 7, ticket 42 (treatment): verdict=PASS model_calls=1 ledger_keys=['journal-score2:t7', 'score2:t7']
+    PR 42, ticket 7 (control; PR number equals the treated ticket): verdict=FAIL model_calls=1 ledger_keys=[]
+    PR 50, no Refs (not in the arm): verdict=FAIL model_calls=1 ledger_keys=[]
+    PR 7, treatment, CHECK: FAIL report, low scores: verdict=FAIL
+    PR 7, model returns empty, tick 1: verdict=FAIL model_calls=1 score2='failed'
+    PR 7, model returns empty, tick 2: verdict=FAIL model_calls=1 score2='failed'
+    PR 7, model returns empty, tick 3: verdict=FAIL model_calls=1 score2='failed'
+    PR 7, model call raises, tick 1: verdict=FAIL model_calls=1 score2='failed'
+    PR 7, model call raises, tick 2: verdict=FAIL model_calls=1 score2='failed'
+    journal rows: [('gate_score_dropped', 7, 2)]

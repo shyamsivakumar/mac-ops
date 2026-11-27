@@ -1,10 +1,3 @@
-"""The gate second pass: a cheap model scores each critical or major finding against the severity bar.
-
-Findings scored below `KEEP_AT` are removed from the report; with none left the
-VERDICT reads PASS. A FAIL CHECK or PROVIDES line, or any failure to score,
-leaves the report as it was.
-"""
-
 import json
 import re
 import subprocess
@@ -64,7 +57,6 @@ def without(report, dropped):
 
 
 def score_findings(report, call):
-    """Return (report, dropped titles). A report with a FAIL CHECK or PROVIDES line is returned as it was."""
     if gate_policy.read_verdict(report)[0] != "FAIL" or re.search(
         r"(?m)^(CHECK|PROVIDES): FAIL", report
     ):
