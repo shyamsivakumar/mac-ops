@@ -1,30 +1,55 @@
 # MO-1024 proof
 
-Command: `bash proof.sh <worktree>` (temp COORD_JOURNAL_DIR and decisions path).
-It emits 3 gap rows (2 on one topic), runs `curator --dry-run`, then `curator`.
+Command: `bash evidence/MO-1024/proof.sh <tree>`.
 
-## origin/main (red)
+It uses a temp COORD_JOURNAL_DIR and decisions file and emits 3 gap rows.
+It runs `curator --dry-run`, then `curator`, then prints the board.
 
-origin/main lacks `coordinator/bin/curator` and `journal.emit_gap`:
+Code commit: 169bca12e06444f803d27cf14363e0ae12936ceb.
+
+## origin/main (red), tree from `git archive origin/main coordinator`
 
 ```text
-fatal: path 'coordinator/bin/curator' exists on disk, but not in 'origin/main'
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+AttributeError: module 'journal' has no attribute 'emit_gap'
+--- curator --dry-run
+evidence/MO-1024/proof.sh: line 16: coordinator/bin/curator: No such file or directory
+--- board after dry-run
+{"items":[]}
+--- curator
+evidence/MO-1024/proof.sh: line 20: coordinator/bin/curator: No such file or directory
+--- board
+[]
 ```
 
 ## branch head (green)
 
+<!-- markdownlint-disable MD013 -->
+
 ```text
---- dry-run
-{ "id": "gap-e22545c45a", "kind": "ask",
+--- curator --dry-run
+{
+  "id": "gap-e22545c45a",
+  "group": "Coordinator",
+  "kind": "ask",
   "title": "Playbook gap: 2 workers lacked 'no playbook for cloud run deploys'",
-  "cause": "2 gap rows on cards 1101, 1102", ... }
+  "cause": "2 gap rows on cards 1101, 1102",
+  "why": "Missing: no playbook for cloud run deploys!. Workers looked in: playbooks/ and wiki.",
+  "options": [
+    {
+      "label": "Add it to the playbook the workers read",
+      "detail": "",
+      "recommended": true
+    }
+  ]
+}
 --- board after dry-run
 {"items":[]}
---- write
+--- curator
 raised gap-e22545c45a
---- board after write
+--- board
 ['gap-e22545c45a']
 ```
 
-The one-off topic (card 1103) raises no card (threshold 2).
-Dry run leaves the board empty.
+<!-- markdownlint-enable MD013 -->
