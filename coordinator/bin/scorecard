@@ -645,13 +645,13 @@ def arm_outcomes(rows, name, side):
         if row["event"] == "merged":
             merged.setdefault((row["repo"], pr_ticket.get((row["repo"], row.get("pr")))), row["ts"])
     ordered = sorted(arms, key=lambda key: (assigned[key], str(key)))
-    return [(assigned[key], arms[key][0], arms[key][1], first.get(key) == "PASS", merged[key] - assigned[key] if key in merged else None)
+    return [(assigned[key], arms[key][0], arms[key][1], first.get(key) == "PASS", merged[key] - assigned[key] if key in merged else None, key)
             for key in ordered]
 
 
 def cohort(tickets, size):
     out = {"control": {}, "treatment": {}}
-    for _, arm, cluster, won, wait in tickets[:size]:
+    for _, arm, cluster, won, wait, _ in tickets[:size]:
         out[arm].setdefault(cluster, []).append((won, wait))
     return out
 
@@ -719,6 +719,40 @@ def cmd_compare(args):
     elif not taken and now < interim_cutoff:
         decision = f"continue (interim cohort settles at {iso_time(interim_cutoff)})"
     print(decision)
+
+
+def arm_axes(tickets, live, sources):
+    waits = [ticket[4] for ticket in tickets if ticket[4] is not None]
+    cost = ticket_costs([ticket[5] for ticket in tickets], sources[0], live, sources[1])["tokens"]["median"] if sources else None
+    return {"tickets": len(tickets), "quality": sum(ticket[3] for ticket in tickets) / len(tickets),
+            "cost": cost, "latency": statistics.median(waits) if waits else None}
+
+
+def dominates(left, right):
+    better = ((left["quality"], right["quality"]), (right["cost"], left["cost"]), (right["latency"], left["latency"]))
+    if any(value is None for pair in better for value in pair):
+        return False
+    return all(a >= b for a, b in better) and any(a > b for a, b in better)
+
+
+def cmd_pareto(args):
+    live, _, _ = load_journal(args.journal_dir or journal.journal_dir())
+    side = experiment_side(live, args.experiment)
+    tickets = arm_outcomes(live, args.experiment, side)
+    sources = load_cost_sources()
+    axes = {arm: arm_axes(group, live, sources) for arm in ("control", "treatment")
+            if (group := [ticket for ticket in tickets if ticket[1] == arm])}
+    if not axes:
+        sys.exit(f"pareto: no assignments for {args.experiment} in the journal")
+    print("cost is median tokens per ticket (recorded dollars are 0 on flat plans); latency is median hours from assignment to merge")
+    for arm, axis in axes.items():
+        dominated_by = [other for other in axes if other != arm and dominates(axes[other], axis)]
+        unknown = [name for name in ("cost", "latency") if axis[name] is None]
+        state = f"dominated by {dominated_by[0]}" if dominated_by else (
+            f"on the front, not comparable ({', '.join(unknown)} unknown)" if unknown else "on the front")
+        cost = "unknown" if axis["cost"] is None else f"{axis['cost']:.0f} tokens"
+        latency = "unknown" if axis["latency"] is None else f"{axis['latency'] / 3600:.1f} h"
+        print(f"{arm}: {axis['tickets']} tickets, quality {axis['quality']:.1%}, cost {cost}, latency {latency}: {state}")
 
 
 def iso_time(ts):
@@ -810,6 +844,22 @@ def configured_repos():
     sys.exit("tickets.json not found next to the script or in ~/.coordinator")
 
 
+def load_cost_sources():
+    queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+    db_path = os.environ.get("T3_STATE_DB", os.path.expanduser("~/.t3/userdata/statev2.sqlite"))
+    try:
+        with open(os.path.join(queue, "dispatch-receipts.json")) as handle:
+            receipts = json.load(handle)
+        if not isinstance(receipts, dict):
+            raise ValueError("dispatch receipts is not a JSON object")
+        connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
+        connection.execute("select thread_id from orchestration_v2_projection_provider_threads limit 1").fetchall()
+        connection.close()
+        return receipts, db_path
+    except (OSError, ValueError, sqlite3.Error):
+        return None
+
+
 def cmd_report(args):
     today = datetime.now(TZ).date()
     day = Date.fromisoformat(args.date) if args.date else today - timedelta(days=1)
@@ -822,19 +872,7 @@ def cmd_report(args):
         github = {"error": "GitHub reads skipped (--no-github)", "calls": 0}
     else:
         github = fetch_github(repos, start, end, window_closed)
-    queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
-    db_path = os.environ.get("T3_STATE_DB", os.path.expanduser("~/.t3/userdata/statev2.sqlite"))
-    try:
-        with open(os.path.join(queue, "dispatch-receipts.json")) as handle:
-            receipts = json.load(handle)
-        if not isinstance(receipts, dict):
-            raise ValueError("dispatch receipts is not a JSON object")
-        connection = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
-        connection.execute("select thread_id from orchestration_v2_projection_provider_threads limit 1").fetchall()
-        connection.close()
-        cost_sources = (receipts, db_path)
-    except (OSError, ValueError, sqlite3.Error):
-        cost_sources = None
+    cost_sources = load_cost_sources()
     report = build(day, live, backfill, bad, github, window_closed, repos, cost_sources)
     report["baseline"] = baseline(args.out_dir, day, args.baseline_days)
     if "error" in github and not args.no_github:
@@ -948,8 +986,13 @@ def main():
     compare.add_argument("--since", type=float, help="read only tickets assigned at or after this epoch time")
     compare.add_argument("--until", type=float, help="read only tickets assigned at or before this epoch time")
     compare.add_argument("--now", type=float, help=argparse.SUPPRESS)
+    pareto = commands.add_parser("pareto")
+    pareto.add_argument("--experiment", required=True)
+    pareto.add_argument("--journal-dir")
     args = parser.parse_args()
-    if args.command == "compare":
+    if args.command == "pareto":
+        cmd_pareto(args)
+    elif args.command == "compare":
         cmd_compare(args)
     elif args.command == "backfill":
         cmd_backfill(args)
