@@ -24,6 +24,7 @@ import alarms
 import gate_vote
 import gh_gateway
 import journal
+import coord_logs
 
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
@@ -2061,6 +2062,10 @@ def cmd_status(a):
 
 
 
+def cmd_logs(a):
+    sys.exit(coord_logs.run(a.sources, DIR, a.since, a.grep, a.tail, sys.stdout, sys.stderr))
+
+
 def scorecard_module():
     loader = importlib.machinery.SourceFileLoader("coordq_scorecard", os.path.join(_BIN_DIR, "scorecard"))
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq_scorecard", loader))
@@ -3680,6 +3685,13 @@ def main():
     w.add_argument("id", help="the card or action key the wait is about")
     w.add_argument("--owner", help="who must answer: required for start")
     w.set_defaults(fn=cmd_wait)
+    lg = sub.add_parser("logs", help="read the tick, queue, lane and journal logs, secrets redacted")
+    lg.add_argument("sources", nargs="*", metavar="source",
+                    help="any of " + ", ".join(coord_logs.SOURCES) + "; all when none is named")
+    lg.add_argument("--since", help="only lines newer than this, like 30m, 1h or 2d")
+    lg.add_argument("--grep", help="only lines that match this regex, ignoring case")
+    lg.add_argument("--tail", type=int, default=200, help="at most this many lines per source")
+    lg.set_defaults(fn=cmd_logs)
     sub.add_parser("waits", help="list open approval waits with owner and age").set_defaults(fn=cmd_waits)
     d = sub.add_parser("dispatch")
     d.add_argument("--dry-run", action="store_true",
