@@ -32,6 +32,7 @@ if _BIN_DIR not in sys.path:
 import gh_gateway
 import close_check
 import gate_policy
+import gate_score
 import gate_vote
 import journal
 from gate_policy import (LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode, parse_verdict,
@@ -563,6 +564,35 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
+def gate_score_on(repo, number):
+    if not journal.factory_experiments():
+        return False
+    pr = open_prs(repo).get(number) or read_json(["gh", "pr", "view", str(number), "-R", repo, "--json", "body"])
+    found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
+    return bool(found) and journal.assigned_arm(repo, found[1], gate=True) == "treatment" \
+        and journal.treatment_names("treatment", "gate", "score2")
+
+
+def second_pass(reply, repo, number, head, thread, ledger):
+    key = f"score2:{thread}"
+
+    def call(prompt):
+        if key in ledger:
+            return ledger[key]
+        try:
+            answer = gate_score.pi_call(prompt)
+        except (OSError, subprocess.SubprocessError):
+            answer = ""
+        if not DRY:
+            ledger[key] = answer or "failed"
+        return answer
+
+    scored, dropped = gate_score.score_findings(reply, call)
+    if dropped:
+        journal_once("gate_score_dropped", repo, number, head, ledger, f"journal-{key}", thread=thread, dropped=dropped)
+    return scored
+
+
 def vote_wait_start(finished, key, ledger):
     stamps = [e for e in (gate_vote.replied_epoch(reply_updated_at(t)) for t in finished) if e is not None]
     if stamps:
@@ -590,6 +620,9 @@ def gate_verdict(repo, number, head, base, ledger):
         return "running", gate, ""
     reply = gate_vote.merge_reports(list(map(last_reply, finished)), head) if voted else last_reply(current)
     primary = read_verdict(reply)[0]
+    if primary == "FAIL" and gate_score_on(repo, number):
+        reply = second_pass(reply, repo, number, head, current, ledger)
+        primary = read_verdict(reply)[0]
     if primary == "FAIL":
         return "FAIL", gate, reply
     if primary == "CONFLICT":

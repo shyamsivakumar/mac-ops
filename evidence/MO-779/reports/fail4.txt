@@ -1,0 +1,17 @@
+Major — coordinator/bin/ticket:1927. Every valid partial PR reviewed through `ticket gate` receives the full-ticket Provides instructions. The command passes `False` for every recognized marker, so work explicitly deferred to the next PR can block the current one on every retry. Use the same size and remaining-work validation as `coordq` before building the brief.
+
+Left for later
+
+Minor — coordinator/bin/ticket:2017. On first processing, `ticket close` reopens any closed issue that lacks the partial-merge comment. This also reopens an issue the coordinator deliberately closed. The PR description promises that a closed issue stays untouched.
+
+Minor — evidence/check-proof.md:4. All ten checks say `passed`, but `ec72b752` is not an ancestor of the reviewed head and the revisions differ in runtime files. The PR-specific receipt at evidence/MO-991/check-proof.md:5 names the actual parent, `a2cddd0d`. Only that receipt changed between parent and head.
+
+Applied the standard merge bar because the change governs PR review and ticket handling. The gate-routing defect blocks approval. The PR conversation contains no prior gate findings. No ticket Provides claims apply.
+
+Reconfirmed the remote PR head and the exact PR-body line. The suite was not rerun.
+
+Builder check: PASS c9a8b8b5d9b5906d439b2656739c2840002d8b17
+
+PROVIDES: PASS c9a8b8b5d9b5906d439b2656739c2840002d8b17
+CHECK: FAIL c9a8b8b5d9b5906d439b2656739c2840002d8b17
+VERDICT: FAIL
