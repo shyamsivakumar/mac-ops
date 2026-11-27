@@ -13,10 +13,10 @@ Cutoff: newest installed label, `2026-11-23T21:00:54.939952+00:00` (computed by 
 | installed held-out (22 ids) | 19 | 3 | 7.37 | 5.12 | 10.24 |
 | after `install_heldout.py` (28 ids) | 25 | 3 | 4.00 | 4.47 | 8.94 |
 
-- New cases: 6 (three recut cards, one merge card, one size-exception card, one merge-mac-ops#989).
+- New cases: 6 (three recut cards, one merge card, one size-exception card, and mac-ops#989).
 - Dropped for Ascend, slash-eureka, useascend or a secret pattern: 0 of 6 scorable.
 - A second install finds 0 new cases (idempotent).
-- 7 more post-cutoff answers exist but score.py cannot count them: 4 have options yes/no with a free-text answer such as "Merge #1057", 3 have no options. Mapping "Merge #1057" to "yes" is a separate change to `pick_option`.
+- 8 more post-cutoff answers exist but score.py cannot count them: 4 have options yes/no with a free-text answer such as "Merge #1057", 4 have no options. Mapping "Merge #1057" to "yes" is a separate change to `pick_option`.
 - 60 cases is time-bound: about 6 cases in 4 days (1.5 a day) reach the set.
 - The installed labels.jsonl has 5 rows that match the Ascend filter (none held-out). They were not touched.
 
