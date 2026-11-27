@@ -2932,7 +2932,7 @@ def build_here():
 
 def stale_started_refill():
     import lane_driver as lane
-    from unittest.mock import mock_open
+    from datetime import datetime, timezone
     repo = "shyamsivakumar/mac-ops"
     started = [{"name": "stage:started"}]
     snapshot = {"repos": {repo: {"issues": [
@@ -2947,30 +2947,39 @@ def stale_started_refill():
             return {"thread": {"status": "running"}}
         return {"threads": []}
     actions = []
-    journal_dir = tempfile.mkdtemp(prefix="selftest-started-")
-    def write_month(name, rows):
-        Path(journal_dir, name).write_text("".join(json.dumps({"event": "ticket_started", "repo": repo, "ticket": n, "ts": ts}) + "\n" for n, ts in rows) + "not json\n")
+    ages = {}
     def run_pass(dry):
-        with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir}), \
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
              patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
-             patch("builtins.open", mock_open(read_data=receipts)), \
+             patch.object(lane, "RECEIPTS", str(Path(scratch, "receipts.json"))), \
+             patch.object(lane.time, "time", return_value=now), \
              patch.object(lane, "DRY", dry), \
              patch.object(lane, "run", lambda cmd, timeout=150: actions.append(cmd) or ""):
+            Path(lane.RECEIPTS).write_text(receipts)
+            Path(scratch, "events-2099-01.jsonl").write_bytes(b"\xff\xfe")
+            Path(scratch, "events-2024-12.jsonl").write_text("not json\n")
+            for number, ts in ages.items():
+                with open(lane.journal.journal_path(ts), "a") as handle:
+                    handle.write(json.dumps({"event": "ticket_started", "repo": repo,
+                                             "ticket": number, "ts": ts}) + "\n")
             return lane.unstick(repo, {})
-    now = time.time()
+    now = datetime(2025, 3, 1, 0, 30, tzinfo=timezone.utc).timestamp()
     exact(run_pass(False), "nothing ready")
-    write_month("events-2026-03.jsonl", [(11, now - 60)])
-    Path(journal_dir, "events-2026-04.jsonl").write_bytes(b"\xff\xfe")
+    ages[7] = now - 300
     exact(run_pass(False), "nothing ready")
-    write_month("events-2026-02.jsonl", [(7, now - 300)])
-    exact(run_pass(False), "nothing ready")
-    write_month("events-2026-02.jsonl", [(7, now - 7200)])
+    exact(actions, [])
+    ages[7] = now - 7200
     exact(run_pass(True), "DRY release [7]")
     exact(actions, [])
     exact(run_pass(False), "release [7]")
     exact([cmd[2:3] + cmd[3:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
     exact("stage:todo" in actions[0] and "stage:started" in actions[0], True)
+    actions.clear()
+    ages[7] = now - 90 * 86400
+    exact(run_pass(False), "release [7]")
+    exact([cmd[2:4] for cmd in actions], [["edit", "7"], ["comment", "7"]])
 
 
 def refill_busy():
