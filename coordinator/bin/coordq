@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
+import argparse, fcntl, glob, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -3583,6 +3583,64 @@ def cmd_gate(a):
           + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])
 
 
+def decision_rows():
+    rows = []
+    for path in sorted(glob.glob(os.path.join(journal.journal_dir(), "events-*.jsonl"))):
+        with open(path) as f:
+            for line in f:
+                if '"event":"decision_' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("item"):
+                    rows.append(row)
+    return rows
+
+
+def cmd_decision(a):
+    states = {r["item"]: (r["event"], r.get("kind")) for r in decision_rows()}
+    if a.action == "answered":
+        for item in a.ids:
+            if states.get(item, ("",))[0] == "decision_shown":
+                journal.emit("decision_answered", "coordq", item=item, kind=states[item][1])
+        return
+    with open(DECISIONS_PATH) as f:
+        live = {str(i["id"]): i.get("group") for i in json.load(f)["items"]}
+    for item, group in live.items():
+        if states.get(item, ("",))[0] in ("", "decision_expired", "decision_cleared"):
+            journal.emit("decision_shown", "coordq", item=item, kind=group)
+    for item, (event, kind) in states.items():
+        if item in live:
+            continue
+        if event == "decision_shown":
+            journal.emit("decision_expired", "coordq", item=item, kind=kind)
+        elif event == "decision_answered":
+            journal.emit("decision_cleared", "coordq", item=item, kind=kind)
+
+
+def cmd_actrate(a):
+    since = time.time() - a.days * 86400
+    waiting = {}
+    kinds = {}
+    for row in decision_rows():
+        counts = kinds.setdefault(row.get("kind") or "other", {"shown": 0, "answered": 0, "expired": 0})
+        if row["event"] == "decision_shown":
+            waiting[row["item"]] = row["ts"]
+            if row["ts"] >= since:
+                counts["shown"] += 1
+        elif row["event"] in ("decision_answered", "decision_expired") and row["item"] in waiting:
+            if waiting.pop(row["item"]) >= since:
+                counts[row["event"][9:]] += 1
+    print(f"decision act rate, last {a.days} days")
+    print(f"{'kind':<20}{'shown':>7}{'answered':>10}{'expired':>9}{'open':>6}{'act rate':>10}")
+    for kind, c in sorted(kinds.items()):
+        closed = c["answered"] + c["expired"]
+        rate = f"{100 * c['answered'] / closed:.0f}%" if closed else "-"
+        print(f"{kind:<20}{c['shown']:>7}{c['answered']:>10}{c['expired']:>9}{c['shown'] - closed:>6}{rate:>10}")
+
+
 def main():
     p = argparse.ArgumentParser(prog="coordq")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -3606,6 +3664,13 @@ def main():
     sp = sub.add_parser("spend", help="stop a ticket thread over its token cap or idle past the stall limit")
     sp.add_argument("--dry-run", action="store_true")
     sp.set_defaults(fn=cmd_spend)
+    de = sub.add_parser("decision", help="record decision inbox rows: sync shown and expired, or mark ids answered")
+    de.add_argument("action", choices=("sync", "answered"))
+    de.add_argument("ids", nargs="*")
+    de.set_defaults(fn=cmd_decision)
+    ar = sub.add_parser("actrate", help="print how often decision items are acted on, per kind")
+    ar.add_argument("--days", type=int, default=7)
+    ar.set_defaults(fn=cmd_actrate)
     w = sub.add_parser("wait", help="record that an approval wait started or ended, and who owns it")
     w.add_argument("action", choices=("start", "end"))
     w.add_argument("id", help="the card or action key the wait is about")
