@@ -587,6 +587,8 @@ def second_pass(reply, repo, number, head, thread, ledger):
             ledger[key] = answer or "failed"
         return answer
 
+    if gate_score.findings_of(reply) is None:
+        journal_once(gate_score.MISSING, repo, number, head, ledger, f"journal-{gate_score.MISSING}:{thread}", thread=thread)
     scored, dropped = gate_score.score_findings(reply, call)
     if dropped:
         journal_once("gate_score_dropped", repo, number, head, ledger, f"journal-{key}", thread=thread, dropped=dropped)

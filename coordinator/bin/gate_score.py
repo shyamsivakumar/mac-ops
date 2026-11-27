@@ -7,17 +7,10 @@ import models
 from gate_bar import SEVERITY_BAR
 
 KEEP_AT = 7
-LEAD = re.compile(
-    r"^[\s>*_`\[(\-]*(?:\d+[.)][\s>*_`\[(\-]*)?(?:critical|major)\b",
-    re.MULTILINE | re.IGNORECASE,
-)
 BLOCKING_WORD = re.compile(r"\b(?:critical|major)\b", re.IGNORECASE)
 FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 FOOTER = re.compile(r"^(?:CHECK|PROVIDES|VERDICT):.*$", re.MULTILINE)
-ENDS = re.compile(
-    r"^\s*(?:CHECK:|PROVIDES:|VERDICT:|Builder check:|#{0,6}\s*Left for later\b)",
-    re.IGNORECASE,
-)
+MISSING = "verdict_block_missing"
 
 ASK = """{bar}
 
@@ -27,30 +20,13 @@ Reply with only a JSON list of {count} integers, one per finding, in order.
 {findings}"""
 
 
-def prose_findings(report):
-    found, open_item = [], False
-    for line in report.splitlines():
-        if ENDS.match(line):
-            open_item = False
-        elif LEAD.match(line):
-            found.append([line])
-            open_item = True
-        elif line.strip() and open_item:
-            found[-1].append(line)
-        else:
-            open_item = False
-    return [{"text": "\n".join(lines).strip()} for lines in found]
-
-
 def blocking(finding):
     return str(finding.get("severity")).lower() in ("critical", "major")
 
 
 def findings_of(report):
     data = gate_policy.parse_verdict(report)
-    if data:
-        return [f for f in data["findings"] if blocking(f)]
-    return prose_findings(report)
+    return None if data is None else [f for f in data["findings"] if blocking(f)]
 
 
 def scores_for(findings, call):
@@ -75,10 +51,6 @@ def scores_for(findings, call):
 
 def without(report, dropped):
     data = gate_policy.parse_verdict(report)
-    if not data:
-        for finding in dropped:
-            report = report.replace(finding["text"], "", 1)
-        return report
     block = json.dumps(
         {**data, "findings": [f for f in data["findings"] if f not in dropped]}
     )
@@ -91,6 +63,8 @@ def score_findings(report, call):
     ):
         return report, []
     findings = findings_of(report)
+    if findings is None:
+        return report, []
     if len(BLOCKING_WORD.findall(report)) > len(findings) or any(
         len(BLOCKING_WORD.findall(f["text"])) > 1 for f in findings
     ):
