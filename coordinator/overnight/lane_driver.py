@@ -1222,6 +1222,9 @@ def prompt_merge_item(repo, number, head, loop=False):
                     f"`gh pr merge {number} -R {repo} --squash --match-head-commit {head}`.")}
 
 
+OWNER_GRACE_HOURS = 6
+
+
 def herdr_build_card(repo, number, head, need):
     key = CFG[repo]["key"]
     item = {"id": f"herdr-build-{key}-{number}", "group": "Coordinator", "kind": "action",
@@ -1232,20 +1235,27 @@ def herdr_build_card(repo, number, head, need):
     return f"#{number}: {repo} is built in the Herdr session, board card raised"
 
 
-def pr_owner(body, builder):
-    marked = re.search(r"(?m)^Owner: ([A-Za-z0-9_.-]+)\s*$", body)
-    if marked:
-        return marked.group(1)
-    if builder:
-        status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
-        if status in ("running", "queued", "starting", "preparing", "waiting"):
-            return builder
-    return None
+def live_builder_thread(builder):
+    if not builder:
+        return False
+    status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
+    return status in ("running", "queued", "starting", "preparing", "waiting")
 
 
 def owned_by_live_builder(repo, number, head, body, builder, ledger):
-    owner = pr_owner(body, builder)
-    if not owner:
+    marked = re.search(r"(?m)^Owner: ([A-Za-z0-9_.-]+)\s*$", body)
+    if live_builder_thread(builder):
+        owner = builder
+    elif marked:
+        owner = marked.group(1)
+        key = f"owned-since:{repo}#{number}:{head}"
+        if key not in ledger and not DRY:
+            ledger[key] = time.time()
+        if time.time() - ledger.get(key, time.time()) >= OWNER_GRACE_HOURS * 3600:
+            journal_once("owner_grace_expired", repo, number, head, ledger,
+                         f"owner-grace-expired:{repo}#{number}:{head}", owner=owner)
+            return None
+    else:
         return None
     journal_once("fix_skipped_owned", repo, number, head, ledger,
                  f"fix-skipped-owned:{repo}#{number}:{head}", owner=owner)
