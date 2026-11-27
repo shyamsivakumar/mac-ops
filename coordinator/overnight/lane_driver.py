@@ -32,11 +32,8 @@ if _BIN_DIR not in sys.path:
 import gh_gateway
 import close_check
 import gate_policy
-<<<<<<< HEAD
 import gate_score
-=======
 import gate_vote
->>>>>>> origin/main
 import journal
 from gate_policy import (LANE_REPOS, MERGE_REPOS, complete_pass, merge_mode, parse_verdict,
                          read_verdict, report_for_builder)
@@ -567,7 +564,6 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
 
 
-<<<<<<< HEAD
 def gate_score_on(repo, number):
     if not journal.factory_experiments():
         return False
@@ -595,7 +591,8 @@ def second_pass(reply, repo, number, head, thread, ledger):
     if dropped:
         journal_once("gate_score_dropped", repo, number, head, ledger, f"journal-{key}", thread=thread, dropped=dropped)
     return scored
-=======
+
+
 def vote_wait_start(finished, key, ledger):
     stamps = [e for e in (gate_vote.replied_epoch(reply_updated_at(t)) for t in finished) if e is not None]
     if stamps:
@@ -603,7 +600,6 @@ def vote_wait_start(finished, key, ledger):
     if f"vote-wait:{key}" not in ledger and not DRY:
         ledger[f"vote-wait:{key}"] = time.time()
     return ledger.get(f"vote-wait:{key}", time.time())
->>>>>>> origin/main
 
 
 def gate_verdict(repo, number, head, base, ledger):
