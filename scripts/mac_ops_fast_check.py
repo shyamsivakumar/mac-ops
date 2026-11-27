@@ -217,11 +217,29 @@ def check_mypy():
     raise RuntimeError(f"mypy exited {result.returncode}: {detail[0] if detail else 'no output'}")
 
 
+FINDING_RULE_CHECKS = ("grep", "lint", "type", "property")
+
+
+def validate_finding_rule(rule):
+    missing = [key for key in ("id", "check", "message") if not rule.get(key)]
+    if missing:
+        raise ValueError(f"finding rule {rule.get('id', '?')}: missing {', '.join(missing)}")
+    if rule["check"] not in FINDING_RULE_CHECKS:
+        raise ValueError(f"finding rule {rule['id']}: check {rule['check']!r} is not one of "
+                         f"{', '.join(FINDING_RULE_CHECKS)}")
+    if rule["check"] == "grep" and not (rule.get("paths") and rule.get("pattern")):
+        raise ValueError(f"finding rule {rule['id']}: a grep rule needs paths and pattern")
+
+
 def check_finding_rules(paths, rules=None):
     if rules is None:
         rules = json.loads((ROOT / FINDING_RULES).read_text())
+    for rule in rules:
+        validate_finding_rule(rule)
     found = []
     for rule in rules:
+        if rule["check"] != "grep":
+            continue
         for path in paths:
             if fnmatch(str(path), rule["paths"]) and (ROOT / path).is_file():
                 text = (ROOT / path).read_text(errors="replace")
