@@ -2306,6 +2306,7 @@ def gate_round_cap():
         lane.prune_round_caps({"repos": {}}, pruned)
         exact(sorted(pruned), ["other", f"roundcap:{repo}#2"])
     gatekeep_round_cap()
+    prereview_gate_cases()
     publisher_status_outcomes()
 
 
@@ -2445,6 +2446,71 @@ def gatekeep_retarget():
         exact([item["args"]["clientRequestId"] for item in queue["items"]], [f"{plain}:other"])
         exact(list(queue["gatedHeads"]), [f"{plain}:other"])
         exact(len(gatekeep(scratch)["items"]), 1)
+
+
+def prereview_gate_cases():
+    """A head that touches loop code waits for its pre-review, and a pre-review that cannot finish never holds the gate."""
+    coordq = load_coordq()
+    repo = "shyamsivakumar/mac-ops"
+    head = "b" * 40
+    gate_key = f"gate:{repo}#30:{head}"
+    key = f"prereview:{repo}#30:{head}"
+    settings = {"key": "MO", "projectId": "p"}
+    loop = {"head": head, "paths": ["coordinator/bin/coordq", "docs/x.md"], "builderModels": ["claude"]}
+    other = {"head": head, "paths": ["coordinator/bin/journal.py"], "builderModels": ["claude"]}
+    selection = {"instanceId": "codex", "model": "gpt-x"}
+    thread = {"status": "running"}
+
+    def gate(event=loop, dry=False):
+        return coordq.prereview_gate(settings, repo, "30", event, gate_key, dry)
+
+    def rows(scratch):
+        found = []
+        for name in sorted(os.listdir(scratch)):
+            if name.endswith(".jsonl"):
+                found += [json.loads(line)["event"] for line in Path(scratch, name).read_text().splitlines()]
+        return found
+
+    with tempfile.TemporaryDirectory() as scratch, \
+         patch.object(coordq, "DIR", scratch), \
+         patch.dict(os.environ, {"COORD_JOURNAL_DIR": scratch}), \
+         patch.object(coordq, "reviewer_model", lambda models: selection), \
+         patch.object(coordq, "call", lambda tool, args, rules=None: (0, json.dumps({"thread": thread}))):
+        exact((gate(other), coordq.load().get("prereviewHeads")), (True, None))
+        exact((gate(dry=True), coordq.load().get("prereviewHeads"), coordq.load()["items"]), (False, None, []))
+        exact(gate(), False)
+        queued = coordq.load()
+        exact((len(queued["items"]), queued["items"][0]["args"]["clientRequestId"], queued["items"][0]["args"]["modelSelection"]),
+              (1, key, selection))
+        exact("List every failure path: missing data, unreadable input, stalled dependency, malformed reply." in queued["items"][0]["args"]["message"], True)
+        Path(scratch, "dispatch-receipts.json").write_text(json.dumps({key: "thread-1"}))
+        exact((gate(), len(coordq.load()["items"])), (False, 1))
+        thread["status"] = "completed"
+        exact((gate(), rows(scratch)), (True, ["prereview_queued"]))
+        thread["status"] = "failed"
+        exact((gate(), gate(), rows(scratch)), (True, True, ["prereview_queued", "prereview_skipped"]))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["prereviewHeads"][key] = {"id": 1, "at": time.time()}
+            coordq.save(queue)
+        thread["status"] = "running"
+        with patch.object(coordq, "call", lambda tool, args, rules=None: (1, "unreadable")):
+            exact(gate(), False)
+            with coordq.Lock(True):
+                queue = coordq.load()
+                queue["prereviewHeads"][key]["at"] = time.time() - coordq.PREREVIEW_WAIT_SECONDS - 1
+                coordq.save(queue)
+            exact((gate(dry=True), coordq.load()["prereviewHeads"][key].get("skipped")), (True, None))
+            exact((gate(), gate(), rows(scratch).count("prereview_skipped")), (True, True, 2))
+        with patch.object(coordq, "reviewer_model", lambda models: None):
+            fresh = {**loop, "head": "c" * 40}
+            exact((coordq.prereview_gate(settings, repo, "31", fresh, "gate:x", False), rows(scratch).count("prereview_skipped")), (True, 3))
+        with coordq.Lock(True):
+            queue = coordq.load()
+            queue["gatedHeads"] = {gate_key: {}}
+            queue["prereviewHeads"] = {}
+            coordq.save(queue)
+        exact((gate(), coordq.load()["prereviewHeads"]), (True, {}))
 
 
 def gatekeep_round_cap():

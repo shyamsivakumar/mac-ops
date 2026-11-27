@@ -2972,6 +2972,82 @@ def scope_gate(settings, repo, number, event, key, dry_run):
     return False
 
 
+PREREVIEW_PATHS = re.compile(r"^coordinator/bin/(coordq|ticket|gate_[^/]+)$|^coordinator/overnight/lane_driver\.py$")
+PREREVIEW_WAIT_SECONDS = 2 * 3600
+PREREVIEW_CLEAN = "PREREVIEW: CLEAN"
+PREREVIEW_BRIEF = (
+    "Adversarial pre-review of {repo}#{number} at head {head}. Read the diff with `gh pr diff {number} -R {repo}`. "
+    "List every failure path: missing data, unreadable input, stalled dependency, malformed reply. "
+    "For each, name the file and function, what the code does, and what it should do. "
+    "End with the line `PREREVIEW: CLEAN` when you found none, else `PREREVIEW: FINDINGS`."
+)
+
+
+def prereview_skip(key, reason, dry_run):
+    print(stamped(f"prereview {key}: {reason}, the gate goes ahead"), flush=True)
+    if dry_run:
+        return True
+    with Lock(True):
+        queue = load()
+        queue.setdefault("prereviewHeads", {}).setdefault(key, {"at": time.time()})["skipped"] = reason
+        save(queue)
+    journal.emit("prereview_skipped", "gatekeep", reason=reason, **journal.parse_request_id(key))
+    return True
+
+
+def prereview_gate(settings, repo, number, event, gate_key, dry_run):
+    """True when this head may go on to its gate, False while its pre-review runs.
+
+    A pre-review that cannot be read, failed, or ran past two hours never
+    holds the gate: the head is journaled `prereview_skipped` and gated.
+    """
+    if not any(PREREVIEW_PATHS.match(p) for p in event.get("paths") or []):
+        return True
+    queue = load()
+    if gate_key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), gate_key):
+        return True
+    key = f"prereview:{repo}#{number}:{event['head']}"
+    state = queue.get("prereviewHeads", {}).get(key)
+    if state and state.get("skipped"):
+        return True
+    if state:
+        thread_id = load_receipts().get(key)
+        status = None
+        if thread_id:
+            code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+            if not code:
+                try:
+                    status = (json.loads(out).get("thread") or {}).get("status")
+                except ValueError:
+                    pass
+        if status == "completed":
+            return True
+        if status in ("failed", "interrupted"):
+            return prereview_skip(key, f"the pre-review {status}", dry_run)
+        if time.time() - state["at"] >= PREREVIEW_WAIT_SECONDS:
+            return prereview_skip(key, "the pre-review stalled for 2 hours", dry_run)
+        return False
+    model = reviewer_model(event.get("builderModels", []))
+    if model is None:
+        return prereview_skip(key, "every reviewer of another vendor is blocked", dry_run)
+    print(stamped(("would queue " if dry_run else "queued ") + key + " reviewer " + model["instanceId"] + " " + model["model"]), flush=True)
+    if dry_run:
+        return False
+    args = {"projectId": settings["projectId"], "title": f"{settings['key']} prereview #{number} {event['head'][:8]}",
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access",
+            "workspaceStrategy": {"type": "worktree"}, "clientRequestId": key,
+            "message": PREREVIEW_BRIEF.format(repo=repo, number=number, head=event["head"])}
+    with model_list.blocked_lock(), Lock(True):
+        queue = load()
+        queue["items"].append({"id": queue["next"], "tool": "t3_thread_launch", "args": args, "title": args["title"],
+                               "priority": 5000, "builderModels": event.get("builderModels", [])})
+        queue.setdefault("prereviewHeads", {})[key] = {"id": queue["next"], "at": time.time()}
+        queue["next"] += 1
+        save(queue)
+    journal.emit("prereview_queued", "gatekeep", reviewer=model["model"], **journal.parse_request_id(key))
+    return False
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -3213,6 +3289,8 @@ def cmd_gatekeep(a):
                 if proof is None:
                     continue
                 args["message"] += proof
+            if not prereview_gate(settings, repo_name, pr_number, event, key, a.dry_run):
+                continue
             observed = load()
             adopted = lane_gated(load_receipts(), key)
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
