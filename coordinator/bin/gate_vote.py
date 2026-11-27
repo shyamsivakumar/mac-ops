@@ -3,7 +3,7 @@ import re
 import time
 from datetime import datetime
 
-from gate_policy import JSON_VERDICT_ASK, read_verdict
+from gate_policy import JSON_VERDICT_ASK, parse_verdict, read_verdict
 
 VOTERS = 3
 AGREE = 2
@@ -71,7 +71,7 @@ def own_line(report, tag, head):
 
 
 def counts(report, outcome, head):
-    return outcome in ("PASS", "FAIL") and None not in (
+    return parse_verdict(report) is not None and outcome in ("PASS", "FAIL") and None not in (
         own_line(report, "CHECK", head),
         own_line(report, "PROVIDES", head),
     )
@@ -81,7 +81,7 @@ def merge_reports(reports, head):
     counted = [(report, *read_verdict(report)) for report in reports]
     counted = [row for row in counted if counts(row[0], row[1], head)]
     if len(counted) < AGREE:
-        return f"Merged gate review of {len(reports)} reports on {head}: only {len(counted)} carried a verdict with its own CHECK and PROVIDES lines for this head.\nVERDICT: FAIL"
+        return f"Merged gate review of {len(reports)} reports on {head}: only {len(counted)} carried a JSON verdict block with its own CHECK and PROVIDES lines for this head.\nVERDICT: FAIL"
     kept = survivors([findings for _, _, findings in counted])
     unparsed = sum(
         1 for _, outcome, findings in counted if outcome == "FAIL" and not findings
