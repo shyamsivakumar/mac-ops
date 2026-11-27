@@ -18,3 +18,9 @@ FAIL lines on head:
 ```
 0
 ```
+
+## Rework: journal age rule (30 min)
+```
+1
+```
+A 5-minute-old or unreadable ticket_started row is left alone; a 2-hour-old row is released (selftest case stale-started-refill).
