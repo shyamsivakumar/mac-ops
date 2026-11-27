@@ -616,6 +616,7 @@ INTERIM_P, FINAL_P, SLOWER_LIMIT, BOOTSTRAP_DRAWS = 0.005, 0.048, 1.15, 4000
 
 NAME_FIELD = {"builder": "experiment", "gate": "gate_experiment"}
 DEFAULT_TARGET = 260
+SETTLE_DAYS = 7
 
 
 def experiment_side(rows, name):
@@ -644,13 +645,13 @@ def arm_outcomes(rows, name, side):
         if row["event"] == "merged":
             merged.setdefault((row["repo"], pr_ticket.get((row["repo"], row.get("pr")))), row["ts"])
     ordered = sorted(arms, key=lambda key: (assigned[key], str(key)))
-    return [(arms[key][0], arms[key][1], first.get(key) == "PASS", merged[key] - assigned[key] if key in merged else None)
+    return [(assigned[key], arms[key][0], arms[key][1], first.get(key) == "PASS", merged[key] - assigned[key] if key in merged else None)
             for key in ordered]
 
 
 def cohort(tickets, size):
     out = {"control": {}, "treatment": {}}
-    for arm, cluster, won, wait in tickets[:size]:
+    for _, arm, cluster, won, wait in tickets[:size]:
         out[arm].setdefault(cluster, []).append((won, wait))
     return out
 
@@ -690,16 +691,24 @@ def cmd_compare(args):
     side = experiment["side"] if experiment else experiment_side(live, args.experiment)
     tickets = arm_outcomes(live, args.experiment, side)
     target = args.target or (experiment or {}).get("target") or DEFAULT_TARGET
-    present = {arm for arm, *_ in tickets}
+    present = {arm for _, arm, *_ in tickets}
     if len(present) < 2:
         missing = [name for name in ("control", "treatment") if name not in present]
         hint = "; register an experiment in coordinator/config/factory.json" if not experiment else ""
         sys.exit(f"compare: no {' or '.join(missing)} assignments for {args.experiment} in the journal" + hint)
     final = len(tickets) >= target
     size = target if final else math.ceil(target / 2)
-    arms = cohort(tickets, size)
-    print(f"target {target} tickets, {len(tickets)} assigned, {'final' if final else 'interim'} cohort is the first {size}")
-    if len(tickets) < size or not arms["control"] or not arms["treatment"]:
+    name = "final" if final else "interim"
+    print(f"target {target} tickets, {len(tickets)} assigned, {name} cohort is the first {size}")
+    if len(tickets) < size:
+        print("continue")
+        return
+    cutoff = tickets[size - 1][0] + SETTLE_DAYS * 86400
+    if (args.now or today_ts()) < cutoff:
+        print(f"continue ({name} cohort settles at {datetime.fromtimestamp(cutoff, TZ).isoformat(timespec='minutes')})")
+        return
+    arms = cohort(arm_outcomes([row for row in live if row["ts"] <= cutoff], args.experiment, side), size)
+    if not arms["control"] or not arms["treatment"]:
         print("continue")
         return
     control, treatment = list(arms["control"].values()), list(arms["treatment"].values())
@@ -914,6 +923,7 @@ def main():
     compare.add_argument("--experiment", required=True)
     compare.add_argument("--journal-dir")
     compare.add_argument("--target", type=int)
+    compare.add_argument("--now", type=float, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.command == "compare":
         cmd_compare(args)

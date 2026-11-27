@@ -201,6 +201,47 @@ gap +24.6 points, cluster-bootstrap p 0.0040 (4000 draws, seed 7)
 treatment wins
 ```
 
+## Settle cutoff: the same cohort read before and after it, and with post-cutoff events
+
+Fixture timestamps are in November 2025, so no run waits. The interim cohort is the first 130 tickets; its cutoff is the 130th assignment plus 7 days. In this journal a third of the treatment tickets have no gate verdict or merge by the cutoff. A hidden --now sets the clock.
+
+Before the cutoff (--now 1763830000):
+
+```
+target 260 tickets, 200 assigned, interim cohort is the first 130
+continue (interim cohort settles at 2025-11-28T04:43-08:00)
+```
+
+After the cutoff:
+
+```
+target 260 tickets, 200 assigned, interim cohort is the first 130
+control: 65 tickets in 43 clusters, first-gate PASS 35.4%
+treatment: 65 tickets in 44 clusters, first-gate PASS 38.5%
+gap +3.1 points, cluster-bootstrap p 0.6883 (4000 draws, seed 7)
+continue
+```
+
+After the cutoff, with verdicts and merges for those pending tickets added at later timestamps (ignored, same decision):
+
+```
+target 260 tickets, 200 assigned, interim cohort is the first 130
+control: 65 tickets in 43 clusters, first-gate PASS 35.4%
+treatment: 65 tickets in 44 clusters, first-gate PASS 38.5%
+gap +3.1 points, cluster-bootstrap p 0.6883 (4000 draws, seed 7)
+continue
+```
+
+Control: the same late events placed before the cutoff would have flipped the look:
+
+```
+target 260 tickets, 200 assigned, interim cohort is the first 130
+control: 65 tickets in 43 clusters, first-gate PASS 35.4%
+treatment: 65 tickets in 44 clusters, first-gate PASS 72.3%
+gap +36.9 points, cluster-bootstrap p 0.0005 (4000 draws, seed 7)
+treatment wins
+```
+
 ## No match, exit 1
 
 ```
