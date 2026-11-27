@@ -27,6 +27,9 @@ A missing section passing the check.
 ## Data, secrets and stop conditions
 Repo files and the local ticket config only; no secrets and no network writes.
 
+## Failure behavior
+A missing input exits 2 and writes nothing.
+
 ## Rollback
 Revert the change; the CLI returns to exact matching.
 
