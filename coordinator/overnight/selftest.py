@@ -2947,21 +2947,25 @@ def stale_started_refill():
             return {"thread": {"status": "running"}}
         return {"threads": []}
     actions = []
-    ages = {}
+    journal_dir = tempfile.mkdtemp(prefix="selftest-started-")
+    def write_month(name, rows):
+        Path(journal_dir, name).write_text("".join(json.dumps({"event": "ticket_started", "repo": repo, "ticket": n, "ts": ts}) + "\n" for n, ts in rows) + "not json\n")
     def run_pass(dry):
-        with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
+        with patch.dict(os.environ, {"COORD_JOURNAL_DIR": journal_dir}), \
+             patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "t3", t3), \
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
              patch("builtins.open", mock_open(read_data=receipts)), \
-             patch.object(lane, "ticket_started_at", lambda r, n: ages.get(n)), \
              patch.object(lane, "DRY", dry), \
              patch.object(lane, "run", lambda cmd, timeout=150: actions.append(cmd) or ""):
             return lane.unstick(repo, {})
     now = time.time()
     exact(run_pass(False), "nothing ready")
-    ages[7] = now - 300
+    write_month("events-2026-03.jsonl", [(11, now - 60)])
+    Path(journal_dir, "events-2026-04.jsonl").write_bytes(b"\xff\xfe")
     exact(run_pass(False), "nothing ready")
-    exact(actions, [])
-    ages[7] = now - 7200
+    write_month("events-2026-02.jsonl", [(7, now - 300)])
+    exact(run_pass(False), "nothing ready")
+    write_month("events-2026-02.jsonl", [(7, now - 7200)])
     exact(run_pass(True), "DRY release [7]")
     exact(actions, [])
     exact(run_pass(False), "release [7]")
