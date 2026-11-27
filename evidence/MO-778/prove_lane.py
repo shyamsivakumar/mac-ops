@@ -104,3 +104,6 @@ VOTER2_ONLY = {**EXPECT3, f"{VOTE}:2": "T2"}
 scenario("primary done 1 h ago, voter 3 never launched: still waiting", VOTER2_ONLY, {"T1": FAIL_A, "T2": FAIL_B}, replied_hours_ago=1)
 scenario("primary done 3 h ago, voter 3 never launched: merge of 2", VOTER2_ONLY, {"T1": FAIL_A, "T2": FAIL_B}, replied_hours_ago=3)
 scenario("primary done 3 h ago, neither voter launched: FAIL, not the primary alone", EXPECT3, {"T1": PASS}, replied_hours_ago=3)
+scenario("primary and voter 2 done, voter 3 in flight 1 h after the primary replied: still running", BOTH, {"T1": FAIL_A, "T2": FAIL_B, "T3": "partial text"}, running={"T3"}, replied_hours_ago=1)
+scenario("primary and voter 2 done, voter 3 in flight 3 h after the primary replied: merge of 2", BOTH, {"T1": FAIL_A, "T2": FAIL_B, "T3": "partial text"}, running={"T3"}, replied_hours_ago=3)
+scenario("primary done, both voters in flight 3 h later: FAIL, not the primary alone", BOTH, {"T1": PASS, "T2": "x", "T3": "y"}, running={"T2", "T3"}, replied_hours_ago=3)
