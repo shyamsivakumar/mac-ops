@@ -1,2 +1,2 @@
 #!/bin/sh
-exec "$HOME/.local/bin/worktree-scan" "$@"
+exec sh "$HOME/.local/bin/worktree-scan" "$@"
