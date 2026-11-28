@@ -722,6 +722,7 @@ def cmd_list(a):
             else:
                 write_cache(data)
                 out = {**data, "stale": False, "cached": False}
+    out.setdefault("failed", [])
     if a.json:
         print(json.dumps(out, indent=1))
         return
@@ -730,7 +731,7 @@ def cmd_list(a):
     for i in out["issues"]:
         flags = f" !{'; '.join(i['problems'])}" if i["problems"] else ""
         print(f"{i['repo']}#{i['number']} {i['stage']} p{i['priority']} {i['type']} {i['builder'] or '-'}/{i['reviewer'] or '-'} {i['title']}{flags}")
-    if out.get("failed"):
+    if out["failed"]:
         print(f"failed: {', '.join(out['failed'])}")
     print(f"{len(out['issues'])} issues, fetched {out['fetchedAt']}")
 
