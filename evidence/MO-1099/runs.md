@@ -38,3 +38,7 @@ and `closed-ticket-merge`: their fakes refused a `t3_thread_organize` call, and
 `EXPECTED` in `hourly_selftest.py` lacked `gate-settle`. The fakes now answer
 `t3_thread_organize` and `EXPECTED` lists the new case. Those cases and
 `merge-pass`, `held-merge` and `gate-settle` pass with subprocess calls forbidden.
+
+The second M1 check failed the unittest suite: `tests.test_lane_duplicate_suppression`
+(6 cases) fakes T3 and refused `t3_thread_organize`. That fake now answers it; the 8 cases
+pass, and so do `tests.test_install_coordinator` and `tests.test_lane_decisions_board`.
