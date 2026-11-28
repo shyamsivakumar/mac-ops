@@ -324,7 +324,14 @@ def dead_run_no_receipt():
         {"threadId": "fixture-nothing", "title": "hand launch", "settled": False},
         {"threadId": "fixture-closed-key", "title": "MO-8 hand launch", "settled": False},
         {"threadId": "fixture-landed-key", "title": "MO-9 hand launch", "settled": False},
-        {"threadId": "fixture-full", "title": "MO-10 hand launch", "settled": False}]
+        {"threadId": "fixture-full", "title": "MO-10 hand launch", "settled": False},
+        {"threadId": "fixture-moved", "title": "MO-11 review #20 deadbeef", "settled": False, "updatedAt": "2026-11-27T01:00:00Z"},
+        {"threadId": "fixture-current", "title": "MO-12 review #21 cafef00d", "settled": False, "updatedAt": "2026-11-27T01:00:00Z"},
+        {"threadId": "fixture-newer", "title": "MO-13 · build", "settled": False, "createdAt": "2026-11-27T01:00:00Z", "updatedAt": "2026-11-27T05:00:00Z"},
+        {"threadId": "fixture-newer-attempt", "title": "MO-14 · build", "settled": False, "createdAt": "2026-11-27T03:00:00Z", "updatedAt": "2026-11-27T03:00:00Z"}]
+    siblings = [{"threadId": "live-build", "title": "MO-13 · build again", "createdAt": "2026-11-27T02:00:00Z", "updatedAt": "2026-11-27T02:00:00Z"},
+                {"threadId": "touched-older", "title": "MO-14 · build", "createdAt": "2026-11-27T01:00:00Z", "updatedAt": "2026-11-27T09:00:00Z"}]
+    heads = {20: "0123456789abcdef", 21: "cafef00d12345678"}
     states = {
         (repo, 11): {"kind": "pr", "state": "closed", "merged": True},
         (repo, 12): {"kind": "pr", "state": "open", "merged": False},
@@ -332,7 +339,8 @@ def dead_run_no_receipt():
         (catalog, 7): {"kind": "issue", "state": "closed", "merged": False},
         (repo, 8): {"kind": "issue", "state": "closed", "merged": False},
         (repo, 9): {"kind": "issue", "state": "open", "merged": False},
-        (repo, 10): {"kind": "issue", "state": "closed", "merged": False}}
+        (repo, 10): {"kind": "issue", "state": "closed", "merged": False},
+        (repo, 21): {"kind": "pr", "state": "open", "merged": False}}
     # A closed issue can close before its pull request lands, and a merged
     # pull request reports MERGED, not CLOSED.
     linked = {(catalog, 7): [{"number": 8, "state": "OPEN", "mergedAt": None}],
@@ -353,7 +361,9 @@ def dead_run_no_receipt():
 
     def t3(tool, args):
         if tool == "t3_thread_list":
-            return {"threads": threads} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
+            if args.get("statuses") == ["failed", "interrupted"]:
+                return {"threads": threads}
+            return {"threads": siblings[:1], "nextCursor": 1} if "cursor" not in args else {"threads": siblings[1:]}
         if tool == "t3_thread_organize":
             settled.append(args["threadId"])
             return {}
@@ -367,6 +377,7 @@ def dead_run_no_receipt():
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "dead_reference", side_effect=reference), \
          patch.object(lane, "dead_ticket_prs", side_effect=ticket_prs), \
+         patch.object(lane, "dead_pr_head", side_effect=lambda target, number: heads[int(number)]), \
          patch.object(lane, "dead_ticket_numbers", side_effect=ticket_numbers):
         lines = io.StringIO()
         with contextlib.redirect_stdout(lines):
@@ -377,10 +388,10 @@ def dead_run_no_receipt():
         with contextlib.redirect_stdout(lines):
             lane.recover_dead_runs(ledger)
         second = lines.getvalue().strip()
-    exact(settled, ["fixture-merged", "fixture-closed-key", "fixture-landed-key"])
+    exact(settled, ["fixture-merged", "fixture-closed-key", "fixture-landed-key", "fixture-moved", "fixture-newer"])
     exact(second, "")
     exact(reads, [])
-    exact(len(first), 7)
+    exact(len(first), 11)
     exact("settle, PR shyamsivakumar/mac-ops#11 merged" in first[0], True)
     exact("flagged once" in first[1] and "PR shyamsivakumar/mac-ops#13 is open" in first[1], True)
     exact("flagged once" in first[2] and "PR shyamsivakumar/catalouge#8 is open" in first[2], True)
@@ -388,6 +399,10 @@ def dead_run_no_receipt():
     exact("settle, issue shyamsivakumar/mac-ops#8 closed" in first[4], True)
     exact("settle, PR shyamsivakumar/mac-ops#16 merged" in first[5], True)
     exact("flagged once" in first[6] and "an unseen open one cannot be ruled out" in first[6], True)
+    exact("settle, PR shyamsivakumar/mac-ops#20 head moved to 01234567" in first[7], True)
+    exact("coordinator needed" in first[8] and "PR shyamsivakumar/mac-ops#21 is open" in first[8], True)
+    exact("settle, a newer thread covers it" in first[9], True)
+    exact("flagged once" in first[10] and "MO-14" not in settled, True)
     exact(ledger["dead-run:fixture-merged"].startswith("settled "), True)
     exact(ledger["dead-run:fixture-open"].startswith("flagged "), True)
     exact(ledger["dead-run:fixture-key"].startswith("flagged "), True)
@@ -548,6 +563,8 @@ def gate_pipeline():
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
                 return {"thread": {"status": "running" if args["threadId"] in live else "completed"},
                         "items": [{"type": "assistant_message", "text": thread_replies[args["threadId"]]}]}
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def decision(item, actions=actions):
@@ -588,6 +605,7 @@ def gate_pipeline():
     completion_boundary()
     main_update_boundary()
     gatekeep_retarget()
+    gatekeep_single_pr()
 
 
 def merged_restart():
@@ -674,6 +692,7 @@ def merged_restart():
                 exact("scope: pass" in why or "cost note" in why, False)
             if board == "owner":
                 exact("no gate attempt for this head has a recorded base" in owner[0]["why"], True)
+                exact(owner[0].get("owner"), "t1j")
                 exact("(ticket MO-10)" in owner[0]["title"], True)
             if board == "ff-failed":
                 exact(ledger[f"after-merge:{repo}#20:{head}"], "closed")
@@ -1555,7 +1574,7 @@ def zero_merge_fixture(scratch):
         state.update(json.loads(json.dumps(value)))
     # The alarm's key names the repos that are waiting, so a stall on one
     # repo does not silence a stall on another. The title stays one title.
-    alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
+    alert = {"owner": "t1j", "id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
         "title": "No merge in 60 minutes with open PRs",
         "cause": "No merge in 60 minutes with open PRs: fixture/one",
         "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
@@ -1989,6 +2008,66 @@ def worktree_base_ref():
     exact(fill(launch, {"message": "brief"}), {"message": "brief"})
 
 
+def gate_settle():
+    import lane_driver as lane
+    calls, outcomes = [], []
+
+    def t3(tool, args):
+        calls.append((tool, args["threadId"], args["action"]))
+        if outcomes and outcomes.pop(0):
+            raise subprocess.CalledProcessError(1, ["t3mcp"], output="down")
+        return {}
+
+    def verdict(name, ledger, dry=False):
+        with patch.object(lane, "t3", t3), patch.object(lane, "journal_event"), patch.object(lane, "DRY", dry):
+            lane.journal_verdict("o/r", 1, "a" * 40, name, {"threadId": "T"}, ledger)
+
+    settle = [("t3_thread_organize", "T", "settle")]
+    ledger = {}
+    verdict("PASS", ledger)
+    verdict("PASS", ledger)
+    exact(calls, settle)
+    calls.clear()
+    ledger, outcomes[:] = {}, [True]
+    verdict("FAIL", ledger)
+    exact("gate-settled:T" in ledger, False)
+    verdict("FAIL", ledger)
+    exact((calls, "gate-settled:T" in ledger), (settle * 2, True))
+    calls.clear()
+    for name, dry in (("SPLIT", False), ("PASS", True)):
+        verdict(name, {}, dry)
+    exact(calls, [])
+
+    receipts = {"ticket:o/r#7:a1": "builder", "ticket:o/r#70:a1": "other-ticket", "fix:o/r#5:h": "fix",
+                "gate:o/r#5:h": "gate", "vote:o/r#5:h:v": "vote", "fix:o/r#50:h": "other-pr", "base:fix": "main"}
+    statuses = {"vote": "running"}
+    organized = []
+
+    def closing(ledger, dry=False):
+        def thread_tool(tool, args):
+            if tool == "t3_thread_organize":
+                organized.append(args["threadId"])
+                return {}
+            return {"thread": {"status": statuses.get(args["threadId"], "completed")}}
+
+        with patch.object(lane, "t3", thread_tool), patch.object(lane, "stall_receipts", return_value=receipts), \
+             patch.object(lane, "run", return_value=""), patch.object(lane, "fast_forward_main"), \
+             patch.object(lane, "DRY", dry):
+            lane.close_after_merge("o/r", 5, "h", "7", {"threadId": "gate"}, ledger)
+
+    ledger = {}
+    closing({}, dry=True)
+    exact(organized, [])
+    closing(ledger)
+    exact(sorted(organized), ["builder", "fix", "gate"])
+    statuses.clear()
+    organized.clear()
+    with patch.object(lane, "t3", lambda tool, args: organized.append(args["threadId"]) or {"thread": {"status": "completed"}}), \
+         patch.object(lane, "stall_receipts", return_value=receipts), patch.object(lane, "DRY", False):
+        lane.settle_ticket_threads("o/r", 5, "7", ledger)
+    exact(sorted(set(organized)), ["vote"])
+
+
 def gate_round_cap():
     """The convergence rule in the lane: three failed reviews, then one item.
 
@@ -2033,6 +2112,8 @@ def gate_round_cap():
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def send(thread_id, message, title, ledger, lkey, **kwargs):
@@ -2370,6 +2451,7 @@ def publisher_status_outcomes():
              patch.object(lane, "superseded_by", return_value=False), \
              patch.object(lane, "issue_record", return_value={}), patch.object(lane, "issue_held", return_value=False), \
              patch.object(lane, "gate_verdict", return_value=("PASS", {"threadId": "gate"}, "VERDICT: PASS")), \
+             patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "read_json", pr_reads(lane, row)), \
              patch.object(lane, "send", lambda *a, **k: sent.append(a[1]) or "sent"), \
              patch.object(lane, "merge_passed_pr", lambda *a: merges.append(a[2]) or "merged"):
@@ -2446,6 +2528,81 @@ def gatekeep_retarget():
         exact([item["args"]["clientRequestId"] for item in queue["items"]], [f"{plain}:other"])
         exact(list(queue["gatedHeads"]), [f"{plain}:other"])
         exact(len(gatekeep(scratch)["items"]), 1)
+
+
+def gatekeep_single_pr():
+    """`coordq gatekeep --pr` gates one pull request through the full pass's path.
+
+    The single run reads that pull request alone, queues its gate under the
+    same key, and leaves the other open pull request and the stuck report
+    alone. A full pass over the same repo gates both.
+    """
+    coordq = load_coordq()
+    repo = "shyamsivakumar/mac-ops"
+    prs = {n: {"draft": False, "number": n, "head": {"sha": c * 40}, "body": f"Refs #10\nBuilder check: PASS {c * 40}\n",
+               "changed_files": 1, "base": {"ref": "main"}} for n, c in ((20, "a"), (21, "b"))}
+    receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+    comment = {"user": {"login": "me"}, "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
+    receipts = {"req-1": "builder-1", "base:gate": "main"}
+    reads = []
+
+    class Run:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        reads.append(endpoint)
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([list(prs.values())]))
+        if endpoint in (f"repos/{repo}/pulls/20", f"repos/{repo}/pulls/21"):
+            return Run(json.dumps(prs[int(endpoint[-2:])]))
+        if endpoint == f"repos/{repo}/issues/10/comments?per_page=100":
+            return Run(json.dumps([[comment]]))
+        if endpoint == f"repos/{repo}/issues/11/comments?per_page=100":
+            return Run(json.dumps([[{**comment, "body": comment["body"].replace("req-1", "req-2")}]]))
+        if endpoint == f"repos/{repo}/issues/11":
+            failed = Run()
+            failed.returncode = 1
+            return failed
+        if endpoint.endswith("/statuses?per_page=100") or endpoint.endswith("/files?per_page=100"):
+            return Run("[[]]")
+        raise AssertionError(f"unexpected read: {endpoint}")
+
+    def gatekeep(only, dry_run=False):
+        reads.clear()
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq, "load_receipts", lambda: receipts), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             patch.object(coordq, "read_builder_thread", return_value=({"providerInstanceId": "fixture", "model": "m"}, [])), \
+             patch.object(coordq, "router_chain", return_value=[]), \
+             patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
+             patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
+             patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
+             patch.object(coordq, "gate_args", lambda settings, r, issue, number, head, *rest, **kw: {
+                 "clientRequestId": f"gate:{r}#{number}:{head}", "modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t"}), \
+             patch.object(coordq.model_list, "is_blocked", return_value=False), \
+             contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "lanes-ledger.json").write_text("{}")
+            settings = Path(scratch) / "gatekeep-config.json"
+            settings.write_text(json.dumps({"repos": {repo: {"key": "MO", "projectId": "fixture"}}}))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=dry_run, pr=only))
+            queue = Path(scratch, "queue.json")
+            return list(json.loads(queue.read_text())["gatedHeads"]) if queue.exists() else []
+
+    exact(gatekeep(f"{repo}#21"), [f"gate:{repo}#21:{'b' * 40}"])
+    exact(f"repos/{repo}/pulls?state=open&per_page=100" in reads, False)
+    exact(gatekeep(f"{repo}#21", dry_run=True), [])
+    exact(sorted(gatekeep(None)), sorted(f"gate:{repo}#{n}:{c * 40}" for n, c in ((20, "a"), (21, "b"))))
+    prs[20]["body"] = prs[20]["body"].replace("#10", "#11")
+    exact(gatekeep(None), [f"gate:{repo}#21:{'b' * 40}"])
 
 
 def prereview_gate_cases():
@@ -5561,6 +5718,7 @@ def closed_ticket_merge():
              patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
              patch.object(lane, "gate_verdict", return_value=verdict), patch.object(lane, "read_json", read_json), \
              patch.object(lane, "run", side_effect=AssertionError("unexpected command")), \
+             patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "merge_passed_pr", merge), patch.object(lane, "publish_decision", decision):
             return lane.act_on_pr(repo, 20, {} if ledger is None else ledger)
 
@@ -6651,7 +6809,7 @@ def held_merge():
         exact(os.listdir(queue_dir), [])
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-settle": gate_settle, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
 
 
 def main():
