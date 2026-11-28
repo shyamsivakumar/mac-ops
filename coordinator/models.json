@@ -67,9 +67,41 @@
       "id": "sol",
       "selection": {
         "instanceId": "codex",
-        "model": "gpt-6.2-sol"
+        "model": "gpt-6.2-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "max"
+          }
+        ]
       },
       "vendor": "openai",
+      "leads": [
+        "rca",
+        "risky",
+        "design",
+        "hard"
+      ],
+      "only": [
+        "rca",
+        "risky",
+        "design",
+        "hard"
+      ]
+    },
+    {
+      "id": "neon",
+      "selection": {
+        "instanceId": "antigravity",
+        "model": "gemini-4-neon"
+      },
+      "vendor": "google",
+      "leads": [
+        "rca",
+        "risky",
+        "design",
+        "hard"
+      ],
       "only": [
         "rca",
         "risky",
@@ -79,6 +111,20 @@
     }
   ],
   "fix": [
+    {
+      "id": "sol-max",
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6.2-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "max"
+          }
+        ]
+      },
+      "vendor": "openai"
+    },
     {
       "id": "router",
       "selection": {
@@ -126,20 +172,6 @@
         "model": "default"
       },
       "vendor": "cursor"
-    },
-    {
-      "id": "sol-max",
-      "selection": {
-        "instanceId": "codex",
-        "model": "gpt-6.2-sol",
-        "options": [
-          {
-            "id": "reasoningEffort",
-            "value": "max"
-          }
-        ]
-      },
-      "vendor": "openai"
     }
   ],
   "review": [
@@ -216,8 +248,8 @@
     "stats": {}
   },
   "rules": {
-    "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: the `router` entry runs the Morph chain its `routes` table names for the type (every type runs DeepSeek V4.1 Flash then DeepSeek V4.1 Flash 1017, which has its own Morph budget; Kimi K3.1 is out because its 24,290 uncached tokens a minute is smaller than one fresh pi request), then Cursor auto, then Terra for quick, chore, standard, ui and research or Sol for rca, risky, design and hard",
-    "fix and finish rounds": "use the fix list in order: the `router` entry on its standard chain, Cursor auto, Sol at max reasoning",
+    "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: risky, rca, design and hard run Sol at max reasoning first, then Neon (`antigravity/gemini-4-neon`), then the `router` Morph DeepSeek V4.1 Flash chain, then Cursor auto; quick, chore, standard, ui and research run the `router` Morph DeepSeek chain first (Kimi K3.1 stays out), then Cursor auto, then Terra",
+    "fix and finish rounds": "use the fix list in order: Sol at max reasoning first, then the `router` entry on its standard chain, then Cursor auto",
     "reviewer vendor must differ from the builder's executed vendor": "skip review entries of the same vendor; reviews are Astra then Opus",
     "a provider that fails with no credits, usage limit or auth": "is skipped for all callers until its hourly probe answers",
     "builder:<id> label": "tries that entry first, then the list",

@@ -153,3 +153,37 @@ class BlockProviderTest(unittest.TestCase):
             models.block_provider(pick("a"), 160, now=100)
         self.assertEqual((self.file.read_text(), len(log.getvalue().splitlines())), (raw, 1))
         self.assertEqual([p.name for p in self.dir.glob(".*")], [])
+
+
+class RiskyRoutingOrderTest(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.dict(os.environ, {"COORDINATOR_MODELS": str(SEED)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_risky_rca_design_hard_builds_lead_with_sol_max_then_neon(self):
+        for task_type in ("risky", "rca", "design", "hard"):
+            ordered = models.in_order("build", task_type=task_type)
+            self.assertEqual([e["id"] for e in ordered], ["sol", "neon", "router", "cursor"])
+            self.assertEqual(
+                ordered[0]["selection"],
+                {"instanceId": "codex", "model": "gpt-6.2-sol", "options": [{"id": "reasoningEffort", "value": "max"}]},
+            )
+            self.assertEqual(ordered[1]["selection"], {"instanceId": "antigravity", "model": "gemini-4-neon"})
+            self.assertEqual(ordered[1]["vendor"], "google")
+
+    def test_standard_types_and_fixes_and_reviews_and_no_kimi(self):
+        for task_type in ("standard", "chore", "quick", "ui", "research"):
+            self.assertEqual([e["id"] for e in models.in_order("build", task_type=task_type)], ["router", "cursor", "terra"])
+        for task_type in (None, "standard", "risky", "rca", "design", "hard", "fix"):
+            ordered = models.in_order("fix", task_type=task_type)
+            self.assertEqual([e["id"] for e in ordered], ["sol-max", "router", "cursor"])
+            self.assertEqual(ordered[0]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
+        self.assertEqual([e["id"] for e in models.entries("review")], ["astra-api", "astra-sub", "opus-api", "opus-sub"])
+        self.assertEqual([e["id"] for e in models.reviewers(["gpt-6.2-sol"], blocked=set())], ["opus-api", "opus-sub"])
+        self.assertEqual(models.reviewers(["gemini-4-neon"], blocked=set())[0]["id"], "astra-api")
+        raw = SEED.read_text()
+        self.assertNotIn("kimik31", raw.lower())
+        for list_name in ("build", "fix"):
+            for entry in models.entries(list_name):
+                self.assertNotEqual(entry["selection"]["instanceId"], "openai-api")
