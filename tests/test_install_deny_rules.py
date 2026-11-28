@@ -261,7 +261,7 @@ class ListTest(unittest.TestCase):
     def test_hook_constants_match_the_list(self):
         self.assertEqual(hook_module.PROTECTED, set(SPEC["push_protected"]))
         for flag in SPEC["push_force_flags"]:
-            families = [f for f, _ in hook_module.push_findings(["origin", "t3/x", flag])]
+            families = [f for f, _ in hook_module.push_findings(["origin", "t3/x", flag], ".")]
             self.assertIn("force_push", families, flag)
         self.assertEqual(hook_module.SECRET_FILE_RE, SPEC["secret_file_re"])
         self.assertEqual(hook_module.SECRET_DIRS, SPEC["secret_dirs"])
@@ -471,6 +471,17 @@ class HookTest(unittest.TestCase):
             else None
         )
 
+    def repo_with_remote(self, url, *push_urls):
+        repo = tempfile.mkdtemp(prefix="deny-hook-repo-", dir=TMP)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(["git", "-C", repo, "remote", "add", "origin", url], check=True)
+        for push_url in push_urls:
+            subprocess.run(
+                ["git", "-C", repo, "remote", "set-url", "--add", "--push", "origin", push_url],
+                check=True,
+            )
+        return repo
+
     def decided(self, command, role=None, **extra):
         return self.run_hook(
             {"tool_name": "Bash", "tool_input": {"command": command}, **extra}, role
@@ -484,8 +495,32 @@ class HookTest(unittest.TestCase):
             )
         for command in HARD_PUSHES:
             self.assertEqual(self.decided(command)["permissionDecision"], "deny", command)
+        elsewhere = self.repo_with_remote("git@github.com:other-org/work.git")
+        personal = self.repo_with_remote("https://github.com/shyamsivakumar/mac-ops.git")
         for command in ASK_PUSHES:
-            self.assertEqual(self.decided(command)["permissionDecision"], "ask", command)
+            ask = self.decided(command, cwd=elsewhere)
+            self.assertEqual(ask["permissionDecision"], "ask", command)
+            deny = self.decided(command, cwd=personal)
+            self.assertEqual(deny["permissionDecision"], "deny", command)
+            self.assertIn("personal repo", deny["permissionDecisionReason"], command)
+            self.assertEqual(
+                self.decided(command, cwd=str(self.home))["permissionDecision"], "deny", command
+            )
+        self.assertEqual(
+            self.decided(f"git -C {personal} push origin main", cwd=elsewhere)["permissionDecision"],
+            "deny",
+        )
+        sneaky = {
+            "ssh url with a port": self.repo_with_remote("ssh://git@github.com:22/shyamsivakumar/x.git"),
+            "personal push url after an external one": self.repo_with_remote(
+                "git@github.com:other-org/work.git",
+                "git@github.com:other-org/work.git",
+                "https://github.com/shyamsivakumar/mac-ops.git",
+            ),
+        }
+        for label, cwd in sneaky.items():
+            decision = self.decided("git push origin main", cwd=cwd)
+            self.assertEqual(decision["permissionDecision"], "deny", label)
         for command in ALLOWED_COMMANDS:
             self.assertIsNone(self.decided(command), command)
 

@@ -11,7 +11,7 @@ command that breaks it:
 Each rule belongs to a family, and FAMILY_MODES (from deny-rules.json) says
 whether the family asks the owner or is denied outright:
 
-- ask: `gh pr merge`, a push to main or master, commands on secret files,
+- ask: `gh pr merge`, a push to main or master of a repo outside github.com/shyamsivakumar/, commands on secret files,
   secret values printed by gcloud or heroku (`gcloud secrets versions access`,
   `heroku config`, `config:get`, a `--format` that shows a secret), and commands
   that touch the Ascend tree from a session that did not start there. Every
@@ -21,7 +21,8 @@ whether the family asks the owner or is denied outright:
   (bypassPermissions, dontAsk, anything new) no prompt is guaranteed, so the
   answer is deny. An internal error on a command that names a guarded tool is
   a deny ("guard error").
-- deny, even with approval: force-push in any form, remote and cloud deletes
+- deny, even with approval: a push to main or master of a personal repo (github.com/shyamsivakumar/*) or
+  whose remote cannot be resolved, force-push in any form, remote and cloud deletes
   (including `gh api`, `curl` and `http` DELETE requests), removal commands
   aimed at secret files or the Ascend tree, and `git stash` in any form
   except `list` and `show`.
@@ -37,6 +38,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -45,6 +47,10 @@ MERGE_REASON = "gh pr merge needs the owner's approval; merges belong to the lan
 FORCE_REASON = "force-push in any form is denied"
 DELETE_REASON = "remote and cloud deletes are denied"
 PROTECTED_REASON = "pushing to main or master needs the owner's approval; push a task branch instead"
+PERSONAL_REASON = (
+    "pushing to main or master of a personal repo (github.com/shyamsivakumar/*) is denied, "
+    "and so is a push whose remote cannot be resolved; push a task branch instead"
+)
 NO_DESTINATION_REASON = (
     "this push names no explicit destination branch; name the branch, "
     "for example `git push -u origin <task-branch>`"
@@ -52,6 +58,13 @@ NO_DESTINATION_REASON = (
 STASH_REASON = "git stash shares one stash list across every worktree of a repository, so concurrent sessions pop each other's edits; use a throwaway worktree or a commit on your task branch instead"
 STASH_READ_ONLY = {"list", "show"}
 PROTECTED = {"main", "master"}
+REMOTE_NAME_RE = re.compile(r"[\w.-]+")
+REMOTE_URL_RE = re.compile(
+    r"(?:(?:https?|ssh|git)://(?:[^/]*@)?(?P<host>[^/:@]+)(?::\d*)?/?|[^@/:\s]+@(?P<scp_host>[^/:@]+):)/?(?P<owner>[^/]+)/",
+    re.I,
+)
+PERSONAL_HOST = "github.com"
+PERSONAL_OWNER = "shyamsivakumar"
 BULK_FLAGS = {"--all", "--branches", "--mirror"}
 GIT_VALUE_OPTIONS = {
     "-C",
@@ -89,7 +102,7 @@ MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
 SECRET_DIRS = ["~/.ssh"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
-FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
+FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "push_personal": "deny", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
 SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval"
 CLOUD_REASON = "printing secret values with gcloud or heroku needs the owner's approval"
@@ -372,7 +385,40 @@ def destination(token):
     return re.sub(r"^(?:refs/)?(?:heads/)?", "", ref)
 
 
-def push_findings(args):
+def personal_url(url):
+    """True for a github.com/shyamsivakumar/ URL, False for another host or owner, None when unparsable."""
+    match = REMOTE_URL_RE.match(url)
+    if not match:
+        return None
+    host = (match["host"] or match["scp_host"]).lower()
+    return host == PERSONAL_HOST and match["owner"].lower() == PERSONAL_OWNER
+
+
+def remote_elsewhere(repo, here):
+    """True only when every push URL of the remote parses and none is github.com/shyamsivakumar/."""
+    urls = [repo]
+    if REMOTE_NAME_RE.fullmatch(repo):
+        done = subprocess.run(
+            ["git", "-C", here, "remote", "get-url", "--push", "--all", repo],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        urls = done.stdout.split() if done.returncode == 0 else []
+    return bool(urls) and all(personal_url(url) is False for url in urls)
+
+
+def git_directory(words, here):
+    i = 1
+    while i < len(words) and words[i].startswith("-"):
+        if words[i] == "-C" and i + 1 < len(words):
+            here = resolve(words[i + 1], here)
+        i += 2 if words[i] in GIT_VALUE_OPTIONS else 1
+    return here
+
+
+def push_findings(args, here):
     """The first positional is the repository unless `--repo` names it; the rest are refspecs."""
     positionals, forced, deleting, bulk, repo_option, options_done, i = (
         [],
@@ -383,6 +429,7 @@ def push_findings(args):
         False,
         0,
     )
+    repo = ""
     while i < len(args):
         arg = args[i]
         if not options_done and arg == "--":
@@ -395,11 +442,14 @@ def push_findings(args):
             bulk = bulk or name in BULK_FLAGS
             if name in PUSH_VALUE_OPTIONS:
                 repo_option = repo_option or name == "--repo"
+                if name == "--repo":
+                    repo = arg.split("=", 1)[1] if "=" in arg else "".join(args[i + 1 : i + 2])
                 i += "=" not in arg
         else:
             positionals.append(arg)
         i += 1
     refspecs = positionals if repo_option else positionals[1:]
+    repo = repo or "".join(positionals[:1])
     found = []
     if forced or any(token.startswith("+") and len(token) > 1 for token in positionals):
         found.append(("force_push", FORCE_REASON))
@@ -412,7 +462,10 @@ def push_findings(args):
         if target in {"", "HEAD", "@"} or "$" in target or "`" in target:
             return found + [("push_destination", NO_DESTINATION_REASON)]
         if target in PROTECTED:
-            found.append(("push_protected", PROTECTED_REASON))
+            if remote_elsewhere(repo, here):
+                found.append(("push_protected", PROTECTED_REASON))
+            else:
+                found.append(("push_personal", PERSONAL_REASON))
             break
     return found
 
@@ -559,7 +612,7 @@ def command_findings(commands, cwd, ascend_session):
         elif name == "git":
             subcommand, args = git_arguments(words)
             if subcommand == "push":
-                found += push_findings(args)
+                found += push_findings(args, git_directory(words, here))
             elif subcommand == "rm":
                 found += path_findings(["rm", *args], here, ascend_session)
             elif subcommand == "stash":

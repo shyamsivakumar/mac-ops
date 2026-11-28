@@ -1,0 +1,24 @@
+#!/bin/sh
+refuse() {
+    echo "pre-push refused: $1" >&2
+    exit 1
+}
+
+input=$(cat) || refuse "cannot read the push list from stdin"
+
+while read -r local_ref local_sha remote_ref remote_sha extra; do
+    [ -n "$local_ref" ] || continue
+    [ -n "$local_sha" ] && [ -n "$remote_ref" ] && [ -n "$remote_sha" ] && [ -z "$extra" ] \
+        || refuse "unreadable push line"
+    case "$remote_ref" in
+        refs/heads/main | refs/heads/master)
+            refuse "pushes to ${remote_ref#refs/heads/} are blocked; push a work branch"
+            ;;
+    esac
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+    case "$remote_sha" in *[!0]*) ;; *) continue ;; esac
+    git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null \
+        || refuse "$remote_ref is not a fast-forward (force push or git error)"
+done <<LINES
+$input
+LINES
