@@ -27,7 +27,6 @@ head into a merge decision. The floor is checked by the caller, because a
 caller that may skip a read is the one that knows the read is optional.
 """
 import argparse
-import contextlib
 import fcntl
 import json
 import os
@@ -233,25 +232,12 @@ def gateway_env():
     return {**os.environ, GATEWAY_MARK: "gateway"}
 
 
-@contextlib.contextmanager
-def _marked():
-    previous = os.environ.get(GATEWAY_MARK)
-    os.environ[GATEWAY_MARK] = "gateway"
-    try:
-        yield
-    finally:
-        if previous is None:
-            del os.environ[GATEWAY_MARK]
-        else:
-            os.environ[GATEWAY_MARK] = previous
-
-
 def _launch():
     runner = _RUNNER() if _RUNNER else subprocess.run
 
     def launch(*args, **kwargs):
-        with _marked():
-            return runner(*args, **kwargs)
+        kwargs["env"] = {**(kwargs.get("env") or os.environ), GATEWAY_MARK: "gateway"}
+        return runner(*args, **kwargs)
     return launch
 
 
