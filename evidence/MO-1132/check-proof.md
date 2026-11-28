@@ -1,10 +1,8 @@
 # Check proof
 
-Superseded by `evidence/MO-707/check-proof.md`: the close checklist reads the
-proof at the ticket's own path, `evidence/<key>-<issue>/check-proof.md`.
-
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `9ea5669deb92e36985467269bb5f9340bb05d87b`
+Host: Shyams-MacBook-Pro.local
+Checked commit: `5e48708dfcb13c8ae5223d03507fe70980b4ccb1`
 Working tree clean when the checks ran: yes
 Run result: passed
 
@@ -12,11 +10,12 @@ Run result: passed
 | --- | --- | --- | --- |
 | lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
 | overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
-| python syntax: evidence/MO-1132/count-pass.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' evidence/MO-1132/count-pass.py` | passed |  |
-| python syntax: scripts/mac_ops_fast_check.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' scripts/mac_ops_fast_check.py` | passed |  |
-| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/bin/scorecard coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
+| installed selftest | `installed_selftest(ROOT)` | passed | exit 0, 37 PASS |
+| test isolation: no live gh call or log row | `python3 -m unittest; python3 coordinator/overnight/overnight selftest` | passed | gh-usage rows for mac-ops-test 0, skips.log lines 0, unchanged after the run; gh-usage lines in total 0 -> 0; both entry points installed the fake `gh` and `t3mcp` themselves; no call the fake `gh` refused; the isolation tests passed; 747 tests ran (unittest exited 0, selftest exited 0) |
+| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/bin/scorecard coordinator/pi/bin/coord-tick` | passed | 75 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-oiiw_scz -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-oiiw_scz/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| finding rules | `check_finding_rules(changed files)` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/private/var/folders/4d/l9996sv53p7dl4l5x5y0skhc0000gn/T/mac-ops-test/heavy-queue-tlc-ipfxo4sx -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /private/var/folders/4d/l9996sv53p7dl4l5x5y0skhc0000gn/T/mac-ops-test/heavy-queue-tlc-ipfxo4sx/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
