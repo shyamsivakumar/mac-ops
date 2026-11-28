@@ -562,6 +562,14 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
+    if verdict in ("PASS", "FAIL"):
+        settle_read_gate(gate["threadId"], ledger)
+
+
+def settle_read_gate(thread, ledger):
+    key = f"gate-settled:{thread}"
+    if not DRY and key not in ledger and settle_dead_run(thread):
+        ledger[key] = "settled"
 
 
 def gate_score_on(repo, number):

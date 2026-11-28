@@ -1989,6 +1989,37 @@ def worktree_base_ref():
     exact(fill(launch, {"message": "brief"}), {"message": "brief"})
 
 
+def gate_settle():
+    import lane_driver as lane
+    calls, outcomes = [], []
+
+    def t3(tool, args):
+        calls.append((tool, args["threadId"], args["action"]))
+        if outcomes and outcomes.pop(0):
+            raise subprocess.CalledProcessError(1, ["t3mcp"], output="down")
+        return {}
+
+    def verdict(name, ledger, dry=False):
+        with patch.object(lane, "t3", t3), patch.object(lane, "journal_event"), patch.object(lane, "DRY", dry):
+            lane.journal_verdict("o/r", 1, "a" * 40, name, {"threadId": "T"}, ledger)
+
+    settle = [("t3_thread_organize", "T", "settle")]
+    ledger = {}
+    verdict("PASS", ledger)
+    verdict("PASS", ledger)
+    exact(calls, settle)
+    calls.clear()
+    ledger, outcomes[:] = {}, [True]
+    verdict("FAIL", ledger)
+    exact("gate-settled:T" in ledger, False)
+    verdict("FAIL", ledger)
+    exact((calls, "gate-settled:T" in ledger), (settle * 2, True))
+    calls.clear()
+    for name, dry in (("SPLIT", False), ("PASS", True)):
+        verdict(name, {}, dry)
+    exact(calls, [])
+
+
 def gate_round_cap():
     """The convergence rule in the lane: three failed reviews, then one item.
 
@@ -6571,7 +6602,7 @@ def held_merge():
         exact(os.listdir(queue_dir), [])
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-settle": gate_settle, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
 
 
 def main():
