@@ -588,6 +588,7 @@ def gate_pipeline():
     completion_boundary()
     main_update_boundary()
     gatekeep_retarget()
+    gatekeep_single_pr()
 
 
 def merged_restart():
@@ -2437,7 +2438,7 @@ def gatekeep_retarget():
              contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             settings = Path(scratch) / "gatekeep-config.json"
             settings.write_text(json.dumps({"repos": {repo: {"key": "FIX", "projectId": "fixture"}}}))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False, pr=None))
         return json.loads(Path(scratch, "queue.json").read_text())
 
     with tempfile.TemporaryDirectory() as scratch:
@@ -2445,6 +2446,73 @@ def gatekeep_retarget():
         exact([item["args"]["clientRequestId"] for item in queue["items"]], [f"{plain}:other"])
         exact(list(queue["gatedHeads"]), [f"{plain}:other"])
         exact(len(gatekeep(scratch)["items"]), 1)
+
+
+def gatekeep_single_pr():
+    """`coordq gatekeep --pr` gates one pull request through the full pass's path.
+
+    The single run reads that pull request alone, queues its gate under the
+    same key, and leaves the other open pull request and the stuck report
+    alone. A full pass over the same repo gates both.
+    """
+    coordq = load_coordq()
+    repo = "shyamsivakumar/mac-ops"
+    prs = {n: {"draft": False, "number": n, "head": {"sha": c * 40}, "body": f"Refs #10\nBuilder check: PASS {c * 40}\n",
+               "changed_files": 1, "base": {"ref": "main"}} for n, c in ((20, "a"), (21, "b"))}
+    receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+    comment = {"user": {"login": "me"}, "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
+    receipts = {"req-1": "builder-1", "base:gate": "main"}
+    reads = []
+
+    class Run:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["gh", "api", "user"]:
+            return Run("me\n")
+        endpoint = argv[-1]
+        reads.append(endpoint)
+        if endpoint == f"repos/{repo}/pulls?state=open&per_page=100":
+            return Run(json.dumps([list(prs.values())]))
+        if endpoint in (f"repos/{repo}/pulls/20", f"repos/{repo}/pulls/21"):
+            return Run(json.dumps(prs[int(endpoint[-2:])]))
+        if endpoint == f"repos/{repo}/issues/10/comments?per_page=100":
+            return Run(json.dumps([[comment]]))
+        if endpoint.endswith("/statuses?per_page=100") or endpoint.endswith("/files?per_page=100"):
+            return Run("[[]]")
+        raise AssertionError(f"unexpected read: {endpoint}")
+
+    def gatekeep(only, dry_run=False):
+        reads.clear()
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(coordq, "DIR", scratch), \
+             patch.object(coordq, "LANE_LEDGER", str(Path(scratch) / "lanes-ledger.json")), \
+             patch.object(coordq, "load_receipts", lambda: receipts), \
+             patch.object(coordq.gh_gateway, "run", run), \
+             patch.object(coordq.gh_gateway, "remaining_or_none", return_value=None), \
+             patch.object(coordq, "read_builder_thread", return_value=({"providerInstanceId": "fixture", "model": "m"}, [])), \
+             patch.object(coordq, "router_chain", return_value=[]), \
+             patch.object(coordq, "gate_proof", return_value=("none", "", "path")), \
+             patch.object(coordq, "gate_prompt_state", return_value=coordq.prompt_paths.CLEAR), \
+             patch.object(coordq, "backstop_model", return_value={"instanceId": "fixture", "model": "m"}), \
+             patch.object(coordq, "gate_args", lambda settings, r, issue, number, head, *rest, **kw: {
+                 "clientRequestId": f"gate:{r}#{number}:{head}", "modelSelection": {"instanceId": "fixture", "model": "m"}, "title": "t"}), \
+             patch.object(coordq.model_list, "is_blocked", return_value=False), \
+             contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            Path(scratch, "lanes-ledger.json").write_text("{}")
+            settings = Path(scratch) / "gatekeep-config.json"
+            settings.write_text(json.dumps({"repos": {repo: {"key": "MO", "projectId": "fixture"}}}))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=dry_run, pr=only))
+            queue = Path(scratch, "queue.json")
+            return list(json.loads(queue.read_text())["gatedHeads"]) if queue.exists() else []
+
+    exact(gatekeep(f"{repo}#21"), [f"gate:{repo}#21:{'b' * 40}"])
+    exact(f"repos/{repo}/pulls?state=open&per_page=100" in reads, False)
+    exact(gatekeep(f"{repo}#21", dry_run=True), [])
+    exact(sorted(gatekeep(None)), sorted(f"gate:{repo}#{n}:{c * 40}" for n, c in ((20, "a"), (21, "b"))))
 
 
 def gatekeep_round_cap():
@@ -2501,7 +2569,7 @@ def gatekeep_round_cap():
             Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
             settings = Path(scratch) / "gatekeep-config.json"
             settings.write_text(json.dumps(config))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False, pr=None))
             queue = json.loads(Path(scratch, "queue.json").read_text())
         return queue, errors.getvalue()
 
@@ -4578,7 +4646,7 @@ def credit_block():
             Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [], "gatedHeads": {key: 1}}))
             Path(scratch, "dispatch-receipts.json").write_text(json.dumps({key: "gate"}))
             Path(scratch, "gatekeep-config.json").write_text(json.dumps({"repos": {}}))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(Path(scratch, "gatekeep-config.json")), dry_run=False))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(Path(scratch, "gatekeep-config.json")), dry_run=False, pr=None))
             queue = json.loads(Path(scratch, "queue.json").read_text())
             return queue["items"], blocked(scratch), Path(scratch, "dispatch.log").read_text() if Path(scratch, "dispatch.log").exists() else ""
 
@@ -4936,7 +5004,7 @@ def close_evidence():
                 stack.enter_context(patcher)
             settings = Path(scratch) / "gatekeep-config.json"
             settings.write_text(json.dumps({"repos": {mac_ops: {"key": "MO", "projectId": "fixture", "proofRequired": True, "proofOnOpen": True}}}))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False, pr=None))
             gated = len(coordq.load().get("items", []))
         return gated, cards, rows.count("scope_checked"), counts
 
@@ -5016,7 +5084,7 @@ def close_evidence():
 
         def gatekeep(dry=False):
             before = len(world["ran"])
-            coordq.cmd_gatekeep(argparse.Namespace(config=world["config"], dry_run=dry))
+            coordq.cmd_gatekeep(argparse.Namespace(config=world["config"], dry_run=dry, pr=None))
             return len(coordq.load().get("items", [])), len(world["ran"]) - before
 
         with tempfile.TemporaryDirectory() as scratch, contextlib.ExitStack() as stack:
