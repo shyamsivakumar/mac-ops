@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import argparse, fcntl, glob, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
+import argparse, contextlib, fcntl, glob, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +33,7 @@ gh_gateway.set_runner(lambda: subprocess.run)
 gh_gateway.set_etag_dir(lambda: DIR)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+GATE_ACT = os.environ.get("COORDQ_GATE_ACT", "")
 DECISIONS_PATH = os.environ.get(
     "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -165,6 +167,26 @@ def note_slots(queue, live_count):
     save(queue)
     journal.emit("slots", "coordq", live=triple[0], reserved=triple[1], cap=triple[2],
                  over_cap=triple[0] + triple[1] > triple[2])
+
+
+GATE_PHASES = {}
+LIST_WORKERS = 6
+
+
+@contextlib.contextmanager
+def timed(phase):
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        GATE_PHASES[phase] = GATE_PHASES.get(phase, 0) + time.monotonic() - start
+
+
+def timing_line(total):
+    phases = ["pr_list", "pr_reads", "scope", "proof", "queue"]
+    spent = {name: GATE_PHASES.get(name, 0) for name in phases}
+    spent["other"] = max(total - sum(spent.values()), 0)
+    return "gatekeep timing: " + " ".join(f"{name}={seconds:.1f}s" for name, seconds in [("total", total), *spent.items()])
 
 
 def stamped(text):
@@ -520,6 +542,22 @@ def with_rules(args, rules):
     return {**args, "message": f"## Agent rules\n\n{rules}\n\n## Brief\n\n{args['message']}"}
 
 
+def unsettle_before_send(thread_id):
+    code, out = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+    if code:
+        log(f"thread {thread_id} not read before the send: {out[:200]}")
+        return
+    try:
+        settled = bool((json.loads(out).get("thread") or {}).get("settled"))
+    except (ValueError, AttributeError):
+        log(f"thread {thread_id} read before the send is not JSON")
+        return
+    if settled:
+        code, out = t3_call("t3_thread_organize", {"threadId": thread_id, "action": "unsettle"})
+        if code:
+            log(f"thread {thread_id} not unsettled before the send: {out[:200]}")
+
+
 def call(tool, args, rules=None):
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
@@ -532,6 +570,8 @@ def call(tool, args, rules=None):
             args = with_rules(args, rules)
     args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
+    if tool == "t3_thread_send" and args.get("threadId"):
+        unsettle_before_send(args["threadId"])
     return t3_call(tool, args)
 
 
@@ -1020,6 +1060,8 @@ def drain():
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
+                if GATE_ACT and receipts.get("brief:" + thread_id) == "lane-merges":
+                    watch_gate(request_id.split(":")[1], thread_id)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
             record_started(queue, item, started_thread(queue, item, reservation))
             if item.get("actionKey"):
@@ -3155,11 +3197,24 @@ def gate_candidates(config, rounds=None):
     rounds = rounds or {}
     skipped = set()
     noted = set()
+    def read_pulls(repo):
+        try:
+            if only:
+                return gh_json(f"repos/{repo}/pulls/{only[1]}", fresh=True), None
+            return gh_json(f"repos/{repo}/pulls?state=open&per_page=100"), None
+        except Exception as e:
+            return None, e
+
+    scanned = [only[0]] if only else list(config["repos"])
+    with timed("pr_list"), ThreadPoolExecutor(max_workers=LIST_WORKERS) as pool:
+        pulls = dict(zip(scanned, pool.map(read_pulls, scanned)))
     for repo, settings in config["repos"].items():
-        if only and repo != only[0]:
+        if repo not in pulls:
             continue
-        for pr in (gh_json(f"repos/{repo}/pulls/{only[1]}", fresh=True) if only
-                   else gh_json(f"repos/{repo}/pulls?state=open&per_page=100")):
+        prs, error = pulls[repo]
+        if error:
+            raise error
+        for pr in prs:
             if pr["draft"] or pr.get("state", "open") != "open":
                 continue
             head, number = pr["head"]["sha"], pr["number"]
@@ -3180,7 +3235,8 @@ def gate_candidates(config, rounds=None):
                 if gate_thread_to_judge(queue, gated_key, receipts) is None:
                     continue
             if settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench"):
-                state = publisher_state(publisher_checks(repo, head))
+                with timed("pr_reads"):
+                    state = publisher_state(publisher_checks(repo, head))
                 if state != "success":
                     print(stamped(f"skip {repo}#{number}: srw/agent-check is {state}, no gate queued"),
                           file=sys.stderr)
@@ -3192,7 +3248,8 @@ def gate_candidates(config, rounds=None):
             for issue in dict.fromkeys(refs):
                 ledger = []
                 try:
-                    comments = gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100")
+                    with timed("pr_reads"):
+                        comments = gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100")
                 except GhReadError as e:
                     reason = unreadable_ticket_reason(e, issue, body, pr.get("title") or "")
                     print(stamped(f"skip {repo}#{number}: Refs #{issue} cannot be read ({reason})"),
@@ -3249,7 +3306,8 @@ def gate_candidates(config, rounds=None):
                                       f"{model['instanceId']} {model['model']}"), file=sys.stderr)
                         noted.add((repo, number))
                 # The gatekeep scan is optional polling: the floor applies.
-                checks = publisher_checks(repo, head)
+                with timed("pr_reads"):
+                    checks = publisher_checks(repo, head)
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
                 if publisher:
                     passed = publisher_state(checks) == "success"
@@ -3258,9 +3316,11 @@ def gate_candidates(config, rounds=None):
                 if not passed:
                     continue
                 key = gated_key
-                proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
-                prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
-                                           (pr.get("base") or {}).get("ref"), head)
+                with timed("proof"):
+                    proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
+                with timed("pr_reads"):
+                    prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                                               (pr.get("base") or {}).get("ref"), head)
                 if prompt == prompt_paths.UNKNOWN:
                     print(stamped(f"skip {repo}#{number}: changed files unreadable, gate deferred"),
                           file=sys.stderr)
@@ -3279,7 +3339,8 @@ def gate_candidates(config, rounds=None):
                                          | {"clientRequestId": key}}
                 break
             else:
-                found = gate_request(repo, pr, settings, config, receipts, login)
+                with timed("pr_reads"):
+                    found = gate_request(repo, pr, settings, config, receipts, login)
                 if found is DEFER:
                     print(stamped(f"skip {repo}#{number}: changed files unreadable, gate deferred"),
                           file=sys.stderr)
@@ -3315,6 +3376,7 @@ def cmd_gatekeep(a):
     if remaining and min(remaining.values()) < FLOOR:
         print(stamped(f"gatekeep skipped: below the API floor {FLOOR} {remaining}"), flush=True)
         return
+    started = time.monotonic()
     try:
         only = parse_ref(a.pr) if getattr(a, "pr", None) else None
         if only and only[0] not in config["repos"]:
@@ -3377,10 +3439,13 @@ def cmd_gatekeep(a):
                 continue
             repo_name, pr_number = event["pr"].rsplit("#", 1)
             settings = config.get("repos", {}).get(repo_name, {})
-            if event.get("scopeIssue") and not scope_gate(settings, repo_name, pr_number, event, key, a.dry_run):
+            with timed("scope"):
+                scoped = not event.get("scopeIssue") or scope_gate(settings, repo_name, pr_number, event, key, a.dry_run)
+            if not scoped:
                 continue
             if settings.get("proofOnOpen") and event.get("scopeIssue"):
-                proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run, ran)
+                with timed("proof"):
+                    proof = proof_gate(settings, repo_name, pr_number, event, key, a.dry_run, ran)
                 if proof is None:
                     continue
                 args["message"] += proof
@@ -3391,7 +3456,7 @@ def cmd_gatekeep(a):
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
             if dead is not None and not a.dry_run:
                 block_quota_provider(thread_selection(dead[1]), dead[1], key)
-            with model_list.blocked_lock(), Lock(True):
+            with timed("queue"), model_list.blocked_lock(), Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
                 if key in attempted:
@@ -3477,6 +3542,21 @@ def cmd_gatekeep(a):
         print(stamped(f"gatekeep skipped: {e}"), flush=True)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
         die(stamped(f"gatekeep stopped: {e}"))
+    finally:
+        print(stamped(timing_line(time.monotonic() - started)), flush=True)
+
+
+def watch_gate(ref, thread_id):
+    """Start the lane's check for a pull request once its gate thread ends.
+
+    The lane merges on a PASS only in its own pass, so without this the
+    merge waits for that pass's timer after the verdict. A watcher that
+    cannot start leaves the scheduled pass to merge, as before."""
+    try:
+        subprocess.Popen([GATE_ACT, "act", ref, "--after", thread_id], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        log(f"no watcher for {ref}: {e}")
 
 
 def load_counts():

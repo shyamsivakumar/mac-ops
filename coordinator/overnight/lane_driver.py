@@ -223,6 +223,50 @@ def settle_dead_run(thread_id):
     return True
 
 
+IDLE_SETTLE_AFTER_SECS = 900
+IDLE_SETTLE_UNTIL_SECS = 3600
+IDLE_SETTLE_PER_PASS = 25
+
+
+def idle_completed_threads():
+    now = time.time()
+    found = []
+    cursor = None
+    while True:
+        args = {"allProjects": True, "statuses": ["completed"], "settled": False, "limit": 100}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = t3("t3_thread_list", args)
+        if not isinstance(page, dict) or not isinstance(page.get("threads"), list):
+            print("IDLE-SETTLE refused: invalid thread list")
+            return []
+        for thread in page["threads"]:
+            idle = now - local_datetime.fromisoformat(thread["updatedAt"].replace("Z", "+00:00")).timestamp()
+            held = thread.get("pinned") or thread.get("blockedOnThreadWait") or thread.get("pendingBackgroundTasks")
+            if IDLE_SETTLE_AFTER_SECS <= idle <= IDLE_SETTLE_UNTIL_SECS and not held and "ascend" not in thread["title"].lower():
+                found.append(thread)
+        cursor = page.get("nextCursor")
+        if cursor is None or page["threads"] and idle > IDLE_SETTLE_UNTIL_SECS:
+            return found
+
+
+def settle_idle_completed(ledger):
+    """Settle a completed T3 thread 15 minutes after its run, so Codex unloads it and closes its MCP servers.
+
+    Codex unloads a thread only when no client is subscribed, and T3 stays subscribed to a completed
+    thread until it is settled. Codex idle-evicts a thread after about 30 minutes, so threads idle
+    over an hour are already unloaded and are left as they are."""
+    for thread in idle_completed_threads()[:IDLE_SETTLE_PER_PASS]:
+        thread_id = thread["threadId"]
+        print(f"IDLE-SETTLE {thread_id}: completed and idle, settle")
+        if DRY:
+            continue
+        with item_boundary("t3", thread_id, ledger):
+            reply = t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+            if not (isinstance(reply, dict) and "sequence" in reply):
+                print(f"IDLE-SETTLE {thread_id}: refused ({str(reply)[:160]}); left for the next pass")
+
+
 def last_reply(thread_id):
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
     msgs = [i.get("text") or i.get("message") or "" for i in items
@@ -2684,6 +2728,7 @@ def dead_superseded(repo, thread, siblings):
 
 
 def recover_dead_runs(ledger):
+    settle_idle_completed(ledger)
     receipts = stall_receipts()
     for repo in LANE_REPOS:
         project_id = CFG[repo]["projectId"]

@@ -193,6 +193,10 @@ def main() -> int:
         if zoom < 1 or zoom > 8:
             return fail("the zoom has to be between 1 and 8")
 
+    if not (APP_HOME / "mods" / MOD).is_dir():
+        print(f"kpane: the {MOD} mod is not installed at {APP_HOME / 'mods' / MOD}", file=sys.stderr)
+        return 1
+
     try:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

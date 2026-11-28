@@ -2,7 +2,7 @@
 
 The panel is a Herdr mod, which Python cannot import, so the rules that
 bind an answer live in a module with no imports
-(`coordinator/mods/coordinator/answers.js`) and the mod uses it. These
+(`coordinator/rules/answers.js`) and the mod uses it. These
 tests run that module for real, with bun or node, and check the cases
 that matter: an answer for an alarm that was replaced is never sent, and
 an answer that was never bound to a cause acknowledges nothing.
@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RULES = ROOT / "coordinator/mods/coordinator/answers.js"
+RULES = ROOT / "coordinator/rules/answers.js"
 PANEL = ROOT / "coordinator/mods/coordinator/main.js"
 BUN = shutil.which("bun")
 NODE = shutil.which("node")
