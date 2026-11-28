@@ -605,6 +605,7 @@ def gate_pipeline():
     completion_boundary()
     main_update_boundary()
     gatekeep_retarget()
+    overnight_act()
     gatekeep_single_pr()
 
 
@@ -2388,6 +2389,7 @@ def gate_round_cap():
         exact(sorted(pruned), ["other", f"roundcap:{repo}#2"])
     gatekeep_round_cap()
     prereview_gate_cases()
+    prereview_findings_cases()
     publisher_status_outcomes()
 
 
@@ -2675,6 +2677,135 @@ def prereview_gate_cases():
             queue["prereviewHeads"] = {}
             coordq.save(queue)
         exact((gate(), coordq.load()["prereviewHeads"]), (True, {}))
+
+
+def prereview_findings_cases():
+    """The findings of a pre-review reach the builder once, and a pre-review that cannot be used never holds the gate."""
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    head = "d" * 40
+    key = f"prereview:{repo}#40:{head}"
+    sent_key = f"prereview-fix:{repo}#40:{head}"
+    state = {"reply": "1. a stalled voter is not handled\nPREREVIEW: FINDINGS", "running": False, "unreadable": False,
+             "build": "thread", "owner": ""}
+    sends, events, cards = [], [], []
+
+    def last_reply(thread):
+        if state["unreadable"]:
+            raise subprocess.CalledProcessError(1, ["t3mcp"])
+        return state["reply"]
+
+    def send(thread, message, title, ledger, lkey, **kwargs):
+        sends.append((thread, lkey, message))
+        ledger[lkey] = "sent"
+        return "sent"
+
+    def act(ledger, body="Refs #7", builder="builder-1"):
+        return lane.prereview_findings(repo, 40, head, body, builder, "evidence/MO-7/check-proof.md", ledger)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        receipts = Path(scratch, "receipts.json")
+        receipts.write_text(json.dumps({key: "review-1"}))
+        with patch.object(lane, "RECEIPTS", str(receipts)), \
+             patch.object(lane, "CFG", {repo: {"key": "MO", "build": state["build"]}}), \
+             patch.object(lane, "DRY", False), \
+             patch.object(lane, "last_reply", last_reply), \
+             patch.object(lane, "gate_in_flight", lambda thread: state["running"]), \
+             patch.object(lane, "send", send), \
+             patch.object(lane, "check_step", lambda *a: "run the check"), \
+             patch.object(lane, "message_title", lambda *a: "title"), \
+             patch.object(lane, "journal_event", lambda event, *a, **kw: events.append(event)), \
+             patch.object(lane, "publish_decision", cards.append):
+            state["running"] = True
+            exact((act({}), sends), (None, []))
+            state["running"] = False
+            ledger = {}
+            exact(act(ledger).startswith("#40 prereview fix: sent"), True)
+            exact((len(sends), sends[0][:2], "stalled voter" in sends[0][2], "PREREVIEW: FINDINGS" in sends[0][2]),
+                  (1, ("builder-1", sent_key), True, False))
+            exact((act(ledger), len(sends)), (None, 1))
+            for reply, reason in (("PREREVIEW: CLEAN", None), ("garbled", "prereview_skipped"), ("", "prereview_skipped")):
+                state["reply"], events[:] = reply, []
+                ledger = {}
+                exact((act(ledger), len(sends), events), (None, 1, [reason] if reason else []))
+            state["unreadable"], events[:] = True, []
+            ledger = {}
+            exact((act(ledger), len(sends), events), (None, 1, ["prereview_skipped"]))
+            exact((act(ledger), events), (None, ["prereview_skipped"]))
+            state["unreadable"] = False
+            receipts.write_text("{}")
+            exact((act({}), len(sends)), (None, 1))
+            receipts.write_text(json.dumps({key: "review-1"}))
+            state["reply"], events[:] = "x\nPREREVIEW: FINDINGS", []
+            with patch.object(lane, "CFG", {repo: {"key": "MO", "build": "here"}}), \
+                 patch.object(lane, "live_builder_thread", lambda builder: False):
+                ledger = {}
+                result = act(ledger, body="Refs #7\nOwner: t1j\n", builder=None)
+                exact((result, len(sends), cards, ledger[sent_key]), ("skip #40: t1j owns the branch, no board card", 1, [], "journaled"))
+                exact("prereview_findings" in events, True)
+                ledger = {}
+                result = act(ledger, body="Refs #7\n", builder=None)
+                exact((result.endswith("board card raised"), len(sends), len(cards), "x" in cards[0]["why"], ledger[sent_key]), (True, 1, 1, True, "card"))
+                exact((act(ledger, body="Refs #7\n", builder=None), len(cards)), (None, 1))
+            state["reply"], events[:] = "x\nPREREVIEW: FINDINGS", []
+            with patch.object(lane, "CFG", {repo: {"key": "MO", "build": "thread"}}):
+                ledger = {}
+                exact((act(ledger, builder=None), events.count("prereview_skipped"), act(ledger, builder=None), events.count("prereview_skipped"), len(sends)), (None, 1, None, 1, 1))
+
+
+def overnight_act():
+    """`overnight act` runs the lane's check for one pull request once its gate ends.
+
+    It waits for the gate thread, takes the shift lock, and calls the lane's
+    `act_on_pr` for that pull request only. STOP and a held lock leave the
+    work to the scheduled pass.
+    """
+    import lane_driver as lane
+    runner = load_runner()
+    repo = "shyamsivakumar/mac-ops"
+    calls = []
+
+    def act(root, stop=False, lock=True, stop_during_wait=False):
+        calls.clear()
+        statuses = iter(["running", "completed"])
+        (root / "run").mkdir(exist_ok=True)
+
+        def read(tool, a):
+            calls.append(tool)
+            if stop_during_wait:
+                (root / "run" / "STOP").write_text("")
+            return {"thread": {"status": next(statuses, "completed")}}
+
+        if stop:
+            (root / "run" / "STOP").write_text("")
+        (root / ".coordinator").mkdir(exist_ok=True)
+        (root / ".coordinator" / "tickets.json").write_text(json.dumps({"repos": {repo: {"key": "MO"}}}))
+        args = argparse.Namespace(ref=f"{repo}#7", after="thread-1", wait=900, root=str(root))
+        with patch.object(runner, "load_policy", return_value=({"repos": [repo]}, "")), \
+             patch.object(runner, "cycle_allow", return_value=[repo]), \
+             patch.object(runner, "take_shift_lock", return_value=(3, "") if lock else (None, "")), \
+             patch.object(runner, "release_shift_lock"), \
+             patch.object(runner.time, "sleep"), \
+             patch.object(runner.Path, "home", return_value=root), \
+             patch.object(lane, "t3", side_effect=read), \
+             patch.object(lane, "load_ledger", return_value={}), \
+             patch.object(lane, "save_ledger"), \
+             patch.object(lane, "board_snapshot", return_value={}), \
+             patch.object(lane, "act_on_pr", side_effect=lambda r, n, ledger: calls.append((r, n)) or "merged"), \
+             patch.object(lane, "print", create=True), \
+             patch.object(runner, "emit"), \
+             patch.object(lane, "LANE_REPOS", [repo]):
+            return runner.cmd_act(args)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        exact(act(Path(scratch)), 0)
+        exact(calls, ["t3_thread_read", "t3_thread_read", (repo, 7)])
+    with tempfile.TemporaryDirectory() as scratch:
+        exact((act(Path(scratch), stop=True), calls), (0, []))
+    with tempfile.TemporaryDirectory() as scratch:
+        exact((act(Path(scratch), stop_during_wait=True), [c for c in calls if isinstance(c, tuple)]), (0, []))
+    with tempfile.TemporaryDirectory() as scratch, patch.object(runner.time, "monotonic", side_effect=[0, 0, 1000, 1000, 1000]):
+        exact((act(Path(scratch), lock=False), [c for c in calls if isinstance(c, tuple)]), (0, []))
 
 
 def gatekeep_round_cap():

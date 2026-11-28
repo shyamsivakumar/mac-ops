@@ -1,7 +1,8 @@
 # How we build in this repo
 
 This page is the short version of what builders and reviewers expect.
-`scripts/finding_rules.json` checks the rules a grep can see.
+`scripts/finding_rules.json` checks the rules a grep can see. A rule matches only the lines the PR adds;
+set `"scope": "file"` on a rule to match the whole changed file.
 
 ## Branch and pull request
 

@@ -223,6 +223,50 @@ def settle_dead_run(thread_id):
     return True
 
 
+IDLE_SETTLE_AFTER_SECS = 900
+IDLE_SETTLE_UNTIL_SECS = 3600
+IDLE_SETTLE_PER_PASS = 25
+
+
+def idle_completed_threads():
+    now = time.time()
+    found = []
+    cursor = None
+    while True:
+        args = {"allProjects": True, "statuses": ["completed"], "settled": False, "limit": 100}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = t3("t3_thread_list", args)
+        if not isinstance(page, dict) or not isinstance(page.get("threads"), list):
+            print("IDLE-SETTLE refused: invalid thread list")
+            return []
+        for thread in page["threads"]:
+            idle = now - local_datetime.fromisoformat(thread["updatedAt"].replace("Z", "+00:00")).timestamp()
+            held = thread.get("pinned") or thread.get("blockedOnThreadWait") or thread.get("pendingBackgroundTasks")
+            if IDLE_SETTLE_AFTER_SECS <= idle <= IDLE_SETTLE_UNTIL_SECS and not held and "ascend" not in thread["title"].lower():
+                found.append(thread)
+        cursor = page.get("nextCursor")
+        if cursor is None or page["threads"] and idle > IDLE_SETTLE_UNTIL_SECS:
+            return found
+
+
+def settle_idle_completed(ledger):
+    """Settle a completed T3 thread 15 minutes after its run, so Codex unloads it and closes its MCP servers.
+
+    Codex unloads a thread only when no client is subscribed, and T3 stays subscribed to a completed
+    thread until it is settled. Codex idle-evicts a thread after about 30 minutes, so threads idle
+    over an hour are already unloaded and are left as they are."""
+    for thread in idle_completed_threads()[:IDLE_SETTLE_PER_PASS]:
+        thread_id = thread["threadId"]
+        print(f"IDLE-SETTLE {thread_id}: completed and idle, settle")
+        if DRY:
+            continue
+        with item_boundary("t3", thread_id, ledger):
+            reply = t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+            if not (isinstance(reply, dict) and "sequence" in reply):
+                print(f"IDLE-SETTLE {thread_id}: refused ({str(reply)[:160]}); left for the next pass")
+
+
 def last_reply(thread_id):
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
     msgs = [i.get("text") or i.get("message") or "" for i in items
@@ -1235,11 +1279,11 @@ def prompt_merge_item(repo, number, head, loop=False):
 OWNER_GRACE_HOURS = 6
 
 
-def herdr_build_card(repo, number, head, need):
+def herdr_build_card(repo, number, head, need, detail=""):
     key = CFG[repo]["key"]
     item = {"id": f"herdr-build-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": f"{key}-{number} needs work on head {head[:8]}: {need}. The Herdr session builds {repo}, so no builder thread was sent it.",
-            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch."}
+            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch." + detail}
     if not DRY:
         publish_decision(item)
     return f"#{number}: {repo} is built in the Herdr session, board card raised"
@@ -1799,6 +1843,53 @@ def closed_ticket_reason(repo, issue):
     return (row.get("stateReason") or "").lower()
 
 
+def prereview_findings(repo, number, head, body, builder, proof_path, ledger):
+    """Send the findings of a head's pre-review to its builder, once, before the gate.
+
+    A pre-review that is clean, unreadable or malformed holds nothing back:
+    it is journaled and the gate goes on. A pull request owned by a live
+    builder or an `Owner:` session gets the findings in the journal and no card.
+    """
+    sent = f"prereview-fix:{repo}#{number}:{head}"
+    thread = (json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}).get(f"prereview:{repo}#{number}:{head}")
+    if not thread or sent in ledger:
+        return None
+    try:
+        if gate_in_flight(thread):
+            return None
+        reply = last_reply(thread)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the pre-review could not be read")
+        return None
+    lines = [line.strip() for line in reply.splitlines()]
+    if "PREREVIEW: CLEAN" in lines:
+        if not DRY:
+            ledger[sent] = "clean"
+        return None
+    if "PREREVIEW: FINDINGS" not in lines:
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the reply has no PREREVIEW line")
+        return None
+    findings = "\n".join(line for line in reply.splitlines() if line.strip() != "PREREVIEW: FINDINGS")[-6000:]
+    journal_event("prereview_findings", repo, number, head, findings=findings)
+    if CFG[repo].get("build") == "here":
+        owned = owned_by_live_builder(repo, number, head, body, builder, ledger)
+        if owned:
+            if not DRY:
+                ledger[sent] = "journaled"
+            return owned
+        card = herdr_build_card(repo, number, head, "the pre-review listed failure paths", "\n\n" + findings)
+        if not DRY:
+            ledger[sent] = "card"
+        return card
+    if not builder:
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the findings have no builder thread to go to")
+        return None
+    msg = (f"The independent pre-review of PR #{number} at {head} listed failure paths. Fix each one that is real, "
+           f"{check_step(repo, proof_path)}, push, set "
+           "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n" + findings)
+    return f"#{number} prereview fix: " + send(builder, msg, message_title(repo, number, "pre-review findings", head), ledger, sent, pr_number=number)
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -1857,6 +1948,9 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+    findings = prereview_findings(repo, number, head, body, builder, proof_path, ledger)
+    if findings:
+        return findings
     base = pr.get("baseRefName") or "main"
     verdict, gate, reply = gate_verdict(repo, number, head, base, ledger)
     if closed and verdict != "PASS":
@@ -2634,6 +2728,7 @@ def dead_superseded(repo, thread, siblings):
 
 
 def recover_dead_runs(ledger):
+    settle_idle_completed(ledger)
     receipts = stall_receipts()
     for repo in LANE_REPOS:
         project_id = CFG[repo]["projectId"]
