@@ -243,6 +243,13 @@ def unpushed_commits(path: Path) -> int | None:
         return None
 
 
+def waived_reasons(row: dict[str, Any], reasons: list[str]) -> list[str]:
+    published = row["unpushed"] == 0 and row["remote_commit_present"] is True
+    if published and not row["detached"] and inside(Path(row["path"]), T3_WORKTREE_ROOT):
+        return [reason for reason in reasons if reason != "github_pr_not_closed_for_head"]
+    return reasons
+
+
 def categorize(row: dict[str, Any]) -> str:
     if row.get("removed"):
         return "removed"
@@ -583,7 +590,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         result["pull_request"] = pr_url
         if not ok and why:
             reasons.append(why)
-    result["reasons"] = sorted(set(reasons))
+    result["reasons"] = sorted(set(waived_reasons(result, reasons)))
     result["eligible"] = not result["reasons"]
     result["prunable"] = prunable(result, github)
     return result
