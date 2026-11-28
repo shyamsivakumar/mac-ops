@@ -19,6 +19,8 @@ class CapacityTests(unittest.TestCase):
         self.q.DIR = self.tmp.name
         self.q.live = lambda: 2
         self.q.cap = lambda: 6
+        self.q.active_thread_ids = lambda: set()
+        self.q.review_max = lambda: 3
         self.q.save({"next": 2, "items": [
             {"id": 1, "tool": "t3_thread_launch", "args": {},
              "priority": 0, "title": "queued"}]})
@@ -31,8 +33,8 @@ class CapacityTests(unittest.TestCase):
             self.q.refill(argparse.Namespace(dry_run=False))
             return start.call_count
 
-    def test_nonempty_queue_fills_only_three_slots_with_lagging_count(self):
-        self.assertEqual(self.refill(), 3)
+    def test_nonempty_queue_fills_only_two_slots_with_lagging_count(self):
+        self.assertEqual(self.refill(), 2)
 
     def test_six_used_starts_nothing(self):
         self.q.live = lambda: 5
@@ -59,32 +61,90 @@ class CapacityTests(unittest.TestCase):
              "priority": 0, "title": "burst"} for n in range(1, 31)]})
         self.q.live = lambda: 0
 
+    def queue_burst(self, key=lambda n: f"ticket:o/r#{n}:a1"):
+        self.q.save({"next": 31, "items": [
+            {"id": n, "tool": "t3_thread_launch", "args": {"clientRequestId": key(n)},
+             "priority": 0, "title": "burst"} for n in range(1, 31)]})
+        self.q.live = lambda: 0
+
     def test_burst_with_stale_total_and_individual_visibility(self):
-        self.queue_sends()
+        self.queue_burst()
         visible = set()
         started = []
         def start(tool, args, rules=None):
-            started.append(args["threadId"])
-            self.assertLessEqual(len(visible) + len(self.q.load()["reserved"]), 6)
-            return 0, "{}"
-        with patch.object(self.q, "active_thread_ids", side_effect=lambda: set(visible)), patch.object(self.q, "call", side_effect=start):
+            started.append(f"t{len(started) + 1}")
+            self.assertLessEqual(len(visible) + len(self.q.load()["reserved"]), 5)
+            return 0, json.dumps({"threadId": started[-1]})
+        with patch.object(self.q, "active_thread_ids", side_effect=lambda: set(visible)), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(self.q, "call", side_effect=start):
             self.q.drain()
-            self.assertEqual(len(started), 6)
+            self.assertEqual(len(started), 5)
             for thread in started[:]:
                 visible.add(thread)
                 self.q.drain()
-                self.assertEqual(len(started), 6)
-                self.assertEqual(len(visible) + len(self.q.load()["reserved"]), 6)
+                self.assertEqual(len(started), 5)
+                self.assertEqual(len(visible) + len(self.q.load()["reserved"]), 5)
 
     def test_expired_reservation_does_not_block(self):
-        self.queue_sends()
+        self.queue_burst()
         data = self.q.load()
         data["reserved"] = {"old": self.q.time.time() - 601}
         self.q.save(data)
-        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(self.q, "call", return_value=(0, "{}")) as start:
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(
+                self.q, "call", return_value=(0, json.dumps({"threadId": "t"}))) as start:
             self.q.drain()
-        self.assertEqual(start.call_count, 6)
+        self.assertEqual(start.call_count, 5)
         self.assertNotIn("old", self.q.load()["reserved"])
+
+    def test_sends_hold_no_slot(self):
+        self.queue_sends()
+        with patch.object(self.q, "active_thread_ids", return_value={str(n) for n in range(6)}), patch.object(
+                self.q, "call", return_value=(0, "{}")) as start:
+            self.q.live = lambda: 6
+            self.q.drain()
+        self.assertEqual(start.call_count, 30)
+
+    def run_drain(self, live_builds=0, reviews=()):
+        threads = {f"b{n}" for n in range(live_builds)} | {f"r{n}" for n in range(len(reviews))}
+        Path(self.tmp.name, "dispatch-receipts.json").write_text(json.dumps({f"gate:o/r#{n}:{'a' * 40}": f"r{n}" for n in range(len(reviews))}))
+        self.q.live = lambda: len(threads)
+        started = []
+        def start(tool, args, rules=None):
+            started.append(args["clientRequestId"])
+            self.assertLessEqual(len(threads) + len(self.q.load()["reserved"]), 6)
+            return 0, json.dumps({"threadId": f"new{len(started)}"})
+        with patch.object(self.q, "active_thread_ids", return_value=threads), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(self.q, "call", side_effect=start):
+            self.q.drain()
+        return started
+
+    def test_reviews_do_not_starve_builds(self):
+        self.queue_burst(lambda n: f"gate:o/r#{n}:{'a' * 40}" if n <= 10 else f"ticket:o/r#{n}:a1")
+        data = self.q.load()
+        for item in data["items"]:
+            item["priority"] = 5000 if item["args"]["clientRequestId"].startswith("gate:") else 0
+        data["items"] = data["items"][:15]
+        self.q.save(data)
+        started = self.run_drain()
+        self.assertEqual(len([k for k in started if k.startswith("gate:")]), 3)
+        self.assertEqual(len([k for k in started if k.startswith("ticket:")]), 3)
+
+    def test_builds_do_not_starve_reviews(self):
+        self.queue_burst(lambda n: "ticket:o/r#1:a1" if n > 1 else f"gate:o/r#1:{'a' * 40}")
+        data = self.q.load()
+        data["items"] = [{**item, "priority": 0 if item["id"] == 1 else 100} for item in data["items"][:3]]
+        self.q.save(data)
+        started = self.run_drain(live_builds=5)
+        self.assertEqual(started, [f"gate:o/r#1:{'a' * 40}"])
+
+    def test_no_head_of_line_block(self):
+        pre = {"tool": "t3_thread_launch", "args": {"clientRequestId": "ticket:o/r#9:a1"}}
+        self.q.save({"next": 3, "items": [
+            {"id": 1, "tool": "t3_thread_launch", "args": {"clientRequestId": "ticket:o/r#1:a1"}, "pre": [pre], "priority": 9, "title": "two"},
+            {"id": 2, "tool": "t3_thread_launch", "args": {"clientRequestId": "ticket:o/r#2:a1"}, "priority": 0, "title": "one"}]})
+        started = self.run_drain(live_builds=4, reviews=(1,))
+        self.assertEqual(started, ["ticket:o/r#2:a1"])
 
     def test_failed_start_releases_reservation(self):
         self.queue_sends()
@@ -344,7 +404,7 @@ class CapacityTests(unittest.TestCase):
                 self.q, "thread_status", return_value="running"), patch.object(
                 self.q, "call", side_effect=start):
             self.q.drain()
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 5)
 
     def test_launch_without_thread_id_keeps_its_reservation(self):
         self.queue_launch()

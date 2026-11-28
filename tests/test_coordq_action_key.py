@@ -29,8 +29,8 @@ class ActionKeyTests(unittest.TestCase):
         self.q = load_coordq()
         self.q.DIR = self.tmp.name
         self.q.cap = lambda: 6
-        # The queue is full, so a started item stays queued and the proof
-        # reads the item the start wrote.
+        # A start only queues here, so the proof reads the item the start
+        # wrote; a send holds no slot and would otherwise go out at once.
         self.q.live = lambda: 6
         self.q.save({"next": 1, "items": []})
 
@@ -38,7 +38,7 @@ class ActionKeyTests(unittest.TestCase):
         args = argparse.Namespace(args=payload, title=None, priority=800,
                                   tool="t3_thread_send", action_key=key)
         out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        with redirect_stdout(out), redirect_stderr(err), patch.object(self.q, "drain"):
             try:
                 self.q.cmd_start(args)
             except SystemExit as e:

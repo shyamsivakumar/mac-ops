@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, glob, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
+import argparse, collections, fcntl, glob, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, signal, subprocess, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -56,6 +56,8 @@ TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_
 # A launch learns its thread only after the call, so its reservedThreads record
 # carries this prefix and reconcile knows the thread may not be listed live yet.
 LAUNCH_RECORD = "launch:"
+REVIEW_PREFIXES = ("gate:", "prereview:")
+REVIEW_RESERVE = 1
 # One message is one item. A started item is recorded for this long, so the
 # same message is refused while the thread that took it still works it, while
 # a message the board asks for again after its thread stopped still goes out.
@@ -179,6 +181,40 @@ def log(message):
 def cap():
     with open(path("config.json")) as f:
         return json.load(f)["cap"]
+
+
+def review_max():
+    with open(path("config.json")) as f:
+        return json.load(f).get("reviewMax", 3)
+
+
+def slot_limit(kind):
+    return cap() - REVIEW_RESERVE if kind == "build" else min(review_max(), cap())
+
+
+def launch_class(args):
+    return "review" if str(args.get("clientRequestId") or "").startswith(REVIEW_PREFIXES) else "build"
+
+
+def item_costs(item):
+    steps = item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]
+    return collections.Counter(launch_class(step["args"]) for step in steps if step["tool"] == "t3_thread_launch")
+
+
+def reserved_costs(queue):
+    threads = queue.get("reservedThreads") or {}
+    classes = queue.get("reservedClass") or {}
+    return collections.Counter(classes.get(key, "build") for key in queue["reserved"]
+                               if not threads.get(key) or str(threads[key]).startswith(LAUNCH_RECORD))
+
+
+def review_threads(active):
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except FileNotFoundError:
+        return set()
+    return {thread for key, thread in receipts.items() if key.startswith(REVIEW_PREFIXES) and thread in active}
 
 
 def proofs_per_run():
@@ -871,6 +907,7 @@ def reconcile_reservations(queue, active, statuses=None, snapshot=None):
                          status=known[thread])
         reserved.pop(key)
         threads.pop(key, None)
+        queue.get("reservedClass", {}).pop(key, None)
         released += 1
     if released:
         save(queue)
@@ -936,10 +973,14 @@ def drain():
         if not ready:
             return
         n = max(n, len(active))
-        if n + len(queue["reserved"]) >= cap():
-            log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
+        reviews = len(review_threads(active))
+        used = collections.Counter({"review": reviews, "build": max(n - reviews, 0)}) + reserved_costs(queue)
+        fits = lambda i: not item_costs(i) or (sum(used.values()) + sum(item_costs(i).values()) <= cap()
+                                               and all(used[kind] + count <= slot_limit(kind) for kind, count in item_costs(i).items()))
+        item = next((i for i in ready if fits(i)), None)
+        if item is None:
+            log(f"at cap {sum(used.values())}/{cap()} (builds {used['build']}, reviews {used['review']}), {len(ready)} waiting")
             return
-        item = ready[0]
         try:
             steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
                      for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
@@ -956,11 +997,9 @@ def drain():
                 return
         reservation = str(item["id"])
         keys = [f"{reservation}:pre:{time.time_ns()}:{i}" for i in range(len(steps) - 1)] + [reservation]
-        if n + len(queue["reserved"]) + len(steps) > cap():
-            log(f"waiting for {len(steps)} slots for #{item['id']}")
-            return
         for key, step in zip(keys, steps):
             queue["reserved"][key] = time.time()
+            queue.setdefault("reservedClass", {})[key] = launch_class(step["args"])
             if step["tool"] == "t3_thread_send":
                 queue["reservedThreads"][key] = step["args"]["threadId"]
         if item.get("actionKey"):
@@ -1821,14 +1860,23 @@ def unchanged_refusal(refusals, key, state, now):
     return prior
 
 
-def used_slots():
-    """The live threads plus the queued items, or None when the count is
-    unreadable. The queue counts, because a queued item already holds a
-    slot."""
+def used_slots(kind=None):
+    """The live threads plus the queued launches, or None when the count is
+    unreadable. The queue counts, because a queued launch already holds a
+    slot. A send holds none. With `kind`, only that class counts."""
     n = live()
     if n is None:
         return None
-    return n + len(load()["items"])
+    queued = collections.Counter()
+    for item in load()["items"]:
+        queued += item_costs(item)
+    if kind is None:
+        return n + sum(queued.values())
+    active = live_thread_ids()
+    if active is None:
+        return None
+    reviews = len(review_threads(active))
+    return (reviews if kind == "review" else max(n - reviews, 0)) + queued[kind]
 
 
 def refill(a):
@@ -1858,6 +1906,11 @@ def refill(a):
         limit = cap()
         if n >= limit:
             log(f"refill skipped: at cap {n}/{limit}")
+            return
+        build_limit = slot_limit("build")
+        builds = used_slots("build")
+        if builds is None or builds >= build_limit:
+            log(f"refill skipped: builds at {builds}/{build_limit}")
             return
         last = last_refill()
         if last is not None and time.time() - last < REFILL_INTERVAL:
@@ -1909,8 +1962,12 @@ def refill(a):
             # behind it, so the slots this refill filled count too. The higher
             # of the two counts wins, so a slow count never starts too many.
             used = max(used, n + filled)
-            if used >= limit:
-                log(f"refill stopped: the slots are full ({used}/{limit})")
+            built = used_slots("build")
+            if built is None:
+                log("refill stopped: cannot read the live thread count")
+                break
+            if used >= limit or max(built, builds + filled) >= build_limit:
+                log(f"refill stopped: the slots are full ({used}/{limit}, builds {built}/{build_limit})")
                 break
             number = candidate["number"]
             code, out = ticket_start(repo, number, a.dry_run, bool(active) or started.get(repo, 0) > 0)
