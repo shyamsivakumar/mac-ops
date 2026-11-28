@@ -1,4 +1,4 @@
-# MO-1332 proof runs (Refs #1080)
+# MO-1332 proof runs (Refs #1138)
 
 ## Red on origin/main (906862ac): head proof.sh and head test file against main code
 ```
@@ -64,3 +64,12 @@ refs/heads/work2
 Ran 31 tests in 11.342s
 OK
 ```
+
+## Replacement ticket
+
+#1138 replaces #1080. The #1080 proof command checked `push_protected` is
+`deny`, but the design changed: `push_protected` stays `ask` and the new family
+`push_personal` is `deny`. The #1138 proof command checks `push_personal` is
+`deny` and `scripts/hooks/pre-push` is executable. On `origin/main` it prints
+`None` and exits 1. On this branch it prints `deny` and exits 0, with
+`HOME=$(mktemp -d)`.
