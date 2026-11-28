@@ -262,6 +262,9 @@ OWNER_IDS = re.compile(
     r"|lane-gate-rounds-shyamsivakumar-mac-ops-\d+|.+-MO-\d+")
 
 
+OWNER_SESSION = "t1j"
+
+
 PRODUCER_OWNED = re.compile(
     r"lane-gate-rounds-.+|prompt-merge-.+|lane-close-failed-.+|lane-merged-unreviewed-.+"
     r"|merge-pass-stuck-.+|factory-watchdog|factory-zero-merge"
@@ -287,13 +290,15 @@ def board_for(decisions, alarm_id):
 def route_update(decisions, alarm_id, action, item=None):
     """board_update on the board the id belongs to, clearing any stale copy.
 
-    An owner item is raised or removed on the owner board, and the same id
+    An owner item is raised or removed on the owner board (a raised item
+    without an owner is owned by the mac-ops session), and the same id
     is taken off the decisions board when it is still there. Return
     "wrote" or "failed"."""
     target = board_for(decisions, alarm_id)
     if target == Path(decisions):
         return board_update(decisions, alarm_id, action, item)
-    if board_update(target, alarm_id, action, item, create=True) != "wrote":
+    owned = {"owner": OWNER_SESSION, **item} if item else item
+    if board_update(target, alarm_id, action, owned, create=True) != "wrote":
         return "failed"
     return clear_stale(decisions, alarm_id)
 

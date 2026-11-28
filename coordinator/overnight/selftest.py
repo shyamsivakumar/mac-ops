@@ -674,6 +674,7 @@ def merged_restart():
                 exact("scope: pass" in why or "cost note" in why, False)
             if board == "owner":
                 exact("no gate attempt for this head has a recorded base" in owner[0]["why"], True)
+                exact(owner[0].get("owner"), "t1j")
                 exact("(ticket MO-10)" in owner[0]["title"], True)
             if board == "ff-failed":
                 exact(ledger[f"after-merge:{repo}#20:{head}"], "closed")
@@ -1555,7 +1556,7 @@ def zero_merge_fixture(scratch):
         state.update(json.loads(json.dumps(value)))
     # The alarm's key names the repos that are waiting, so a stall on one
     # repo does not silence a stall on another. The title stays one title.
-    alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
+    alert = {"owner": "t1j", "id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
         "title": "No merge in 60 minutes with open PRs",
         "cause": "No merge in 60 minutes with open PRs: fixture/one",
         "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
