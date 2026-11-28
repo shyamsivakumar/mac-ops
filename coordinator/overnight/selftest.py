@@ -128,7 +128,7 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    for kind, label, expected in [("standard", None, "task/standard"), ("risky", None, "task/risky"),
+    for kind, label, expected in [("standard", None, "task/standard"), ("risky", None, "gpt-6.2-sol"),
                                   ("chore", "cursor", "default"), ("chore", "kimi", "task/standard")]:
         item = dict(board[3], type=kind, builder=label, reviewer=None)
         builder, reviewer = ticket.resolve_models(cfg, item)
@@ -159,13 +159,13 @@ def start_routing():
     exact(ticket.label_problems(labels_cfg, {"stage": ["todo"], "type": ["standard"],
                                              "priority": ["1"], "builder": ["kimi"], "reviewer": []}), [])
     morph = {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}
-    for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["cursor", "sol"])]:
+    for kind, walk in [("standard", ["cursor", "terra"]), ("risky", ["sol", "neon", "cursor"])]:
         blocked = set(morph)
         for expected_id in walk:
             exact(lane.model_list.first_available("build", None, blocked, kind)["id"], expected_id)
             blocked.add(lane.model_list.identity(lane.model_list.first_available("build", None, blocked, kind)["selection"]))
-    exact(lane.model_list.first_available("fix")["selection"]["model"], "task/standard")
-    exact(lane.model_list.entries("fix")[-1]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
+    exact(lane.model_list.first_available("fix")["selection"]["model"], "gpt-6.2-sol")
+    exact(lane.model_list.entries("fix")[0]["selection"]["options"], [{"id": "reasoningEffort", "value": "max"}])
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
                    priority=1, title=title) for n, title in [(10, "bot"), (11, "census"), (12, "dashboard")]]
@@ -4799,12 +4799,15 @@ def router_build():
     """
     import lane_driver as lane
     queue = load_coordq()
-    for task_type, expected in [("standard", "task/standard"), ("rca", "task/rca"),
-                                ("risky", "task/risky"), ("design", "task/design"),
-                                ("chore", "task/standard"), ("fix", "task/standard")]:
+    sol_max = {"instanceId": "codex", "model": "gpt-6.2-sol",
+               "options": [{"id": "reasoningEffort", "value": "max"}]}
+    for task_type, expected in [("standard", {"instanceId": "router", "model": "task/standard"}),
+                                ("chore", {"instanceId": "router", "model": "task/standard"}),
+                                ("rca", sol_max), ("risky", sol_max),
+                                ("design", sol_max), ("fix", sol_max)]:
         resolved, refusal = queue.with_model({"taskType": task_type})
         exact(refusal, None)
-        exact(resolved["modelSelection"], {"instanceId": "router", "model": expected})
+        exact(resolved["modelSelection"], expected)
     # A payload that still names a direct `pi` Morph model is mapped, not refused.
     for task_type, model, expected in [("standard", "morph/morph-dsv41flash", "task/standard"),
                                        ("rca", "morph/morph-dsv41flash-1017", "task/rca"),
@@ -4850,8 +4853,12 @@ def router_blocked():
     import lane_driver as lane
     queue = load_coordq()
     both = {"pi:morph-dsv41flash", "pi:morph-dsv41flash-1017"}
-    for list_name, task_type in [("build", "standard"), ("build", "rca"), ("fix", "fix")]:
-        exact(lane.model_list.first_available(list_name, None, both, task_type)["id"], "cursor")
+    exact(lane.model_list.first_available("build", None, both, "standard")["id"], "cursor")
+    exact(lane.model_list.first_available("build", None, both, "rca")["id"], "sol")
+    exact(lane.model_list.first_available("build", None, both | {"codex:gpt-6.2-sol"}, "rca")["id"], "neon")
+    exact(lane.model_list.first_available("build", None, both | {"codex:gpt-6.2-sol", "antigravity:gemini-4-neon"}, "rca")["id"], "cursor")
+    exact(lane.model_list.first_available("fix", None, both, "fix")["id"], "sol-max")
+    exact(lane.model_list.first_available("fix", None, both | {"codex:gpt-6.2-sol"}, "fix")["id"], "cursor")
     # One blocked Morph model leaves the router in place.
     exact(lane.model_list.first_available("build", None, {"pi:morph-dsv41flash"}, "standard")["id"], "router")
     # A quick task still ends on Terra once Cursor is out too.

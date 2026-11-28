@@ -2,22 +2,24 @@
 
 Command: `python3 scripts/mac_ops_fast_check.py`
 Host: Shyams-M4.local
-Checked commit: `a9764e1c4a16425bdf075549b555ee23a314c41f`
-Working tree clean when the checks ran: yes
+Checked commit: `1dab2c1791f22a41318cf4da3ad78c71945126d6`
+Working tree clean when the checks ran: no
 Run result: passed
 
 | Check | Command | Result | Detail |
 | --- | --- | --- | --- |
 | lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
 | overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
-| test isolation: no live gh call or log row | `python3 -m unittest; python3 coordinator/overnight/overnight selftest` | passed | gh-usage rows for mac-ops-test 0, skips.log lines 0, unchanged after the run; gh-usage lines in total 17196 -> 17337; both entry points installed the fake `gh` themselves; no call the fake `gh` refused; the isolation tests passed; 686 tests ran (unittest exited 0, selftest exited 0) |
-| python syntax: scripts/mac_ops_fast_check.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' scripts/mac_ops_fast_check.py` | passed |  |
-| python syntax: tests/test_gate_reviewer_quota.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_gate_reviewer_quota.py` | passed |  |
-| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/bin/scorecard coordinator/pi/bin/coord-tick` | passed | 76 findings, all in the baseline |
+| installed selftest | `installed_selftest(ROOT)` | passed | exit 0, 38 PASS |
+| test isolation: no live gh call or log row | `python3 -m unittest; python3 coordinator/overnight/overnight selftest` | passed | gh-usage rows for mac-ops-test 0, skips.log lines 0, unchanged after the run; gh-usage lines in total 4372 -> 4616; both entry points installed the fake `gh` and `t3mcp` themselves; no call the fake `gh` refused; the isolation tests passed; 742 tests ran (unittest exited 0, selftest exited 0) |
+| python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
+| python syntax: tests/test_models_block_provider.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_models_block_provider.py` | passed |  |
+| ruff F,B | `uvx ruff@0.14.0 check --select F,B --output-format json --extend-exclude 'evals/harbor/tasks/*/tests/files' . coordinator/overnight/overnight coordinator/bin/coord-watch coordinator/bin/scorecard coordinator/pi/bin/coord-tick` | passed | 75 findings, all in the baseline |
 | mypy | `uvx mypy@1.18.2 --strict --follow-imports=silent --ignore-missing-imports --python-version 3.9 board_resources.py` | passed | 1 modules, no issues |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1_3_h7q8 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1_3_h7q8/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| finding rules | `check_finding_rules(changed files)` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mac-ops-test/heavy-queue-tlc-dg8i_i9e -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mac-ops-test/heavy-queue-tlc-dg8i_i9e/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
-| tests: tests.test_gate_reviewer_quota | `python3 -m unittest tests.test_gate_reviewer_quota` | passed |  |
+| tests: tests.test_models_block_provider | `python3 -m unittest tests.test_models_block_provider` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
 so every check after it is `not run`. A tool that is not on this machine
