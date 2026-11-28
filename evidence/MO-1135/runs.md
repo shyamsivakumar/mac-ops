@@ -18,11 +18,13 @@ source, mode = plan[str(old)]
 assert mode == 0o755, oct(mode)
 old.parent.mkdir(parents=True)
 shutil.copy(source, old)
+old.chmod(0o644)
 new = h / ".local/bin/worktree-scan"
 new.parent.mkdir(parents=True)
 shutil.copy("scripts/worktree-cleaner/scan.sh", new)
+new.chmod(0o644)
 PY
-HOME="$h" WORKTREE_PANEL_STATE="$h/panel" WORKTREE_CLEANER="$d/cleaner.py" WORKTREE_CLEANER_STATE="$h/state" sh "$h/.config/herdr-app/mods/worktrees/scan.sh" scan start || exit 1
+HOME="$h" WORKTREE_PANEL_STATE="$h/panel" WORKTREE_CLEANER="$d/cleaner.py" WORKTREE_CLEANER_STATE="$h/state" sh "$h/.config/herdr-app/mods/worktrees/scan.sh" scan || exit 1
 i=0
 until grep -q '"state":"done"' "$h/panel/status.json" 2>/dev/null; do i=$((i+1)); [ "$i" -gt 100 ] && { echo "forwarder scan did not finish"; cat "$h/panel/status.json"; exit 1; }; sleep 0.1; done
 echo "forwarder ok"
@@ -34,7 +36,7 @@ MISSING scripts/worktree-cleaner/scan.sh
 ```
 
 {"state": "red", "exit": 1, "matched": true, "ref": "f39c6bede33b6f232a9cdfc92064c5ce05425de7"}
-## Proof run: green 5a7ead71baa9d385ef8bcd3b2d5710a50d9b5fa8
+## Proof run: green 00f228d9988244b2a41f125191feb6ac9db481a4
 
 ```sh
 test -f scripts/worktree-cleaner/scan.sh || { echo "MISSING scripts/worktree-cleaner/scan.sh"; exit 1; }
@@ -54,11 +56,13 @@ source, mode = plan[str(old)]
 assert mode == 0o755, oct(mode)
 old.parent.mkdir(parents=True)
 shutil.copy(source, old)
+old.chmod(0o644)
 new = h / ".local/bin/worktree-scan"
 new.parent.mkdir(parents=True)
 shutil.copy("scripts/worktree-cleaner/scan.sh", new)
+new.chmod(0o644)
 PY
-HOME="$h" WORKTREE_PANEL_STATE="$h/panel" WORKTREE_CLEANER="$d/cleaner.py" WORKTREE_CLEANER_STATE="$h/state" sh "$h/.config/herdr-app/mods/worktrees/scan.sh" scan start || exit 1
+HOME="$h" WORKTREE_PANEL_STATE="$h/panel" WORKTREE_CLEANER="$d/cleaner.py" WORKTREE_CLEANER_STATE="$h/state" sh "$h/.config/herdr-app/mods/worktrees/scan.sh" scan || exit 1
 i=0
 until grep -q '"state":"done"' "$h/panel/status.json" 2>/dev/null; do i=$((i+1)); [ "$i" -gt 100 ] && { echo "forwarder scan did not finish"; cat "$h/panel/status.json"; exit 1; }; sleep 0.1; done
 echo "forwarder ok"
@@ -72,4 +76,4 @@ forwarder ok
 
 ```
 
-{"state": "green", "exit": 0, "matched": null, "ref": "5a7ead71baa9d385ef8bcd3b2d5710a50d9b5fa8"}
+{"state": "green", "exit": 0, "matched": null, "ref": "00f228d9988244b2a41f125191feb6ac9db481a4"}
