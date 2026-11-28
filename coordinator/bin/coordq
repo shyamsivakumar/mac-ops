@@ -2972,7 +2972,7 @@ def scope_gate(settings, repo, number, event, key, dry_run):
     return False
 
 
-def gate_candidates(config, rounds=None, only=None):
+def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
     Every event carries the pull request it belongs to, so the caller can
@@ -2982,9 +2982,10 @@ def gate_candidates(config, rounds=None, only=None):
     run (`cmd_gatekeep`). A caller that passes none reads no ledger, so a
     test of the gate path never touches the live one.
 
-    `only` is one `(repo, number)`: the scan then reads that pull request
-    alone and runs it through the same checks as the full scan.
+    `config["only"]` is one `(repo, number)`: the scan then reads that pull
+    request alone and runs it through the same checks as the full scan.
     """
+    only = config.get("only")
     def read_login():
         login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
                                    timeout=40, limit=FLOOR)
@@ -3154,7 +3155,7 @@ def cmd_gatekeep(a):
         print(stamped(f"gatekeep skipped: below the API floor {FLOOR} {remaining}"), flush=True)
         return
     try:
-        only = parse_ref(a.pr) if a.pr else None
+        only = parse_ref(a.pr) if getattr(a, "pr", None) else None
         if only and only[0] not in config["repos"]:
             die(f"refused: {only[0]} is not on the board")
         counts = load_counts()
@@ -3162,7 +3163,7 @@ def cmd_gatekeep(a):
         stuck = []
         attempted = set()
         ran = set()
-        for event in gate_candidates(config, lane_ledger(), only):
+        for event in gate_candidates({**config, "only": only}, lane_ledger()):
             if event["kind"] == "skip":
                 pr = event["pr"]
                 previous = counts.get(pr)

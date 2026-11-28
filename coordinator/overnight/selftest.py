@@ -2438,7 +2438,7 @@ def gatekeep_retarget():
              contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             settings = Path(scratch) / "gatekeep-config.json"
             settings.write_text(json.dumps({"repos": {repo: {"key": "FIX", "projectId": "fixture"}}}))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False, pr=None))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
         return json.loads(Path(scratch, "queue.json").read_text())
 
     with tempfile.TemporaryDirectory() as scratch:
@@ -2569,7 +2569,7 @@ def gatekeep_round_cap():
             Path(scratch, "lanes-ledger.json").write_text(json.dumps(ledger))
             settings = Path(scratch) / "gatekeep-config.json"
             settings.write_text(json.dumps(config))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False, pr=None))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
             queue = json.loads(Path(scratch, "queue.json").read_text())
         return queue, errors.getvalue()
 
@@ -4646,7 +4646,7 @@ def credit_block():
             Path(scratch, "queue.json").write_text(json.dumps({"next": 2, "items": [], "gatedHeads": {key: 1}}))
             Path(scratch, "dispatch-receipts.json").write_text(json.dumps({key: "gate"}))
             Path(scratch, "gatekeep-config.json").write_text(json.dumps({"repos": {}}))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(Path(scratch, "gatekeep-config.json")), dry_run=False, pr=None))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(Path(scratch, "gatekeep-config.json")), dry_run=False))
             queue = json.loads(Path(scratch, "queue.json").read_text())
             return queue["items"], blocked(scratch), Path(scratch, "dispatch.log").read_text() if Path(scratch, "dispatch.log").exists() else ""
 
@@ -5004,7 +5004,7 @@ def close_evidence():
                 stack.enter_context(patcher)
             settings = Path(scratch) / "gatekeep-config.json"
             settings.write_text(json.dumps({"repos": {mac_ops: {"key": "MO", "projectId": "fixture", "proofRequired": True, "proofOnOpen": True}}}))
-            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False, pr=None))
+            coordq.cmd_gatekeep(argparse.Namespace(config=str(settings), dry_run=False))
             gated = len(coordq.load().get("items", []))
         return gated, cards, rows.count("scope_checked"), counts
 
@@ -5084,7 +5084,7 @@ def close_evidence():
 
         def gatekeep(dry=False):
             before = len(world["ran"])
-            coordq.cmd_gatekeep(argparse.Namespace(config=world["config"], dry_run=dry, pr=None))
+            coordq.cmd_gatekeep(argparse.Namespace(config=world["config"], dry_run=dry))
             return len(coordq.load().get("items", [])), len(world["ran"]) - before
 
         with tempfile.TemporaryDirectory() as scratch, contextlib.ExitStack() as stack:
