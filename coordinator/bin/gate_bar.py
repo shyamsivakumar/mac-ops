@@ -11,6 +11,8 @@ Missing proof does not block. If the ticket asks for evidence the builder could 
 
 Exception, full proof bar kept: if the diff changes stop logic, exit logic, or trade execution (order placement, fills, sizing, booking of executed trades), every proof the ticket asks for is required, and missing proof is a major finding.
 
+Fixture or waiver, per acceptance case (Shyam, 2026-11-27). A case that names a fixture (a path in the repo) is proved with that fixture. A case with a `Waiver: <case> — <reason>` line in the ticket counts as met, including when the blast-radius rule below would otherwise ask for it: do not raise it as missing proof. The waiver is visible in the ticket, and you may still reject one whose reason does not hold, with a finding that names the case and why. A case that names neither a fixture nor a waiver is still required, and missing proof for it is a major finding under the exception above. Nothing else in this bar is weaker for a waiver.
+
 Say in one line which bar you applied and why."""
 
 SEVERITY_BAR = """Severity bar (Shyam, 2026-11-19). This applies to every gate:

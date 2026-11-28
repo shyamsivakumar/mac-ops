@@ -67,6 +67,7 @@ Expected red signature: <regex that matches the output on origin/main>
 - A ticket's proof must pass on (main plus that ticket's blockers plus that ticket), never only on the finished upstream PR. If a proof needs something a later ticket adds (an export, a helper, a fixture), move that part into this ticket or prove through what is already reachable.
 - To check it, build the chain on a scratch branch one ticket at a time from the source's base commit. At each step run that ticket's proof: red on the step before, green on the step after. Never push the scratch branch.
 - A docs or config ticket says `Proof command: none (prose)` and states the prose acceptance.
+- Each acceptance case names a fixture (a path in the repo) or carries a waiver line `Waiver: <case> — <reason>`. The gate accepts a named waiver as meeting that case, may reject a reason that does not hold, and still demands a case that names neither. Use a waiver for a case the repository cannot prove, such as a legacy or partial persisted row with no fixture on main.
 - Also add `Builder check: PASS <full sha>` as the last acceptance line.
 
 ## Blocked by

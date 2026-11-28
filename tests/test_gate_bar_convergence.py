@@ -75,6 +75,14 @@ class GateBarTests(unittest.TestCase):
                        "a report with only minors passes"):
             self.assertIn(phrase, prompt)
 
+    def test_the_bar_accepts_a_named_waiver_and_still_demands_an_unnamed_case(self):
+        bar = flat(gate_bar.GATE_BAR)
+        for phrase in ("A case that names a fixture (a path in the repo) is proved with that fixture.",
+                       "A case with a `Waiver: <case> \u2014 <reason>` line in the ticket counts as met",
+                       "you may still reject one whose reason does not hold",
+                       "A case that names neither a fixture nor a waiver is still required"):
+            self.assertIn(phrase, bar)
+
     def test_the_bar_carries_the_question_rule_for_shyam(self):
         self.assertIn(SHYAM, gate_bar.GATE_BAR)
 
