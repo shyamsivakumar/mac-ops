@@ -16,7 +16,6 @@ SERVERS = (
     ("xcodebuildmcp", re.compile(r"(npm exec xcodebuildmcp|/xcodebuildmcp mcp$)")),
 )
 MATCH_WINDOW_SECS = 3
-GRACE_SECS = 10
 
 
 def snapshot():
@@ -65,40 +64,21 @@ def host_threads(host_pid):
     return [{"id": r[0], "first": r[1], "last": r[2], "exited": bool(r[3])} for r in rows]
 
 
-def classify(set_start, threads, idle_secs, now):
+def classify(set_start, threads):
     matches = [t for t in threads if abs(t["first"] - set_start) <= MATCH_WINDOW_SECS]
     if not matches:
         return "unknown", "-"
     ids = ",".join(t["id"] for t in matches)
-    if all(t["exited"] or (idle_secs is not None and now - t["last"] >= idle_secs) for t in matches):
-        return "stale", ids
+    if all(t["exited"] for t in matches):
+        return "stale-looking", ids
     return "live", ids
-
-
-def identity(pid):
-    out = subprocess.run(["ps", "-o", "lstart=,command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    return re.sub(r"\s+", " ", out.strip())
-
-
-def stop(pids):
-    expected = {pid: identity(pid) for pid in pids}
-    same = [pid for pid in pids if expected[pid] and identity(pid) == expected[pid]]
-    for pid in same:
-        subprocess.run(["kill", "-TERM", str(pid)])
-    time.sleep(GRACE_SECS)
-    for pid in same:
-        if identity(pid) == expected[pid]:
-            subprocess.run(["kill", "-KILL", str(pid)])
-            print(f"sigkill pid={pid}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--idle-secs", type=int, default=None)
-    args = parser.parse_args()
+    parser.add_argument("--dry-run", action="store_true", help="accepted for the ticket proof command; this tool only reports")
+    parser.parse_args()
     procs = snapshot()
-    now = time.time()
     hosts = [pid for pid, info in procs.items() if HOST.search(info["command"])]
     if not hosts:
         print("mcp_reaper: no codex app-server host found", file=sys.stderr)
@@ -111,18 +91,16 @@ def main():
             print(f"mcp_reaper: cannot read {LOGS_DB}: {e}", file=sys.stderr)
             return 2
         for start, pids in sorted(mcp_sets(procs, host).items()):
-            verdict, thread_ids = classify(start, threads, args.idle_secs, now)
+            verdict, thread_ids = classify(start, threads)
             names = ",".join(f"{server_name(procs[p]['command']) or 'child'}:{p}" for p in pids)
             print(f"{verdict} host={host} set_start={time.strftime('%H:%M:%S', time.localtime(start))} thread={thread_ids} {names}")
-            if verdict == "stale":
+            if verdict == "stale-looking":
                 stale += 1
-                if not args.dry_run:
-                    stop(pids)
             elif verdict == "live":
                 keep += 1
             else:
                 unknown += 1
-    print(f"mcp_reaper: stale_sets={stale} live_sets={keep} unknown_sets={unknown} dry_run={args.dry_run}")
+    print(f"mcp_reaper: stale_looking_sets={stale} live_sets={keep} unknown_sets={unknown} (report only, nothing signalled)")
     return 0
 
 
