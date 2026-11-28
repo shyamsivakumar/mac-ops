@@ -92,8 +92,8 @@ def code_size(files):
 
 
 def size_numbers(files):
-    proof = [f for f in files if not counted_code_file(f)
-             and not f["filename"].endswith(".md") and not f["filename"].startswith("docs/")]
+    proof = [f for f in files if not counted_code_file(f) and not f["filename"].startswith("docs/")
+             and (f["filename"].startswith("evidence/") or not f["filename"].endswith(".md"))]
     runtime, count = code_size(files)
     return {"runtime": runtime, "proof": sum(f["additions"] + f["deletions"] for f in proof), "files": count}
 
