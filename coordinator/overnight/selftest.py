@@ -1556,7 +1556,7 @@ def zero_merge_fixture(scratch):
         state.update(json.loads(json.dumps(value)))
     # The alarm's key names the repos that are waiting, so a stall on one
     # repo does not silence a stall on another. The title stays one title.
-    alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
+    alert = {"owner": "t1j", "id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
         "title": "No merge in 60 minutes with open PRs",
         "cause": "No merge in 60 minutes with open PRs: fixture/one",
         "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
