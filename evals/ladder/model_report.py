@@ -7,10 +7,19 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+PRICES = json.loads((HERE.parent.parent / "coordinator" / "model_prices.json").read_text())["models"]
 sys.path[:0] = [str(HERE), str(HERE.parent.parent / "coordinator" / "bin")]
 
 import models
 import score
+
+
+def estimated_cost(model, agent_result):
+    price = PRICES.get(model)
+    tokens = [agent_result.get(k) for k in ("n_input_tokens", "n_output_tokens")]
+    if price is None or None in tokens:
+        return None
+    return (tokens[0] * price["inputPerMTok"] + tokens[1] * price["outputPerMTok"]) / 1e6
 
 
 def harbor_trials(root):
@@ -26,6 +35,8 @@ def harbor_trials(root):
             continue
         agent_result = result.get("agent_result") or {}
         requests, tokens = score.trial_usage(path, agent_result)
+        reported = agent_result.get("cost_usd")
+        estimate = estimated_cost(model, agent_result) if reported is None else None
         reward = ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward")
         trials.append(
             {
@@ -34,7 +45,8 @@ def harbor_trials(root):
                 "correct": reward is not None and reward >= 1.0,
                 "requests": requests if requests is not None else (agent_result.get("metadata") or {}).get("turns"),
                 "tokens": tokens,
-                "cost": agent_result.get("cost_usd"),
+                "cost": reported if reported is not None else estimate,
+                "estimated": estimate is not None,
             }
         )
     return trials, bad
@@ -60,6 +72,7 @@ def figures(trials):
         "turns_per_solved": s["requests_per_correct"],
         "spend": spend,
         "cost_per_solved": score.per_correct(spend, s["correct"]),
+        "estimated": any(t.get("estimated") for t in trials),
         "tokens_per_solved": s["tokens_per_correct"],
     }
 
@@ -75,19 +88,20 @@ def report(trials, cases, listed):
 def money(f):
     if f["spend"] is None:
         return "n/a"
-    return f"${f['cost_per_solved']:.4f}" if f["solved"] else "none solved"
+    label = "est. " if f["estimated"] else ""
+    return f"{label}${f['cost_per_solved']:.4f}" if f["solved"] else "none solved"
 
 
 def show(figs, shared, scope, bad):
     print(f"cases: {len(shared)} shared by every measured model ({scope})" + (f"; {bad} unreadable result files skipped" if bad else ""))
-    print(f"{'model':<28}{'runs':>5}{'solved':>7}{'pass':>7}{'turns/solved':>13}{'$/solved':>13}{'tokens/solved':>15}")
+    print(f"{'model':<28}{'runs':>5}{'solved':>7}{'pass':>7}{'turns/solved':>13}{'$/solved':>18}{'tokens/solved':>15}")
     for model, f in figs.items():
         if f is None:
             print(f"{model:<28}not measured on the shared cases")
             continue
         turns = "?" if f["turns_per_solved"] is None else f"{f['turns_per_solved']:.1f}"
         tokens = "?" if f["tokens_per_solved"] is None else f"{f['tokens_per_solved']:.0f}"
-        print(f"{model:<28}{f['runs']:>5}{f['solved']:>7}{f['pass_rate']:>7.0%}{turns:>13}{money(f):>13}{tokens:>15}")
+        print(f"{model:<28}{f['runs']:>5}{f['solved']:>7}{f['pass_rate']:>7.0%}{turns:>13}{money(f):>18}{tokens:>15}")
 
 
 def main(argv=None):
