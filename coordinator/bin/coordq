@@ -397,6 +397,24 @@ def queued_launch_args(tool, args):
 DEFAULT_BASE_REF = "origin/main"
 
 
+def coerce_launch_args(tool, args):
+    """A launch queued by hand can carry the right values in the wrong shape.
+
+    T3 takes the first prompt as `message` and a workspace strategy as an
+    object, and refuses `prompt` and a bare string such as "root". Seven launches
+    died at dispatch on these two shapes (2026-11-25). Each rewrite is logged."""
+    if tool != "t3_thread_launch":
+        return args
+    fixed = dict(args)
+    if isinstance(fixed.get("workspaceStrategy"), str):
+        fixed["workspaceStrategy"] = {"type": fixed["workspaceStrategy"]}
+        log("t3_thread_launch workspaceStrategy string coerced to an object")
+    if "prompt" in fixed and "message" not in fixed:
+        fixed["message"] = fixed.pop("prompt")
+        log("t3_thread_launch prompt renamed to message")
+    return fixed
+
+
 def worktree_base(tool, args):
     """A worktree launch always names the ref it branches from.
 
@@ -559,6 +577,7 @@ def unsettle_before_send(thread_id):
 
 
 def call(tool, args, rules=None):
+    args = coerce_launch_args(tool, args)
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
         args, refusal = with_model(args)
