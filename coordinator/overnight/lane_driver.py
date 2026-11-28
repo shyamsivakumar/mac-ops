@@ -2557,6 +2557,43 @@ def dead_run_outcome(repo, title, thread):
     return False, "no pull request or ticket in the title"
 
 
+DEAD_REVIEW_TITLE = re.compile(r"\b[A-Za-z][A-Za-z0-9]{1,7}-\d+ review #(\d+) ([0-9a-f]{8})\b")
+DEAD_TICKET_TITLE = re.compile(r"^([A-Za-z][A-Za-z0-9]{1,7}-\d+) \u00b7")
+
+
+def dead_pr_head(repo, number):
+    require_api_budget()
+    result = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"],
+                            timeout=120, caller_name=LANE_CALLER)
+    if result.returncode:
+        first = (result.stdout + result.stderr).strip().splitlines()
+        raise RuntimeError(f"{repo}#{number}: {first[0] if first else result.returncode}")
+    return result.stdout.strip()
+
+
+def dead_superseded(repo, thread, siblings):
+    """Return why a dead thread was overtaken (head moved, newer thread), or an empty string."""
+    title = thread.get("title") or ""
+    review = DEAD_REVIEW_TITLE.search(title)
+    if review:
+        number, sha = review.groups()
+        head = dead_pr_head(repo, number)
+        if not head.startswith(sha):
+            return f"PR {repo}#{number} head moved to {head[:8]}"
+        covers = lambda other: f"review #{number} {sha}" in other
+    else:
+        ticket = DEAD_TICKET_TITLE.match(title)
+        if not ticket:
+            return ""
+        covers = lambda other: other.startswith(ticket.group(1) + " ")
+    for other in siblings:
+        if (other.get("threadId") != thread.get("threadId")
+                and (other.get("updatedAt") or "") > (thread.get("updatedAt") or "")
+                and covers(other.get("title") or "")):
+            return "a newer thread covers it"
+    return ""
+
+
 def recover_dead_runs(ledger):
     receipts = stall_receipts()
     for repo in LANE_REPOS:
@@ -2578,6 +2615,7 @@ def recover_dead_runs(ledger):
                 break
         if threads is None:
             continue
+        siblings = (t3("t3_thread_list", {"projectId": project_id, "limit": 100}).get("threads") or []) if threads else []
         for thread in threads:
             if not isinstance(thread, dict):
                 print(f"DEAD {repo}: refused, invalid thread record")
@@ -2597,7 +2635,10 @@ def recover_dead_runs(ledger):
                 if ledger.get(f"dead-run:{thread_id}"):
                     continue
                 try:
-                    settle, note = dead_run_outcome(repo, title, thread)
+                    note = dead_superseded(repo, thread, siblings)
+                    settle = bool(note)
+                    if not settle:
+                        settle, note = dead_run_outcome(repo, title, thread)
                 except ApiBudgetExhausted:
                     raise
                 except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
