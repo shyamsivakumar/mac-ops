@@ -3853,18 +3853,31 @@ def decision_rows():
     return rows
 
 
+def decision_card(it):
+    options = [o["label"] for o in it.get("options") or [] if o.get("label")]
+    rec = [o["label"] for o in it.get("options") or [] if o.get("recommended")]
+    return {"title": (it.get("title") or "")[:300], "options": options, "recommended": rec[0] if rec else None}
+
+
 def cmd_decision(a):
-    states = {r["item"]: (r["event"], r.get("kind")) for r in decision_rows()}
+    rows = {r["item"]: r for r in decision_rows()}
+    states = {i: (r["event"], r.get("kind")) for i, r in rows.items()}
     if a.action == "answered":
-        for item in a.ids:
+        for arg in a.ids:
+            item, _, choice = arg.partition("=")
             if states.get(item, ("",))[0] == "decision_shown":
-                journal.emit("decision_answered", "coordq", item=item, kind=states[item][1])
+                shown = rows[item].get("data") or {}
+                options = shown.get("options") or []
+                mapped = choice in options
+                journal.emit("decision_answered", "coordq", item=item, kind=states[item][1],
+                             title=shown.get("title"), options=options, recommended=shown.get("recommended"),
+                             answer=choice or None, mapped=mapped)
         return
     with open(DECISIONS_PATH) as f:
-        live = {str(i["id"]): i.get("group") for i in json.load(f)["items"]}
-    for item, group in live.items():
+        live = {str(i["id"]): i for i in json.load(f)["items"]}
+    for item, it in live.items():
         if states.get(item, ("",))[0] in ("", "decision_expired", "decision_cleared"):
-            journal.emit("decision_shown", "coordq", item=item, kind=group)
+            journal.emit("decision_shown", "coordq", item=item, kind=it.get("group"), **decision_card(it))
     for item, (event, kind) in states.items():
         if item in live:
             continue
@@ -3926,7 +3939,7 @@ def main():
     sp.set_defaults(fn=cmd_spend)
     de = sub.add_parser("decision", help="record decision inbox rows: sync shown and expired, or mark ids answered")
     de.add_argument("action", choices=("sync", "answered"))
-    de.add_argument("ids", nargs="*")
+    de.add_argument("ids", nargs="*", help="for answered: <id> or <id>=<chosen option label>")
     de.set_defaults(fn=cmd_decision)
     ar = sub.add_parser("actrate", help="print how often decision items are acted on, per kind")
     ar.add_argument("--days", type=int, default=7)
