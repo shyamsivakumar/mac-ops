@@ -59,11 +59,12 @@ STASH_REASON = "git stash shares one stash list across every worktree of a repos
 STASH_READ_ONLY = {"list", "show"}
 PROTECTED = {"main", "master"}
 REMOTE_NAME_RE = re.compile(r"[\w.-]+")
-REMOTE_URL_RE = re.compile(r"(?:https?://|ssh://|git://|git@)", re.I)
-PERSONAL_REMOTE_RE = re.compile(
-    r"(?:https://(?:[^@/]+@)?github\.com/|ssh://git@github\.com[:/]|git@github\.com:)shyamsivakumar/",
+REMOTE_URL_RE = re.compile(
+    r"(?:(?:https?|ssh|git)://(?:[^/]*@)?(?P<host>[^/:@]+)(?::\d*)?/?|[^@/:\s]+@(?P<scp_host>[^/:@]+):)/?(?P<owner>[^/]+)/",
     re.I,
 )
+PERSONAL_HOST = "github.com"
+PERSONAL_OWNER = "shyamsivakumar"
 BULK_FLAGS = {"--all", "--branches", "--mirror"}
 GIT_VALUE_OPTIONS = {
     "-C",
@@ -384,19 +385,28 @@ def destination(token):
     return re.sub(r"^(?:refs/)?(?:heads/)?", "", ref)
 
 
+def personal_url(url):
+    """True for a github.com/shyamsivakumar/ URL, False for another host or owner, None when unparsable."""
+    match = REMOTE_URL_RE.match(url)
+    if not match:
+        return None
+    host = (match["host"] or match["scp_host"]).lower()
+    return host == PERSONAL_HOST and match["owner"].lower() == PERSONAL_OWNER
+
+
 def remote_elsewhere(repo, here):
-    """True only when the push goes to a resolved remote outside github.com/shyamsivakumar/."""
-    url = repo
+    """True only when every push URL of the remote parses and none is github.com/shyamsivakumar/."""
+    urls = [repo]
     if REMOTE_NAME_RE.fullmatch(repo):
         done = subprocess.run(
-            ["git", "-C", here, "remote", "get-url", "--push", repo],
+            ["git", "-C", here, "remote", "get-url", "--push", "--all", repo],
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
         )
-        url = done.stdout.strip() if done.returncode == 0 else ""
-    return bool(REMOTE_URL_RE.match(url)) and not PERSONAL_REMOTE_RE.match(url)
+        urls = done.stdout.split() if done.returncode == 0 else []
+    return bool(urls) and all(personal_url(url) is False for url in urls)
 
 
 def git_directory(words, here):

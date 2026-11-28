@@ -5,16 +5,22 @@ cd "$ROOT"
 python3 -c "import json,sys;f=json.load(open('runtime/agents/deny-rules.json'))['families'];print(f['push_personal']['mode'],f['push_protected']['mode']);sys.exit((f['push_personal']['mode'],f['push_protected']['mode'])!=('deny','ask'))" && test -x scripts/hooks/pre-push
 echo "ticket proof exit $?"
 guard() {
-    printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1" | python3 "$ROOT/runtime/agents/deny-merge-guard.py" | python3 -c "import sys,json;d=sys.stdin.read();print(json.loads(d)['hookSpecificOutput']['permissionDecision'] if d.strip() else 'allow')"
+    printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}' "$2" "$1" | python3 "${GUARD:-$ROOT/runtime/agents/deny-merge-guard.py}" | python3 -c "import sys,json;d=sys.stdin.read();print(json.loads(d)['hookSpecificOutput']['permissionDecision'] if d.strip() else 'allow')"
 }
 G=$(mktemp -d)
 for kind in personal:https://github.com/shyamsivakumar/mac-ops.git other:git@github.com:other-org/work.git; do
     git init -q "$G/${kind%%:*}"; git -C "$G/${kind%%:*}" remote add origin "${kind#*:}"
 done
 mkdir "$G/norepo"
+git init -q "$G/port"; git -C "$G/port" remote add origin ssh://git@github.com:22/shyamsivakumar/x.git
+git init -q "$G/multi"; git -C "$G/multi" remote add origin git@github.com:other-org/work.git
+git -C "$G/multi" remote set-url --add --push origin git@github.com:other-org/work.git
+git -C "$G/multi" remote set-url --add --push origin https://github.com/shyamsivakumar/mac-ops.git
 echo "guard personal repo, push origin main: $(guard "$G/personal" 'git push origin main')"
 echo "guard other remote, push origin main: $(guard "$G/other" 'git push origin main')"
 echo "guard unresolvable remote, push origin main: $(guard "$G/norepo" 'git push origin main')"
+echo "guard ssh url with a port, push origin main: $(guard "$G/port" 'git push origin main')"
+echo "guard external push url first, personal second, push origin main: $(guard "$G/multi" 'git push origin main')"
 echo "guard personal repo, push origin work: $(guard "$G/personal" 'git push origin work')"
 echo "guard personal repo, force push: $(guard "$G/personal" 'git push --force origin work')"
 HOOK="$ROOT/scripts/hooks/pre-push"

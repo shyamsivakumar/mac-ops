@@ -471,10 +471,15 @@ class HookTest(unittest.TestCase):
             else None
         )
 
-    def repo_with_remote(self, url):
+    def repo_with_remote(self, url, *push_urls):
         repo = tempfile.mkdtemp(prefix="deny-hook-repo-", dir=TMP)
         subprocess.run(["git", "init", "-q", repo], check=True)
         subprocess.run(["git", "-C", repo, "remote", "add", "origin", url], check=True)
+        for push_url in push_urls:
+            subprocess.run(
+                ["git", "-C", repo, "remote", "set-url", "--add", "--push", "origin", push_url],
+                check=True,
+            )
         return repo
 
     def decided(self, command, role=None, **extra):
@@ -505,6 +510,17 @@ class HookTest(unittest.TestCase):
             self.decided(f"git -C {personal} push origin main", cwd=elsewhere)["permissionDecision"],
             "deny",
         )
+        sneaky = {
+            "ssh url with a port": self.repo_with_remote("ssh://git@github.com:22/shyamsivakumar/x.git"),
+            "personal push url after an external one": self.repo_with_remote(
+                "git@github.com:other-org/work.git",
+                "git@github.com:other-org/work.git",
+                "https://github.com/shyamsivakumar/mac-ops.git",
+            ),
+        }
+        for label, cwd in sneaky.items():
+            decision = self.decided("git push origin main", cwd=cwd)
+            self.assertEqual(decision["permissionDecision"], "deny", label)
         for command in ALLOWED_COMMANDS:
             self.assertIsNone(self.decided(command), command)
 

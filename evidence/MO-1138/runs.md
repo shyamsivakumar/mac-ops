@@ -8,8 +8,14 @@ KeyError: 'push_personal'
 ticket proof exit 1
 ERROR: test_hook_constants_match_the_list (tests.test_install_deny_rules.ListTest)
 FAIL: test_pushes_are_decided_from_the_command_destinations (tests.test_install_deny_rules.HookTest)
-Ran 31 tests in 8.386s
+Ran 31 tests in 8.116s
 FAILED (failures=1, errors=1)
+```
+
+## Red for the two gate findings: previous head guard (8cc45530) on the new cases
+```
+guard ssh url with a port, push origin main: ask
+guard external push url first, personal second, push origin main: ask
 ```
 
 ## Green on head
@@ -19,6 +25,8 @@ ticket proof exit 0
 guard personal repo, push origin main: deny
 guard other remote, push origin main: ask
 guard unresolvable remote, push origin main: deny
+guard ssh url with a port, push origin main: deny
+guard external push url first, personal second, push origin main: deny
 guard personal repo, push origin work: allow
 guard personal repo, force push: deny
 --- new work branch
@@ -27,7 +35,7 @@ To <tmp>/remote.git
 exit 0
 --- fast-forward work branch
 To <tmp>/remote.git
-   3ed2bb0..59fce73  work -> work
+   b4bdfa4..5361d58  work -> work
 exit 0
 --- push to main
 pre-push refused: pushes to main are blocked; push a work branch
@@ -41,7 +49,7 @@ exit 1
 pre-push refused: pushes to main are blocked; push a work branch
 error: failed to push some refs to '<tmp>/remote.git'
 exit 1
-main still at 3ed2bb0424403fa9663661b0639365c40147dee3
+main still at b4bdfa40d107c95adbc8a5e96ee9768c5d17cf34
 --- force push work branch
 pre-push refused: refs/heads/work is not a fast-forward (force push or git error)
 error: failed to push some refs to '<tmp>/remote.git'
@@ -61,15 +69,6 @@ exit 0
 --- remote refs
 refs/heads/main
 refs/heads/work2
-Ran 31 tests in 11.342s
+Ran 31 tests in 11.188s
 OK
 ```
-
-## Replacement ticket
-
-#1138 replaces #1080. The #1080 proof command checked `push_protected` is
-`deny`, but the design changed: `push_protected` stays `ask` and the new family
-`push_personal` is `deny`. The #1138 proof command checks `push_personal` is
-`deny` and `scripts/hooks/pre-push` is executable. On `origin/main` it prints
-`None` and exits 1. On this branch it prints `deny` and exits 0, with
-`HOME=$(mktemp -d)`.
