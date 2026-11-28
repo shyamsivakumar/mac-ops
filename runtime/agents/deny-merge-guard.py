@@ -11,7 +11,7 @@ command that breaks it:
 Each rule belongs to a family, and FAMILY_MODES (from deny-rules.json) says
 whether the family asks the owner or is denied outright:
 
-- ask: `gh pr merge`, a push to main or master of a repo outside github.com/shyamsivakumar/, commands on secret files,
+- ask: `gh pr merge` outside personal repos (github.com/shyamsivakumar/*), a push to main or master of a repo outside github.com/shyamsivakumar/, commands on secret files,
   secret values printed by gcloud or heroku (`gcloud secrets versions access`,
   `heroku config`, `config:get`, a `--format` that shows a secret), and commands
   that touch the Ascend tree from a session that did not start there. Every
@@ -316,10 +316,30 @@ def gh_action(words):
     return positionals
 
 
-def gh_findings(words):
+def gh_repo_option(words):
+    for i, word in enumerate(words):
+        if word.startswith("--repo="):
+            return word.split("=", 1)[1]
+        if word in {"-R", "--repo"}:
+            return "".join(words[i + 1 : i + 2])
+    return None
+
+
+def gh_repo_personal(words, here):
+    """True when `-R/--repo` names a github.com/shyamsivakumar/ repo, or, without it, every push URL of `origin` does."""
+    value = gh_repo_option(words)
+    if value is None:
+        return remote_personal("origin", here)
+    if "://" in value or "@" in value:
+        return personal_url(value) is True
+    owner_first = value.count("/") == 1
+    return personal_url("https://" + ("github.com/" if owner_first else "") + value) is True
+
+
+def gh_findings(words, here):
     action = gh_action(words)
     if action == ["pr", "merge"]:
-        return [("merge", MERGE_REASON)]
+        return [] if gh_repo_personal(words, here) else [("merge", MERGE_REASON)]
     if action in (["repo", "delete"], ["release", "delete"]):
         return [("remote_delete", DELETE_REASON)]
     return []
@@ -394,19 +414,40 @@ def personal_url(url):
     return host == PERSONAL_HOST and match["owner"].lower() == PERSONAL_OWNER
 
 
+def push_urls(repo, here):
+    if not REMOTE_NAME_RE.fullmatch(repo):
+        return [repo]
+    done = subprocess.run(
+        ["git", "-C", here, "remote", "get-url", "--push", "--all", repo],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    return done.stdout.split() if done.returncode == 0 else []
+
+
 def remote_elsewhere(repo, here):
     """True only when every push URL of the remote parses and none is github.com/shyamsivakumar/."""
-    urls = [repo]
-    if REMOTE_NAME_RE.fullmatch(repo):
-        done = subprocess.run(
-            ["git", "-C", here, "remote", "get-url", "--push", "--all", repo],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        urls = done.stdout.split() if done.returncode == 0 else []
+    urls = push_urls(repo, here)
     return bool(urls) and all(personal_url(url) is False for url in urls)
+
+
+def remote_personal(repo, here):
+    """True only when the remote resolves and every push URL is github.com/shyamsivakumar/."""
+    urls = push_urls(repo, here)
+    return bool(urls) and all(personal_url(url) is True for url in urls)
+
+
+def current_branch(here):
+    done = subprocess.run(
+        ["git", "-C", here, "symbolic-ref", "--short", "-q", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    return done.stdout.strip() if done.returncode == 0 else ""
 
 
 def git_directory(words, here):
@@ -459,7 +500,9 @@ def push_findings(args, here):
         return found + [("push_destination", NO_DESTINATION_REASON)]
     for token in refspecs:
         target = destination(token)
-        if target in {"", "HEAD", "@"} or "$" in target or "`" in target:
+        if target in {"HEAD", "@"}:
+            target = current_branch(here)
+        if target == "" or "$" in target or "`" in target:
             return found + [("push_destination", NO_DESTINATION_REASON)]
         if target in PROTECTED:
             if remote_elsewhere(repo, here):
@@ -606,7 +649,7 @@ def command_findings(commands, cwd, ascend_session):
         found += path_findings(words, here, ascend_session)
         found += api_findings(name, words)
         if name == "gh":
-            found += gh_findings(words)
+            found += gh_findings(words, here)
         elif name in CLOUD_CLIS:
             found += cloud_findings(name, words)
         elif name == "git":

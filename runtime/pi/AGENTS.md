@@ -56,7 +56,7 @@ Asks the owner in an interactive thread (a headless run is denied):
 
 - Reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN) from a session that did not start there.
 - Commands on secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.
-- A push to `main` or `master` elsewhere (not a personal repo), and `gh pr merge`.
+- A push to `main` or `master` elsewhere (not a personal repo), and `gh pr merge` outside personal repos (it runs without asking in github.com/shyamsivakumar/*).
 - Printing secret values with `gcloud secrets versions access`, `heroku config` or `config:get`, or a gcloud `--format` that shows one.
 
 Denied even with approval:

@@ -255,7 +255,7 @@ class ListTest(unittest.TestCase):
         self.assertIn("Edit(//Users/t/.ssh/**)", rules["deny"])
         self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", rules["retired"])
         self.assertIn("Bash(git push --force-if-includes:*)", rules["deny"])
-        self.assertIn("Bash(gh pr merge:*)", rules["ask"])
+        self.assertNotIn("Bash(gh pr merge:*)", rules["ask"])
         self.assertIn("Bash(git push:*)", rules["ask"])
 
     def test_hook_constants_match_the_list(self):
@@ -462,6 +462,7 @@ class HookTest(unittest.TestCase):
             text=True,
             timeout=30,
             env=env,
+            cwd=self.home,
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
