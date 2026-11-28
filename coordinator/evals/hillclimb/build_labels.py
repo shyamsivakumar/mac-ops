@@ -16,7 +16,9 @@ card. Nothing is invented. Action cards (kind "action") carry no options and
 no recommendation, so they are not labels.
 """
 
+import argparse
 import ast
+import datetime
 import glob
 import hashlib
 import json
@@ -53,6 +55,12 @@ def data_dir(beside):
 
 OUT = str(data_dir(Path(__file__).resolve().parent))
 TMP = os.environ.get("TMPDIR", "/tmp")
+
+PRIVATE = re.compile(
+    r"\bascend|slash-eureka|useascend|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-|AKIA[0-9A-Z]{16}"
+    r"|-----BEGIN|(?:password|secret|token|api[_-]?key)\s*[=:]\s*\S{8,}",
+    re.I,
+)
 
 # ---------------------------------------------------------------- sources
 
@@ -682,11 +690,27 @@ def prior_rows(path):
     return out
 
 
+def utc(ts):
+    return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def heldout_cases(rows, since):
+    """Rows newer than `since` that score.py can count, minus any that mention Ascend or look like a secret."""
+    cutoff = utc(since)
+    scorable = [
+        r for r in rows
+        if r.get("ts") and utc(r["ts"]) > cutoff and r.get("recommended_option")
+        and norm(r["answer"]) in {norm(o) for o in r["options"]}
+    ]
+    clean = [r for r in scorable if not PRIVATE.search(json.dumps(r))]
+    return clean, len(scorable) - len(clean)
+
+
 def recorded(row):
     return str(row.get("source", "")).startswith("daily3 record")
 
 
-def main():
+def main(since=None):
     recs = load_messages()
     panel = load_panel(recs)
     board = load_board(recs)
@@ -815,6 +839,10 @@ def main():
         open(f"{TMP}/hc/build_notes.json", "w"),
         indent=1,
     )
+    if since:
+        cases, dropped_private = heldout_cases(rows, since)
+        write_atomic(f"{OUT}/heldout_cases.jsonl", "".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cases))
+        print(f"held-out cases after {since}: {len(cases)}; dropped for Ascend or secrets: {dropped_private}")
     print("labels:", len(rows))
     print("with options:", sum(1 for r in rows if r["options"]))
     print("counts:", {k: len(v) for k, v in split.items()})
@@ -901,4 +929,9 @@ TYPED_KEEP = {
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", default=OUT)
+    parser.add_argument("--since", help="also write heldout_cases.jsonl: scorable labels answered after this UTC time")
+    args = parser.parse_args()
+    OUT = args.out
+    main(args.since)
