@@ -135,6 +135,8 @@ RETIRED_FILES = (("loop", "turn_cap.py"), ("loop", "board.py"))
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
 HILLCLIMB_SOURCE = "coordinator/evals/hillclimb"
+LOOP_SOURCE = "coordinator/loop"
+LOOP_FILES = ("stuck.py", "watch.py")
 HILLCLIMB_FILES = ("build_labels.py", "daily3.py", "burst.py", "arms/plain_agent.py", "README.md")
 OVERNIGHT_BIN_FILES = ("overnight",) + tuple(
     path.name for path in sorted(
@@ -821,6 +823,8 @@ def changes(
         source = checkout / HILLCLIMB_SOURCE
         for name in HILLCLIMB_FILES:
             wanted.append((coordinator / "evals/hillclimb" / name, (source / name).read_bytes(), 0o644))
+        for name in LOOP_FILES:
+            wanted.append((coordinator / "loop" / name, (checkout / LOOP_SOURCE / name).read_bytes(), 0o644))
     ignore = gitignore_item(coordinator)
     if ignore is not None:
         wanted.append((ignore[0], ignore[1], 0o644))

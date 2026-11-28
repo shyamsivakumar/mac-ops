@@ -19,6 +19,7 @@ scorer counts): **131**. Free-text labels stay in
 | `split.json` | Seeded FINAL / DEV / HELDOUT id lists (nested, plus flat `final` / `dev` / `heldout` keys that `score.py` reads). |
 | `build_labels.py` | Rebuilds both files from the sources. Deterministic. |
 | `daily3.py` | Daily 3: `pick` three real decisions, `record` Shyam's answer. |
+| `climb.py` | Keep or revert one change: scores an arm against the incumbent on the locked split, prints KEEP or REVERT, logs to `climb_log.jsonl`. |
 | `burst.py` | Mines unanswered thin-kind decisions into `burst_queue.jsonl`. |
 | `burst_queue.jsonl` | Mined decisions with no recorded answer, waiting for Shyam. |
 | `daily3_guesses.jsonl` | The coordinator's guess, written before each question is shown. |
@@ -203,6 +204,10 @@ changes: no label, split, scorer lock or queue row, and no model call.
 
 A FAIL then PASS pair usually means the code was fixed between the heads, so a
 row is a question for Shyam and not a label.
+
+## Data dir
+
+`build_labels.py`, `daily3.py`, `burst.py` and `climb.py` read and write their data in the dir given by `--data DIR`, default the script's own dir when it holds `labels.jsonl`, else `~/Code/coordinator/evals/hillclimb`. Run them from the repo copy with `--data` pointing at a scratch copy to try a change on real data without touching the installed files.
 
 ## Rebuild
 
