@@ -5021,6 +5021,7 @@ def close_evidence():
 
         with tempfile.TemporaryDirectory() as scratch, contextlib.ExitStack() as stack:
             world.update(dir=scratch, opened=opened, gatekeep=gatekeep, config=str(Path(scratch) / "gatekeep-config.json"))
+            Path(scratch, "config.json").write_text(json.dumps({"cap": 6, "proofsPerRun": 1}))
             Path(world["config"]).write_text(json.dumps({"repos": {mac_ops: {
                 "key": "MO", "projectId": "fixture", "proofRequired": True, "proofOnOpen": True, "checkout": scratch}}}))
             for patcher in (
@@ -5061,7 +5062,7 @@ def close_evidence():
     def flags(*groups):
         return sorted(r["carded"] for g in groups for r in coordq.load().get(g, {}).values())
 
-    head_a, head_b = "a" * 40, "b" * 40
+    head_a, head_b, head_c = "a" * 40, "b" * 40, "c" * 40
     narrow = "In: `coordinator/bin/coordq`"
     with arena((7, head_a)) as w:
         w["opened"](951, "true")
@@ -5146,6 +5147,12 @@ def close_evidence():
         w["opened"](951, "true")
         w["opened"](952, "true")
         exact((w["gatekeep"](), w["gatekeep"](), [h for h, _ in w["ran"]]), ((1, 1), (2, 1), [head_a, head_b]))
+
+    with arena((7, head_a), (8, head_b), (9, head_c)) as w:
+        for issue in (951, 952, 953):
+            w["opened"](issue, "true")
+        Path(w["dir"], "config.json").write_text(json.dumps({"cap": 6, "proofsPerRun": 2}))
+        exact((w["gatekeep"](), w["gatekeep"](), [h for h, _ in w["ran"]]), ((2, 2), (3, 1), [head_a, head_b, head_c]))
 
     with arena((7, head_a)) as w:
         w["opened"](951, "true")

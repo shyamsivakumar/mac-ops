@@ -180,6 +180,11 @@ def cap():
         return json.load(f)["cap"]
 
 
+def proofs_per_run():
+    with open(path("config.json")) as f:
+        return json.load(f).get("proofsPerRun", 3)
+
+
 def card_limits():
     with open(path("config.json")) as f:
         config = json.load(f)
@@ -2766,8 +2771,8 @@ def proof_state(settings, repo, number, event, key, author, body, failure, ran):
         return "changed", "the proof command differs from the one the ticket opened with", cmd
     if not cmd or cmd.lower().startswith("none (prose)"):
         return "prose", "", cmd
-    if ran:
-        print(stamped(f"proof of {event['pr']} waits: one proof per run"), flush=True)
+    if len(ran) >= proofs_per_run():
+        print(stamped(f"proof of {event['pr']} waits: {len(ran)} proofs this run"), flush=True)
         return None
     ran.add(key)
     state, tail = run_head_proof(settings, repo, number, cmd, event["head"])
@@ -2780,7 +2785,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     The proof runs once per head: the result is kept under the head's
     key, so a later run reads it instead of running again. A head that
     does not pass gets a board card and no gate. `ran` is the set of the
-    heads proved by one gatekeep run, so one run proves one head.
+    heads proved by one gatekeep run, so one run proves at most proofsPerRun heads.
     """
     queue = load()
     arm = journal.assigned_arm(repo, event.get("scopeIssue"))
