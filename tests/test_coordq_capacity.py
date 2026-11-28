@@ -36,6 +36,31 @@ class CapacityTests(unittest.TestCase):
     def test_nonempty_queue_fills_only_two_slots_with_lagging_count(self):
         self.assertEqual(self.refill(), 2)
 
+    def refill_starts(self, candidates, live):
+        self.q.save({"next": 1, "items": []})
+        self.q.live = lambda: live
+        with patch.object(self.q, "board_candidates", return_value=candidates), patch.object(
+                self.q, "ticket_start", return_value=(0, "started")) as start, patch.object(
+                self.q, "last_refill", return_value=None):
+            self.q.refill(argparse.Namespace(dry_run=False))
+        return [call.args[:2] for call in start.call_args_list]
+
+    def test_lanes_max_fills_idle_slots(self):
+        self.q.cap = lambda: 9
+        todo = [{"repository": {"nameWithOwner": "o/s"}, "number": n, "title": str(n)} for n in range(24)]
+        active = {"o/s": {"a", "b", "c"}}
+        floor = self.q.Candidates(todo, [], (), active, {"o/s": 3})
+        self.assertEqual(self.refill_starts(floor, 3), [])
+        ceiling = self.q.Candidates(todo, [], (), active, {"o/s": 3}, {"o/s": 5})
+        self.assertEqual(len(self.refill_starts(ceiling, 3)), 2)
+
+    def test_no_repo_starves(self):
+        label = [{"name": "stage:todo"}]
+        rows = [{"repository": {"nameWithOwner": repo}, "number": n, "title": str(n), "labels": label}
+                for repo, count in (("o/s", 24), ("o/a", 1)) for n in range(1, count + 1)]
+        candidates = self.q.lane_candidates(rows, set(), {}, (), {}, {"o/s": 3, "o/a": 1}, {"o/s": 5})
+        self.assertEqual(sorted({repo for repo, _ in self.refill_starts(candidates, 3)}), ["o/a", "o/s"])
+
     def test_six_used_starts_nothing(self):
         self.q.live = lambda: 5
         self.assertEqual(self.refill(), 0)
