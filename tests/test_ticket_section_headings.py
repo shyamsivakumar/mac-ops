@@ -134,5 +134,34 @@ class TicketStartProofTest(unittest.TestCase):
             self.assertIn(expected, output, case)
 
 
+class AssembleBriefResearchSkillTest(unittest.TestCase):
+    """Research tickets point builders at the shared research skill after brief_prefix."""
+
+    def _brief(self, task_type, include_type=True):
+        item = {
+            "url": "https://github.com/shyamsivakumar/mac-ops/issues/1177",
+            "reviewerAlias": "astra",
+            "body": "Investigate the question.",
+        }
+        if include_type:
+            item["type"] = task_type
+        return ticket.assemble_brief(CFG, item, "ticket:shyamsivakumar/mac-ops#1177:a1", {"comments": []})
+
+    def test_research_ticket_includes_shared_research_skill_after_prefix(self):
+        prefix = ticket.brief_prefix()
+        brief = self._brief("research")
+        self.assertTrue(brief.startswith(prefix))
+        self.assertNotIn(ticket.RESEARCH_SKILL_PATH, prefix)
+        self.assertIn(ticket.RESEARCH_SKILL_PATH, brief[len(prefix):])
+
+    def test_non_research_and_missing_types_omit_research_skill(self):
+        for brief in (
+            self._brief("standard"),
+            self._brief(None),
+            self._brief(None, include_type=False),
+        ):
+            self.assertNotIn(ticket.RESEARCH_SKILL_PATH, brief)
+
+
 if __name__ == "__main__":
     unittest.main()
