@@ -2513,10 +2513,11 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     backstop build the same request here, so a gate reads the same
     whichever way it was queued."""
     key = f"gate:{repo}#{number}:{head}"
-    from gate_policy import build_gate_brief
+    from gate_policy import build_gate_brief, size_text
+    sizes = size_text(gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100"), OVER_CAP_LINES, OVER_CAP_FILES)
     message = build_gate_brief(settings, repo, issue, number, head, publisher, base=base,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
-                               prompt=prompt, partial=partial)
+                               prompt=prompt, partial=partial, sizes=sizes)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree"},
             "clientRequestId": key, "message": message}

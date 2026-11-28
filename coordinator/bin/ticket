@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR, SEVERITY_BAR
-from gate_policy import complete_pass, diff_files, edited_proof_or_test, partial_claim, partial_state, size_numbers
+from gate_policy import complete_pass, diff_files, edited_proof_or_test, partial_claim, partial_state, size_numbers, size_text
 import gh_gateway
 import journal
 from pr_refs import FENCED_BLOCK, references_issue, same_repo
@@ -1899,13 +1899,13 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False, partial=None):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False, partial=None, sizes=None):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
                             fast_forward_main=False, ascend_override=ascend,
                             proof=proof, proof_path=proof_path, proof_state=proof_state,
-                            prompt=prompt, partial=partial)
+                            prompt=prompt, partial=partial, sizes=sizes)
 
 
 def pull_changed_count(repo, number):
@@ -1999,12 +1999,13 @@ def cmd_gate(a):
         title = f"{rcfg['key']}-{issue_number} review #{number} {head[:8]}"
         proof_path = proof_file.path_for(rcfg.get("key"), issue_number)
         proof_state, proof = proof_file.fetch(repo, proof_path, head)
+        files = gh_json(["api", f"repos/{repo}/pulls/{number}/files?per_page=100"])
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
                            prompt=prompt_hold(repo, number, pull.get("changedFiles"),
                                               base, head),
-                           partial=partial_state(pull.get("body"), lambda: gh_json(
-                               ["api", f"repos/{repo}/pulls/{number}/files?per_page=100"])))
+                           partial=partial_state(pull.get("body"), lambda: files),
+                           sizes=size_text(files, *size_caps(cfg)))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
@@ -2295,12 +2296,15 @@ def cmd_set(a):
     print(json.dumps(sorted((set(names) | set(add)) - set(remove))))
 
 
+def size_caps(cfg):
+    limits = cfg.get("limits", {})
+    return limits.get("maxCodeLines", MAX_CODE_LINES), limits.get("maxCodeFiles", MAX_CODE_FILES)
+
+
 def cmd_size(a):
     import proof_file
     cfg = load_config()
-    limits = cfg.get("limits", {})
-    cap_lines = limits.get("maxCodeLines", MAX_CODE_LINES)
-    cap_files = limits.get("maxCodeFiles", MAX_CODE_FILES)
+    cap_lines, cap_files = size_caps(cfg)
     try:
         files = diff_files(a.base)
     except subprocess.CalledProcessError as e:

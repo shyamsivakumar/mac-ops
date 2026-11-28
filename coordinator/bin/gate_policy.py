@@ -92,10 +92,17 @@ def code_size(files):
 
 
 def size_numbers(files):
-    proof = [f for f in files if not counted_code_file(f)
-             and not f["filename"].endswith(".md") and not f["filename"].startswith("docs/")]
+    proof = [f for f in files if not counted_code_file(f) and not f["filename"].startswith("docs/")
+             and (f["filename"].startswith("evidence/") or not f["filename"].endswith(".md"))]
     runtime, count = code_size(files)
     return {"runtime": runtime, "proof": sum(f["additions"] + f["deletions"] for f in proof), "files": count}
+
+
+def size_text(files, cap_lines, cap_files):
+    n = size_numbers(files)
+    return (f"Computed counts, from the same function as `ticket size`; do not recount: runtime {n['runtime']} code lines in "
+            f"{n['files']} code files (caps {cap_lines} lines, {cap_files} files); proof, fixture and evidence lines {n['proof']}. "
+            "The cap counts runtime code only.")
 
 
 def edited_proof_or_test(files):
@@ -210,7 +217,7 @@ def manual_gate_ending():
     return "Do not merge or close; Shyam merges passed PRs himself." + NO_LATER_MERGE
 
 
-def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False, partial=None):
+def build_gate_brief(settings, repo, issue, number, head, publisher, base="main", fast_forward_main=True, ascend_override=None, proof=None, proof_path=None, proof_state=None, prompt=False, json_verdict=False, partial=None, sizes=None):
     import proof_file
     mode = merge_mode(repo, settings, ascend_override)
     merge = (PROMPT_NO_MERGE + NO_LATER_MERGE if prompt else
@@ -250,6 +257,8 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     source = "ticket" if issue is not None else "PR description"
     proof_text = proof_file.section(proof_state or (proof_file.FOUND if proof else proof_file.MISSING),
                                     proof, proof_path)
+    if sizes:
+        proof_text += "\n" + sizes
     message = f"""{label} {'review only' if prompt else 'review and merge'} · #{number} {head}
 Type: review gate · finish in 4 minutes. Task: {task}
 Read the {source} and diff only: `git fetch origin && git diff origin/{base}...{head}`. Check out nothing. Do NOT rerun the suite.
