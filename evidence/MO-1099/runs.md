@@ -30,3 +30,11 @@ gate_settle PASS
 
 On origin/main the case does not exist (no `settle_read_gate`, no settle call), so the
 proof command above is its red run.
+
+## Existing cases that reach the settle
+
+The first fast check on the M1 failed `gate-pipeline`, `gate-round-cap`, `watchdog`
+and `closed-ticket-merge`: their fakes refused a `t3_thread_organize` call, and
+`EXPECTED` in `hourly_selftest.py` lacked `gate-settle`. The fakes now answer
+`t3_thread_organize` and `EXPECTED` lists the new case. Those cases and
+`merge-pass`, `held-merge` and `gate-settle` pass with subprocess calls forbidden.

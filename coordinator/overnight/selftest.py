@@ -548,6 +548,8 @@ def gate_pipeline():
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
                 return {"thread": {"status": "running" if args["threadId"] in live else "completed"},
                         "items": [{"type": "assistant_message", "text": thread_replies[args["threadId"]]}]}
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def decision(item, actions=actions):
@@ -2064,6 +2066,8 @@ def gate_round_cap():
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def send(thread_id, message, title, ledger, lkey, **kwargs):
@@ -2400,6 +2404,7 @@ def publisher_status_outcomes():
              patch.object(lane, "superseded_by", return_value=False), \
              patch.object(lane, "issue_record", return_value={}), patch.object(lane, "issue_held", return_value=False), \
              patch.object(lane, "gate_verdict", return_value=("PASS", {"threadId": "gate"}, "VERDICT: PASS")), \
+             patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "read_json", pr_reads(lane, row)), \
              patch.object(lane, "send", lambda *a, **k: sent.append(a[1]) or "sent"), \
              patch.object(lane, "merge_passed_pr", lambda *a: merges.append(a[2]) or "merged"):
@@ -5512,6 +5517,7 @@ def closed_ticket_merge():
              patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
              patch.object(lane, "gate_verdict", return_value=verdict), patch.object(lane, "read_json", read_json), \
              patch.object(lane, "run", side_effect=AssertionError("unexpected command")), \
+             patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "merge_passed_pr", merge), patch.object(lane, "publish_decision", decision):
             return lane.act_on_pr(repo, 20, {} if ledger is None else ledger)
 
