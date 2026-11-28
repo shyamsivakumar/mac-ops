@@ -674,6 +674,7 @@ def merged_restart():
                 exact("scope: pass" in why or "cost note" in why, False)
             if board == "owner":
                 exact("no gate attempt for this head has a recorded base" in owner[0]["why"], True)
+                exact(owner[0].get("owner"), "t1j")
                 exact("(ticket MO-10)" in owner[0]["title"], True)
             if board == "ff-failed":
                 exact(ledger[f"after-merge:{repo}#20:{head}"], "closed")
