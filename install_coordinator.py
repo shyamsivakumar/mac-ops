@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import json
 import os
@@ -35,8 +36,7 @@ CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tick
 # and an install never writes over it.
 LOCAL_CONFIG_FILES = ("tickets.json",)
 MODS_DIR = ".config/herdr-app/mods"
-MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
-HERDR_FILES = ("keys.json", "layouts/shyam.json")
+WORKTREE_SCAN_DIR = "scripts/worktree-cleaner"
 TASK_ROUTER = ".pi/agent/extensions/task-router.ts"
 ROUTE_LEVELS = {
     "quick": "low",
@@ -135,12 +135,19 @@ RETIRED_FILES = (("loop", "turn_cap.py"), ("loop", "board.py"))
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
 HILLCLIMB_SOURCE = "coordinator/evals/hillclimb"
+LOOP_SOURCE = "coordinator/loop"
+LOOP_FILES = ("stuck.py", "watch.py")
 HILLCLIMB_FILES = ("build_labels.py", "daily3.py", "burst.py", "arms/plain_agent.py", "README.md")
 OVERNIGHT_BIN_FILES = ("overnight",) + tuple(
     path.name for path in sorted(
         (Path(__file__).resolve().parent / "coordinator/overnight").glob("*.py")
     ) if path.is_file()
 )
+DRIFT_CODE_SUFFIXES = (".py", ".sh", ".mjs", ".ts")
+DRIFT_SKIP_DIRS = frozenset(
+    ("archive", "backups", "evidence", "inbox", "notes", "thoughts", "migration", "__pycache__")
+)
+LOCAL_ONLY_CODE = ("set-posthog*.sh",)
 GITIGNORE_ENTRY = ".overnight/"
 GITIGNORE_BLOCK = (
     "# Overnight runner scratch, installed by mac-ops\n"
@@ -172,10 +179,7 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
         (root / "overnight" / name, home / ".local/bin" / name, 0o755)
         for name in OVERNIGHT_BIN_FILES
     ]
-    items += [
-        (root / "herdr" / name, home / ".config/herdr-app" / name, 0o644)
-        for name in HERDR_FILES
-    ]
+    items.append((checkout / WORKTREE_SCAN_DIR / "scan.sh", home / ".local/bin/worktree-scan", 0o755))
     pi_root = root / "pi"
     items += [
         (pi_root / "bin" / name, home / ".local/bin" / name, 0o755)
@@ -184,17 +188,6 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     items += [
         (pi_root / relative, home / live, 0o644) for relative, live in PI_FILES
     ]
-    for mod in MODS:
-        base = root / "mods" / mod
-        items += [
-            (
-                f,
-                home / MODS_DIR / mod / f.relative_to(base),
-                0o755 if os.access(f, os.X_OK) else 0o644,
-            )
-            for f in sorted(base.rglob("*"))
-            if f.is_file()
-        ]
     return items
 
 
@@ -372,7 +365,7 @@ def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
             src.read_bytes().replace(HOME_TOKEN.encode(), replacement),
             home / "Library/LaunchAgents" / src.name,
         )
-        for src in sorted(folder.glob("*.plist"))
+        for src in sorted([*folder.glob("*.plist"), checkout / WORKTREE_SCAN_DIR / "com.shyam.worktree-scan.plist"])
     ]
 
 
@@ -821,6 +814,8 @@ def changes(
         source = checkout / HILLCLIMB_SOURCE
         for name in HILLCLIMB_FILES:
             wanted.append((coordinator / "evals/hillclimb" / name, (source / name).read_bytes(), 0o644))
+        for name in LOOP_FILES:
+            wanted.append((coordinator / "loop" / name, (checkout / LOOP_SOURCE / name).read_bytes(), 0o644))
     ignore = gitignore_item(coordinator)
     if ignore is not None:
         wanted.append((ignore[0], ignore[1], 0o644))
@@ -1102,6 +1097,25 @@ def config_key_drift(checkout: Path, home: Path) -> list[str]:
     ]
 
 
+def raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def unsourced_code(checkout: Path, coordinator: Path) -> list[str]:
+    found = []
+    for folder, dirs, files in os.walk(coordinator, onerror=raise_walk_error):
+        dirs[:] = sorted(d for d in dirs if d not in DRIFT_SKIP_DIRS and not d.startswith("."))
+        for name in sorted(files):
+            if not name.endswith(DRIFT_CODE_SUFFIXES):
+                continue
+            if any(fnmatch.fnmatch(name, pattern) for pattern in LOCAL_ONLY_CODE):
+                continue
+            relative = (Path(folder) / name).relative_to(coordinator)
+            if not (checkout / "coordinator" / relative).is_file():
+                found.append(str(relative))
+    return found
+
+
 def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) -> None:
     home = Path.home()
     coordinator = coordinator or coordinator_dir(home)
@@ -1111,11 +1125,12 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
     retired = [str(path) for path in retired_plists(home)] + [
         str(path) for path in retired_files(coordinator)
     ]
+    unsourced = unsourced_code(checkout, coordinator)
     checks = smoke_checks(home) if smoke else []
     print(
         json.dumps(
             {
-                "in_sync": not pending and not missing and not retired,
+                "in_sync": not pending and not missing and not retired and not unsourced,
                 "healthy": all(check["healthy"] for check in checks),
                 "smoke_checks": checks,
                 "differs": [str(t) for t, _, _ in pending],
@@ -1130,10 +1145,13 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
                 "overnight_missing": [str(d) for d in missing],
                 "retired_jobs": list(RETIRED_JOBS),
                 "retired_leftovers": retired,
+                "unsourced_code": unsourced,
             },
             indent=2,
         )
     )
+    if unsourced:
+        sys.exit(1)
 
 
 def main() -> None:

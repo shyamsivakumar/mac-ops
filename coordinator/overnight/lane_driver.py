@@ -223,6 +223,50 @@ def settle_dead_run(thread_id):
     return True
 
 
+IDLE_SETTLE_AFTER_SECS = 900
+IDLE_SETTLE_UNTIL_SECS = 3600
+IDLE_SETTLE_PER_PASS = 25
+
+
+def idle_completed_threads():
+    now = time.time()
+    found = []
+    cursor = None
+    while True:
+        args = {"allProjects": True, "statuses": ["completed"], "settled": False, "limit": 100}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = t3("t3_thread_list", args)
+        if not isinstance(page, dict) or not isinstance(page.get("threads"), list):
+            print("IDLE-SETTLE refused: invalid thread list")
+            return []
+        for thread in page["threads"]:
+            idle = now - local_datetime.fromisoformat(thread["updatedAt"].replace("Z", "+00:00")).timestamp()
+            held = thread.get("pinned") or thread.get("blockedOnThreadWait") or thread.get("pendingBackgroundTasks")
+            if IDLE_SETTLE_AFTER_SECS <= idle <= IDLE_SETTLE_UNTIL_SECS and not held and "ascend" not in thread["title"].lower():
+                found.append(thread)
+        cursor = page.get("nextCursor")
+        if cursor is None or page["threads"] and idle > IDLE_SETTLE_UNTIL_SECS:
+            return found
+
+
+def settle_idle_completed(ledger):
+    """Settle a completed T3 thread 15 minutes after its run, so Codex unloads it and closes its MCP servers.
+
+    Codex unloads a thread only when no client is subscribed, and T3 stays subscribed to a completed
+    thread until it is settled. Codex idle-evicts a thread after about 30 minutes, so threads idle
+    over an hour are already unloaded and are left as they are."""
+    for thread in idle_completed_threads()[:IDLE_SETTLE_PER_PASS]:
+        thread_id = thread["threadId"]
+        print(f"IDLE-SETTLE {thread_id}: completed and idle, settle")
+        if DRY:
+            continue
+        with item_boundary("t3", thread_id, ledger):
+            reply = t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+            if not (isinstance(reply, dict) and "sequence" in reply):
+                print(f"IDLE-SETTLE {thread_id}: refused ({str(reply)[:160]}); left for the next pass")
+
+
 def last_reply(thread_id):
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
     msgs = [i.get("text") or i.get("message") or "" for i in items
@@ -562,6 +606,14 @@ def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
+    if verdict in ("PASS", "FAIL"):
+        settle_read_gate(gate["threadId"], ledger)
+
+
+def settle_read_gate(thread, ledger):
+    key = f"gate-settled:{thread}"
+    if not DRY and key not in ledger and settle_dead_run(thread):
+        ledger[key] = "settled"
 
 
 def gate_score_on(repo, number):
@@ -1227,11 +1279,11 @@ def prompt_merge_item(repo, number, head, loop=False):
 OWNER_GRACE_HOURS = 6
 
 
-def herdr_build_card(repo, number, head, need):
+def herdr_build_card(repo, number, head, need, detail=""):
     key = CFG[repo]["key"]
     item = {"id": f"herdr-build-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": f"{key}-{number} needs work on head {head[:8]}: {need}. The Herdr session builds {repo}, so no builder thread was sent it.",
-            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch."}
+            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch." + detail}
     if not DRY:
         publish_decision(item)
     return f"#{number}: {repo} is built in the Herdr session, board card raised"
@@ -1623,6 +1675,21 @@ def close_failed_item(repo, number, head, issue, failed):
             "why": why}
 
 
+def settle_ticket_threads(repo, number, issue, ledger):
+    owned = re.compile(rf"(?:fix|check|continue|gate|vote|regate):{re.escape(repo)}#{number}:|ticket:{re.escape(repo)}#{re.escape(str(issue))}(?::a\d+)?$")
+    for key, thread in sorted(stall_receipts().items()):
+        lkey = f"ticket-settled:{thread}"
+        if DRY or lkey in ledger or not isinstance(thread, str) or not owned.match(key):
+            continue
+        try:
+            status = (t3("t3_thread_read", {"threadId": thread, "limit": 1}).get("thread") or {}).get("status")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            print(f"CLOSE {thread}: thread unread ({exc}); left for the next pass")
+            continue
+        if status not in LIVE_THREAD_STATUSES and settle_dead_run(thread):
+            ledger[lkey] = "settled"
+
+
 def close_after_merge(repo, number, head, issue, gate, ledger):
     lkey = f"after-merge:{repo}#{number}:{head}"
     try:
@@ -1633,6 +1700,7 @@ def close_after_merge(repo, number, head, issue, gate, ledger):
                                            failed_checklist_lines(repo, number, issue, exc)))
         return False
     ledger[lkey] = "closed"
+    settle_ticket_threads(repo, number, issue, ledger)
     try:
         fast_forward_main(repo)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as exc:
@@ -1681,6 +1749,8 @@ def settle_merged_prs(repo, ledger):
             journal_merged(repo, number, head, ledger, event="merged_outside_lane", ticket=None)
             continue
         if lkey in ledger:
+            if ledger[lkey] == "closed":
+                settle_ticket_threads(repo, number, found[1], ledger)
             continue
         if DRY:
             print(f"DRY after-merge #{number}")
@@ -1773,6 +1843,53 @@ def closed_ticket_reason(repo, issue):
     return (row.get("stateReason") or "").lower()
 
 
+def prereview_findings(repo, number, head, body, builder, proof_path, ledger):
+    """Send the findings of a head's pre-review to its builder, once, before the gate.
+
+    A pre-review that is clean, unreadable or malformed holds nothing back:
+    it is journaled and the gate goes on. A pull request owned by a live
+    builder or an `Owner:` session gets the findings in the journal and no card.
+    """
+    sent = f"prereview-fix:{repo}#{number}:{head}"
+    thread = (json.load(open(RECEIPTS)) if os.path.exists(RECEIPTS) else {}).get(f"prereview:{repo}#{number}:{head}")
+    if not thread or sent in ledger:
+        return None
+    try:
+        if gate_in_flight(thread):
+            return None
+        reply = last_reply(thread)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the pre-review could not be read")
+        return None
+    lines = [line.strip() for line in reply.splitlines()]
+    if "PREREVIEW: CLEAN" in lines:
+        if not DRY:
+            ledger[sent] = "clean"
+        return None
+    if "PREREVIEW: FINDINGS" not in lines:
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the reply has no PREREVIEW line")
+        return None
+    findings = "\n".join(line for line in reply.splitlines() if line.strip() != "PREREVIEW: FINDINGS")[-6000:]
+    journal_event("prereview_findings", repo, number, head, findings=findings)
+    if CFG[repo].get("build") == "here":
+        owned = owned_by_live_builder(repo, number, head, body, builder, ledger)
+        if owned:
+            if not DRY:
+                ledger[sent] = "journaled"
+            return owned
+        card = herdr_build_card(repo, number, head, "the pre-review listed failure paths", "\n\n" + findings)
+        if not DRY:
+            ledger[sent] = "card"
+        return card
+    if not builder:
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the findings have no builder thread to go to")
+        return None
+    msg = (f"The independent pre-review of PR #{number} at {head} listed failure paths. Fix each one that is real, "
+           f"{check_step(repo, proof_path)}, push, set "
+           "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n" + findings)
+    return f"#{number} prereview fix: " + send(builder, msg, message_title(repo, number, "pre-review findings", head), ledger, sent, pr_number=number)
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -1831,6 +1948,9 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+    findings = prereview_findings(repo, number, head, body, builder, proof_path, ledger)
+    if findings:
+        return findings
     base = pr.get("baseRefName") or "main"
     verdict, gate, reply = gate_verdict(repo, number, head, base, ledger)
     if closed and verdict != "PASS":
@@ -2557,7 +2677,58 @@ def dead_run_outcome(repo, title, thread):
     return False, "no pull request or ticket in the title"
 
 
+DEAD_REVIEW_TITLE = re.compile(r"\b[A-Za-z][A-Za-z0-9]{1,7}-\d+ review #(\d+) ([0-9a-f]{8})\b")
+DEAD_TICKET_TITLE = re.compile(r"^([A-Za-z][A-Za-z0-9]{1,7}-\d+) \u00b7")
+
+
+def dead_pr_head(repo, number):
+    require_api_budget()
+    result = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"],
+                            timeout=120, caller_name=LANE_CALLER)
+    if result.returncode:
+        first = (result.stdout + result.stderr).strip().splitlines()
+        raise RuntimeError(f"{repo}#{number}: {first[0] if first else result.returncode}")
+    return result.stdout.strip()
+
+
+def project_threads(project_id):
+    threads, cursor = [], None
+    while True:
+        args = {"projectId": project_id, "limit": 100}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = t3("t3_thread_list", args)
+        threads.extend(page.get("threads") or [])
+        cursor = page.get("nextCursor")
+        if cursor is None:
+            return threads
+
+
+def dead_superseded(repo, thread, siblings):
+    """Return why a dead thread was overtaken (head moved, newer thread), or an empty string."""
+    title = thread.get("title") or ""
+    review = DEAD_REVIEW_TITLE.search(title)
+    if review:
+        number, sha = review.groups()
+        head = dead_pr_head(repo, number)
+        if not head.startswith(sha):
+            return f"PR {repo}#{number} head moved to {head[:8]}"
+        covers = lambda other: f"review #{number} {sha}" in other
+    else:
+        ticket = DEAD_TICKET_TITLE.match(title)
+        if not ticket:
+            return ""
+        covers = lambda other: other.startswith(ticket.group(1) + " ")
+    for other in siblings:
+        if (other.get("threadId") != thread.get("threadId")
+                and (other.get("createdAt") or "") > (thread.get("createdAt") or "")
+                and covers(other.get("title") or "")):
+            return "a newer thread covers it"
+    return ""
+
+
 def recover_dead_runs(ledger):
+    settle_idle_completed(ledger)
     receipts = stall_receipts()
     for repo in LANE_REPOS:
         project_id = CFG[repo]["projectId"]
@@ -2578,6 +2749,7 @@ def recover_dead_runs(ledger):
                 break
         if threads is None:
             continue
+        siblings = project_threads(project_id) if threads else []
         for thread in threads:
             if not isinstance(thread, dict):
                 print(f"DEAD {repo}: refused, invalid thread record")
@@ -2597,7 +2769,10 @@ def recover_dead_runs(ledger):
                 if ledger.get(f"dead-run:{thread_id}"):
                     continue
                 try:
-                    settle, note = dead_run_outcome(repo, title, thread)
+                    note = dead_superseded(repo, thread, siblings)
+                    settle = bool(note)
+                    if not settle:
+                        settle, note = dead_run_outcome(repo, title, thread)
                 except ApiBudgetExhausted:
                     raise
                 except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:

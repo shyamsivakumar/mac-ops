@@ -1,0 +1,52 @@
+{
+  "models": {
+    "claude-fable-5-2": {
+      "inputPerMTok": 8,
+      "outputPerMTok": 40,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "asOf": "2026-11-27"
+    },
+    "claude-opus-5-5": {
+      "inputPerMTok": 4,
+      "outputPerMTok": 20,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "asOf": "2026-11-27"
+    },
+    "claude-sonnet-5-5": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "asOf": "2026-11-27"
+    },
+    "claude-sonnet-4-20250514": {
+      "inputPerMTok": 3,
+      "outputPerMTok": 15,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "asOf": "2026-11-27"
+    },
+    "gpt-6.1-terra": {
+      "inputPerMTok": 1,
+      "outputPerMTok": 5,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "asOf": "2026-11-27"
+    },
+    "gpt-6.2-sol": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 10,
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "asOf": "2026-11-27"
+    },
+    "gpt-6.2-astra": {
+      "inputPerMTok": 8,
+      "outputPerMTok": 40,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "asOf": "2026-11-27"
+    },
+    "MiniMax-M3.1-Flash": {
+      "inputPerMTok": 0.15,
+      "outputPerMTok": 0.6,
+      "source": "https://platform.minimax.io/docs/guides/pricing",
+      "asOf": "2026-11-27"
+    }
+  }
+}

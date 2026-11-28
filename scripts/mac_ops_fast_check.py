@@ -229,9 +229,17 @@ def validate_finding_rule(rule):
                          f"{', '.join(FINDING_RULE_CHECKS)}")
     if rule["check"] == "grep" and not (rule.get("paths") and rule.get("pattern")):
         raise ValueError(f"finding rule {rule['id']}: a grep rule needs paths and pattern")
+    if rule.get("scope", "added") not in ("added", "file"):
+        raise ValueError(f"finding rule {rule['id']}: scope must be 'added' or 'file'")
 
 
-def check_finding_rules(paths, rules=None):
+def added_lines(path, base):
+    diff = git("diff", "--no-renames", "-U0", base, "--", path).decode(errors="replace")
+    return "\n".join(line[1:] for line in diff.splitlines()
+                     if line.startswith("+") and not line.startswith("+++"))
+
+
+def check_finding_rules(paths, rules=None, base=None):
     if rules is None:
         rules = json.loads((ROOT / FINDING_RULES).read_text())
     for rule in rules:
@@ -242,7 +250,8 @@ def check_finding_rules(paths, rules=None):
             continue
         for path in paths:
             if fnmatch(str(path), rule["paths"]) and (ROOT / path).is_file():
-                text = (ROOT / path).read_text(errors="replace")
+                whole_file = base is None or rule.get("scope") == "file"
+                text = (ROOT / path).read_text(errors="replace") if whole_file else added_lines(path, base)
                 if re.search(rule["pattern"], text):
                     found.append(f"{rule['id']}: {rule['message']} ({path})")
     return found
@@ -749,7 +758,7 @@ def main():
     changed_files = sorted(name for name in changes if (ROOT / name).is_file())
 
     def finding_rules():
-        found = check_finding_rules(changed_files)
+        found = check_finding_rules(changed_files, base=base)
         if found:
             raise AssertionError("; ".join(found))
 
