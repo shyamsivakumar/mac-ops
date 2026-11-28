@@ -1,9 +1,0 @@
-{
-  "place": "none",
-  "title": "Tabs",
-  "cloned_from": {
-    "name": "tabs",
-    "version": "0.1.9"
-  },
-  "description": "Tab bar. Session-title helper adapted from choam2426/herdr-session-titles (Apache-2.0, commit 410ca9d). Auto-naming idea from longwave/herdr-auto-tabs (no license, idea only, no code copied)."
-}

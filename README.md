@@ -323,7 +323,7 @@ request like every other change in this repository.
 
 `kpane <image.svg|image.png> [title] [zoom]` shows a diagram in a big popup
 over the coordinator: a Herdr overlay, drawn by the `kpane` mod
-(`coordinator/mods/kpane`), that Esc closes. The popup is near the full
+(in the Herdr board repo), that Esc closes. The popup is near the full
 window, the picture fills it, and `+`, `-` and `Fit` (or the scroll wheel)
 enlarge and shrink it; a zoom of 2 starts at twice the size. `kshow
 <image.png>` prints one to the terminal with kitty graphics. Both print usage

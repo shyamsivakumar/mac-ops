@@ -1494,14 +1494,10 @@ answer whose alarm was replaced in between. A reply the popup restores
 keeps the cause it belongs to, and text saved without a cause is not
 restored at all: it cannot be bound to the alarm on the board now.
 
-The rules that bind an answer live in `coordinator/rules/answers.js`,
-a module with no imports, so the panel uses it and a probe can run it.
-`tests/test_alarm_panel.py` runs that module for real: a legacy draft
-reopened against a replaced alarm sends nothing and acknowledges nothing,
-a bound draft for another cause is dropped, and a bound draft for the alarm
-on the board is sent and acknowledged. When the alarm is replaced between the answer
-and the send, the answer is dropped and Shyam is told, because sending it
-would answer the alarm that is there now, and he never answered that one.
+The rules that bind an answer, and the probe that runs them, live in the
+board repo (`~/.config/herdr-app`) with the panel that uses them. When the alarm is replaced between the
+answer and the send, the answer is dropped and Shyam is told, because
+sending it would answer the alarm that is there now, and he never answered that one.
 
 The mute state lives under the root the run chose. A shift run and a
 fixture run with `--root` each write their own state under their own root,
