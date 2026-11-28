@@ -52,6 +52,5 @@ dry run: 93 completed unsettled threads
 ```
 
 Skip rules (pinned, snoozed, running or waiting, blocked, Ascend or slash-eureka) matched
-no thread in either run. No pull request reason matched: T3 records every thread PR as
-open in these threads. The first run used the same code, run read-only from the
-checkout before the script was copied into this worktree.
+no thread in either run. No pull request reason matched: in the 93 remaining threads only 4 have a linked PR,
+and all 4 are open. The first run used the same code, run read-only before the script was copied into this worktree.
