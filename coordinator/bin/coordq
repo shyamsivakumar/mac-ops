@@ -31,6 +31,7 @@ gh_gateway.set_runner(lambda: subprocess.run)
 gh_gateway.set_etag_dir(lambda: DIR)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+GATE_ACT = os.environ.get("COORDQ_GATE_ACT", "")
 DECISIONS_PATH = os.environ.get(
     "COORDINATOR_DECISIONS", "/Users/shyamsivakumar/Code/coordinator/decisions.json")
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -1019,6 +1020,8 @@ def drain():
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
+                if GATE_ACT and receipts.get("brief:" + thread_id) == "lane-merges":
+                    watch_gate(request_id.split(":")[1], thread_id)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
             record_started(queue, item, started_thread(queue, item, reservation))
             if item.get("actionKey"):
@@ -3389,6 +3392,19 @@ def cmd_gatekeep(a):
         print(stamped(f"gatekeep skipped: {e}"), flush=True)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
         die(stamped(f"gatekeep stopped: {e}"))
+
+
+def watch_gate(ref, thread_id):
+    """Start the lane's check for a pull request once its gate thread ends.
+
+    The lane merges on a PASS only in its own pass, so without this the
+    merge waits for that pass's timer after the verdict. A watcher that
+    cannot start leaves the scheduled pass to merge, as before."""
+    try:
+        subprocess.Popen([GATE_ACT, "act", ref, "--after", thread_id], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        log(f"no watcher for {ref}: {e}")
 
 
 def load_counts():

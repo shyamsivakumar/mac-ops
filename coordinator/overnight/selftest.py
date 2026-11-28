@@ -588,6 +588,7 @@ def gate_pipeline():
     completion_boundary()
     main_update_boundary()
     gatekeep_retarget()
+    overnight_act()
 
 
 def merged_restart():
@@ -2518,6 +2519,52 @@ def prereview_gate_cases():
             queue["prereviewHeads"] = {}
             coordq.save(queue)
         exact((gate(), coordq.load()["prereviewHeads"]), (True, {}))
+
+
+def overnight_act():
+    """`overnight act` runs the lane's check for one pull request once its gate ends.
+
+    It waits for the gate thread, takes the shift lock, and calls the lane's
+    `act_on_pr` for that pull request only. STOP and a held lock leave the
+    work to the scheduled pass.
+    """
+    import lane_driver as lane
+    runner = load_runner()
+    repo = "shyamsivakumar/mac-ops"
+    calls = []
+
+    def act(root, stop=False, lock=True):
+        calls.clear()
+        statuses = iter(["running", "completed"])
+        (root / "run").mkdir(exist_ok=True)
+        if stop:
+            (root / "run" / "STOP").write_text("")
+        (root / ".coordinator").mkdir(exist_ok=True)
+        (root / ".coordinator" / "tickets.json").write_text(json.dumps({"repos": {repo: {"key": "MO"}}}))
+        args = argparse.Namespace(ref=f"{repo}#7", after="thread-1", wait=900, root=str(root))
+        with patch.object(runner, "load_policy", return_value=({"repos": [repo]}, "")), \
+             patch.object(runner, "cycle_allow", return_value=[repo]), \
+             patch.object(runner, "take_shift_lock", return_value=(3, "") if lock else (None, "")), \
+             patch.object(runner, "release_shift_lock"), \
+             patch.object(runner.time, "sleep"), \
+             patch.object(runner.Path, "home", return_value=root), \
+             patch.object(lane, "t3", side_effect=lambda tool, a: calls.append(tool) or {"thread": {"status": next(statuses, "completed")}}), \
+             patch.object(lane, "load_ledger", return_value={}), \
+             patch.object(lane, "save_ledger"), \
+             patch.object(lane, "board_snapshot", return_value={}), \
+             patch.object(lane, "act_on_pr", side_effect=lambda r, n, ledger: calls.append((r, n)) or "merged"), \
+             patch.object(lane, "print", create=True), \
+             patch.object(runner, "emit"), \
+             patch.object(lane, "LANE_REPOS", [repo]):
+            return runner.cmd_act(args)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        exact(act(Path(scratch)), 0)
+        exact(calls, ["t3_thread_read", "t3_thread_read", (repo, 7)])
+    with tempfile.TemporaryDirectory() as scratch:
+        exact((act(Path(scratch), stop=True), calls), (0, []))
+    with tempfile.TemporaryDirectory() as scratch, patch.object(runner.time, "monotonic", side_effect=[0, 0, 1000, 1000, 1000]):
+        exact((act(Path(scratch), lock=False), [c for c in calls if isinstance(c, tuple)]), (0, []))
 
 
 def gatekeep_round_cap():
