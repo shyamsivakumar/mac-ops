@@ -5367,6 +5367,8 @@ def journal_migration():
 
 def scan_forwarder():
     repo = ROOT.parents[1]
+    if not (repo / "install_coordinator.py").is_file():
+        return
     spec = importlib.util.spec_from_file_location("install_coordinator", repo / "install_coordinator.py")
     installer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(installer)
