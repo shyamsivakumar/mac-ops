@@ -523,6 +523,23 @@ def classify_failure(report, size, prev_lines):
     return "logic"
 
 
+FINDING_CLASSES = (
+    ("scope", re.compile(r"(?i)\bedits?\b[^.\n]{0,30}\b(?:proofs?|tests?)\b|\boutside (?:the |this )?(?:ticket|scope)|\bscope drift\b|\bbelongs? in (?:its own|another|a separate)\b")),
+    ("size", re.compile(r"(?i)\b\d+[- ](?:counted[- ]|changed[- ]|code[- ])*lines?\b[^.\n]{0,60}\b(?:cap|limit|aggregate)\b|\b(?:size|line|file) cap\b|\bover the cap\b|\b150[- ]line\b|\bcode files? (?:against|over)\b")),
+    ("proof", re.compile(r"(?i)\bunproved\b|\bnot proved\b|\bproofs? (?:does not|doesn't|never|only|starts|hashes|calls)\b|\bnever exercised\b|\bis (?:still )?missing\b|\bno (?:owed|demonstrated|valid)\b|\bcase is missing\b|\breceipt\b")),
+)
+
+
+def finding_class(report):
+    findings = read_verdict(report)[1]
+    texts = [f["text"] for f in findings if f["severity"] in ("critical", "major")]
+    if not findings:
+        texts = [part for part in report.split("\n\n") if re.search(r"(?i)\b(?:critical|major)\b", part)]
+    if not texts:
+        return None
+    return next((name for name, pattern in FINDING_CLASSES if pattern.search(texts[0].split(". ")[0])), "logic")
+
+
 OVER_CAP_LINES = 150
 OVER_CAP_FILES = 3
 
@@ -556,9 +573,14 @@ def route_for(cls):
     return "recut" if cls == "size" else "today"
 
 
+def failure_class(report, size, prev_lines):
+    cls = classify_failure(report, size, prev_lines)
+    return (finding_class(report) or cls) if cls == "logic" else cls
+
+
 def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_lines=None):
     if verdict in ("PASS", "FAIL", "SPLIT"):
-        extra = {"class": classify_failure(report, size, prev_lines or {})} if verdict == "FAIL" else {}
+        extra = {"class": failure_class(report, size, prev_lines or {})} if verdict == "FAIL" else {}
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)
