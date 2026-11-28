@@ -19,3 +19,11 @@ AttributeError: <module 'lane_driver' from '/private/var/folders/d3/kwh8z2bj1rlg
 branch:
 dead_run_no_receipt and dead_run_recovery: pass
 ```
+
+## Rework after gate: createdAt order and paged sibling list
+```
+previous lane_driver.py (updatedAt order, one page) with the new selftest.py:
+AssertionError: expected ['fixture-merged', 'fixture-closed-key', 'fixture-landed-key', 'fixture-moved', 'fixture-newer'], got ['fixture-merged', 'fixture-closed-key', 'fixture-landed-key', 'fixture-moved']
+branch:
+pass
+```

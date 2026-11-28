@@ -2571,6 +2571,19 @@ def dead_pr_head(repo, number):
     return result.stdout.strip()
 
 
+def project_threads(project_id):
+    threads, cursor = [], None
+    while True:
+        args = {"projectId": project_id, "limit": 100}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = t3("t3_thread_list", args)
+        threads.extend(page.get("threads") or [])
+        cursor = page.get("nextCursor")
+        if cursor is None:
+            return threads
+
+
 def dead_superseded(repo, thread, siblings):
     """Return why a dead thread was overtaken (head moved, newer thread), or an empty string."""
     title = thread.get("title") or ""
@@ -2588,7 +2601,7 @@ def dead_superseded(repo, thread, siblings):
         covers = lambda other: other.startswith(ticket.group(1) + " ")
     for other in siblings:
         if (other.get("threadId") != thread.get("threadId")
-                and (other.get("updatedAt") or "") > (thread.get("updatedAt") or "")
+                and (other.get("createdAt") or "") > (thread.get("createdAt") or "")
                 and covers(other.get("title") or "")):
             return "a newer thread covers it"
     return ""
@@ -2615,7 +2628,7 @@ def recover_dead_runs(ledger):
                 break
         if threads is None:
             continue
-        siblings = (t3("t3_thread_list", {"projectId": project_id, "limit": 100}).get("threads") or []) if threads else []
+        siblings = project_threads(project_id) if threads else []
         for thread in threads:
             if not isinstance(thread, dict):
                 print(f"DEAD {repo}: refused, invalid thread record")
