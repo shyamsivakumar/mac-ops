@@ -251,6 +251,44 @@ class TestPiCoordinatorFiles(unittest.TestCase):
                 [],
             )
 
+    def test_researcher_role_maps_markdown_and_not_yaml(self):
+        md_target = self.home / ".pi/agent-coordinator/subagent-manager/agents/researcher.md"
+        yml_target = self.home / ".pi/agent-coordinator/subagent-manager/agents/researcher.yml"
+        source, mode = self.plan[md_target]
+        self.assertEqual(source, CHECKOUT / "coordinator/pi/subagent-manager/agents/researcher.md")
+        self.assertEqual(mode, 0o644)
+        self.assertNotIn(yml_target, self.plan)
+
+    def test_install_writes_researcher_md_and_retires_stale_yaml(self):
+        with temp_home() as td:
+            home = Path(td)
+            stale = home / ".pi/agent-coordinator/subagent-manager/agents/researcher.yml"
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text("models:\n  - morph/morph-dsv41flash\n")
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            self.assertFalse(stale.exists())
+            installed = home / ".pi/agent-coordinator/subagent-manager/agents/researcher.md"
+            text = installed.read_text()
+            self.assertIn("morph/morph-dsv41flash", text)
+            self.assertIn("/Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/research/SKILL.md", text)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            self.assertFalse(stale.exists())
+
+    def test_dry_run_reports_stale_researcher_yaml_without_deleting_it(self):
+        with temp_home() as td:
+            home = Path(td)
+            stale = home / ".pi/agent-coordinator/subagent-manager/agents/researcher.yml"
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text("models:\n  - morph/morph-dsv41flash\n")
+            out = StringIO()
+            with redirect_stdout(out):
+                install_coordinator.install(CHECKOUT, True, home)
+            payload = json.loads(out.getvalue())
+            self.assertIn(str(stale), payload["would_retire"])
+            self.assertTrue(stale.is_file())
+
 
 class TestTickJob(unittest.TestCase):
     """The tick job is back (MO-250, mac-ops #267): the plist is in the
