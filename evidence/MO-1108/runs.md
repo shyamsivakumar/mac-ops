@@ -18,3 +18,8 @@ overnight_act ok: waits for the thread (2 reads), acts on exactly the one PR; ST
 ```
 AttributeError: module 'overnight_runner' has no attribute 'cmd_act'
 ```
+
+## Gate finding: STOP or policy changing during the wait
+`act` now checks STOP and the repository's policy again after the lock is taken, right before `act_on_pr`. The case `overnight_act` gains a run where STOP appears while the watcher waits for the gate thread.
+Before the fix (head 0296b297): the case fails, `act_on_pr` ran (`expected (0, []), got (0, [(repo, 7)])`).
+After: the case passes and nothing is acted on.

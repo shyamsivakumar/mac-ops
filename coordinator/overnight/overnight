@@ -1505,9 +1505,15 @@ def cmd_act(args: argparse.Namespace) -> int:
         die(f"bad reference {args.ref!r}, expected owner/repo#number")
     repo, number = found[1], int(found[2])
     root = report_root(args.root)
-    policy, _ = load_policy(root)
-    if (root / "run" / "STOP").exists() or policy is None or repo not in cycle_allow(policy):
-        emit(f"overnight: act {args.ref}: the shift may not work this repository now, so the scheduled pass decides")
+
+    def refused() -> bool:
+        policy, _ = load_policy(root)
+        if (root / "run" / "STOP").exists() or policy is None or repo not in cycle_allow(policy):
+            emit(f"overnight: act {args.ref}: the shift may not work this repository now, so the scheduled pass decides")
+            return True
+        return False
+
+    if refused():
         return 0
     import lane_driver
 
@@ -1526,6 +1532,8 @@ def cmd_act(args: argparse.Namespace) -> int:
         emit(f"overnight: act {args.ref}: {problem or 'another cycle holds the lock'}, so the scheduled pass decides")
         return 1 if problem else 0
     try:
+        if refused():
+            return 0
         with open(Path.home() / ".coordinator" / "tickets.json") as handle:
             lane_driver.CFG = json.load(handle)["repos"]
         lane_driver.LANE_REPOS = [repo]

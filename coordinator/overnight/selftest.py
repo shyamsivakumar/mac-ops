@@ -2533,10 +2533,17 @@ def overnight_act():
     repo = "shyamsivakumar/mac-ops"
     calls = []
 
-    def act(root, stop=False, lock=True):
+    def act(root, stop=False, lock=True, stop_during_wait=False):
         calls.clear()
         statuses = iter(["running", "completed"])
         (root / "run").mkdir(exist_ok=True)
+
+        def read(tool, a):
+            calls.append(tool)
+            if stop_during_wait:
+                (root / "run" / "STOP").write_text("")
+            return {"thread": {"status": next(statuses, "completed")}}
+
         if stop:
             (root / "run" / "STOP").write_text("")
         (root / ".coordinator").mkdir(exist_ok=True)
@@ -2548,7 +2555,7 @@ def overnight_act():
              patch.object(runner, "release_shift_lock"), \
              patch.object(runner.time, "sleep"), \
              patch.object(runner.Path, "home", return_value=root), \
-             patch.object(lane, "t3", side_effect=lambda tool, a: calls.append(tool) or {"thread": {"status": next(statuses, "completed")}}), \
+             patch.object(lane, "t3", side_effect=read), \
              patch.object(lane, "load_ledger", return_value={}), \
              patch.object(lane, "save_ledger"), \
              patch.object(lane, "board_snapshot", return_value={}), \
@@ -2563,6 +2570,8 @@ def overnight_act():
         exact(calls, ["t3_thread_read", "t3_thread_read", (repo, 7)])
     with tempfile.TemporaryDirectory() as scratch:
         exact((act(Path(scratch), stop=True), calls), (0, []))
+    with tempfile.TemporaryDirectory() as scratch:
+        exact((act(Path(scratch), stop_during_wait=True), [c for c in calls if isinstance(c, tuple)]), (0, []))
     with tempfile.TemporaryDirectory() as scratch, patch.object(runner.time, "monotonic", side_effect=[0, 0, 1000, 1000, 1000]):
         exact((act(Path(scratch), lock=False), [c for c in calls if isinstance(c, tuple)]), (0, []))
 
