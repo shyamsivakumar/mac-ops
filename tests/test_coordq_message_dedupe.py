@@ -38,8 +38,9 @@ class MessageDedupeTests(unittest.TestCase):
         self.q = load_coordq()
         self.q.DIR = self.tmp.name
         self.q.cap = lambda: 6
-        # The queue is full, so a refused start never dispatches anything.
         self.q.live = lambda: 6
+        # A send holds no slot, so a start only queues unless a test drains.
+        self.drain, self.q.drain = self.q.drain, lambda: None
         self.q.save({"next": 1, "items": []})
 
     def start(self, title=TITLE, payload=None, key=None):
@@ -344,6 +345,7 @@ class MessageDedupeTests(unittest.TestCase):
 
     def test_the_dispatch_records_the_started_message(self):
         self.q.live = lambda: 0
+        self.q.drain = self.drain
         # The whole test runs against the stub dispatcher: the first start
         # drains too, and a real drain would send the message.
         with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(

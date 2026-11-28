@@ -35,9 +35,10 @@ class ReplayTests(unittest.TestCase):
         self.q = load_coordq()
         self.q.DIR = self.tmp.name
         self.q.cap = lambda: 6
-        # The slots are full, so a queued message waits where the replay can
-        # count it.
         self.q.live = lambda: 6
+        # A send holds no slot, so a queued message waits where the replay can
+        # count it only because the dispatcher is stubbed.
+        self.q.drain = lambda: None
         self.q.save({"next": 1, "items": []})
         if str(LANE_DIR) not in sys.path:
             sys.path.insert(0, str(LANE_DIR))
