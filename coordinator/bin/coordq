@@ -3137,7 +3137,11 @@ def gate_candidates(config, rounds=None):
     `rounds` is the lane's ledger, read once by the caller that owns the
     run (`cmd_gatekeep`). A caller that passes none reads no ledger, so a
     test of the gate path never touches the live one.
+
+    `config["only"]` is one `(repo, number)`: the scan then reads that pull
+    request alone and runs it through the same checks as the full scan.
     """
+    only = config.get("only")
     def read_login():
         login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
                                    timeout=40, limit=FLOOR)
@@ -3152,8 +3156,11 @@ def gate_candidates(config, rounds=None):
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
-        for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
-            if pr["draft"]:
+        if only and repo != only[0]:
+            continue
+        for pr in (gh_json(f"repos/{repo}/pulls/{only[1]}", fresh=True) if only
+                   else gh_json(f"repos/{repo}/pulls?state=open&per_page=100")):
+            if pr["draft"] or pr.get("state", "open") != "open":
                 continue
             head, number = pr["head"]["sha"], pr["number"]
             # The lane's round count is read before anything else, so a
@@ -3207,7 +3214,12 @@ def gate_candidates(config, rounds=None):
                     continue
                 # The receipt names the builder run. A build that no receipt
                 # covers is found through the ticket key of the issue.
-                thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
+                try:
+                    thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
+                except GhReadError as e:
+                    print(stamped(f"skip {repo}#{number}: {e}"), file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head, "reason": str(e)}
+                    break
                 if not thread_id:
                     if (repo, number) not in skipped:
                         print(stamped(f"skip {repo}#{number}: builder run not found"), file=sys.stderr)
@@ -3304,12 +3316,15 @@ def cmd_gatekeep(a):
         print(stamped(f"gatekeep skipped: below the API floor {FLOOR} {remaining}"), flush=True)
         return
     try:
+        only = parse_ref(a.pr) if getattr(a, "pr", None) else None
+        if only and only[0] not in config["repos"]:
+            die(f"refused: {only[0]} is not on the board")
         counts = load_counts()
         seen = set()
         stuck = []
         attempted = set()
         ran = set()
-        for event in gate_candidates(config, lane_ledger()):
+        for event in gate_candidates({**config, "only": only}, lane_ledger()):
             if event["kind"] == "skip":
                 pr = event["pr"]
                 previous = counts.get(pr)
@@ -3454,7 +3469,8 @@ def cmd_gatekeep(a):
                              reviewer=args["modelSelection"]["model"],
                              model=args["modelSelection"]["model"], model_source="requested",
                              size=size, **ids, arm=gate_arm)
-        write_counts(counts, seen, stuck, a.dry_run)
+        if not only:
+            write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
         # this run stops where it is instead of spending the last calls.
@@ -3857,6 +3873,7 @@ def main():
     d.set_defaults(fn=cmd_dispatch)
     g = sub.add_parser("gatekeep")
     g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--pr", help="gate this pull request only, as owner/repo#number")
     g.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
     g.set_defaults(fn=cmd_gatekeep)
     o = sub.add_parser("gate")
