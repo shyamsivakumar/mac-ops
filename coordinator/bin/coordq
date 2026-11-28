@@ -3058,7 +3058,12 @@ def gate_candidates(config, rounds=None):
                     continue
                 # The receipt names the builder run. A build that no receipt
                 # covers is found through the ticket key of the issue.
-                thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
+                try:
+                    thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
+                except GhReadError as e:
+                    print(stamped(f"skip {repo}#{number}: {e}"), file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head, "reason": str(e)}
+                    break
                 if not thread_id:
                     if (repo, number) not in skipped:
                         print(stamped(f"skip {repo}#{number}: builder run not found"), file=sys.stderr)

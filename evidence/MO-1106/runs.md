@@ -18,3 +18,8 @@ existing gatekeep cases ok
 ```
 coordq: error: unrecognized arguments: --pr a/b#1
 ```
+
+## Unreadable ticket title skips one PR (added after the lead's note)
+`gatekeep_single_pr` now has a PR whose `issues/11` read fails inside `builder_thread_for_issue`.
+Old coordq (commit b64d2135 plus the config change): the case exits 1 (gatekeep died, `gatekeep stopped: GitHub request failed`).
+New coordq: the PR is skipped with one stderr line and the other PR is still queued; the case passes.

@@ -2481,6 +2481,12 @@ def gatekeep_single_pr():
             return Run(json.dumps(prs[int(endpoint[-2:])]))
         if endpoint == f"repos/{repo}/issues/10/comments?per_page=100":
             return Run(json.dumps([[comment]]))
+        if endpoint == f"repos/{repo}/issues/11/comments?per_page=100":
+            return Run(json.dumps([[{**comment, "body": comment["body"].replace("req-1", "req-2")}]]))
+        if endpoint == f"repos/{repo}/issues/11":
+            failed = Run()
+            failed.returncode = 1
+            return failed
         if endpoint.endswith("/statuses?per_page=100") or endpoint.endswith("/files?per_page=100"):
             return Run("[[]]")
         raise AssertionError(f"unexpected read: {endpoint}")
@@ -2513,6 +2519,8 @@ def gatekeep_single_pr():
     exact(f"repos/{repo}/pulls?state=open&per_page=100" in reads, False)
     exact(gatekeep(f"{repo}#21", dry_run=True), [])
     exact(sorted(gatekeep(None)), sorted(f"gate:{repo}#{n}:{c * 40}" for n, c in ((20, "a"), (21, "b"))))
+    prs[20]["body"] = prs[20]["body"].replace("#10", "#11")
+    exact(gatekeep(None), [f"gate:{repo}#21:{'b' * 40}"])
 
 
 def gatekeep_round_cap():
