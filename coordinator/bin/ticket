@@ -1534,6 +1534,12 @@ def bar_visible(t):
     return journal.treatment_names(arm(t), "builder", "severity_bar")
 
 
+RESEARCH_SKILL_PATH = "/Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/research/SKILL.md"
+RESEARCH_SKILL_LINE = (
+    f"Research skill: read and follow `{RESEARCH_SKILL_PATH}` before investigating."
+)
+
+
 def brief_prefix():
     return "\n\n".join([ANSWER_FORMAT, SIZE_RULE])
 
@@ -1551,6 +1557,8 @@ def assemble_brief(cfg, t, request_id, issue):
     head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
     if not filled:
         head.append(f"Run id: `{request_id}`")
+    if t.get("type") == "research":
+        head.append(RESEARCH_SKILL_LINE)
     parts = [brief_prefix()]
     if bar_visible(t):
         parts.append(builder_bar_section())
