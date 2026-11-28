@@ -24,6 +24,7 @@ import alarms
 import gate_vote
 import gh_gateway
 import journal
+import coord_logs
 
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
@@ -178,6 +179,11 @@ def log(message):
 def cap():
     with open(path("config.json")) as f:
         return json.load(f)["cap"]
+
+
+def proofs_per_run():
+    with open(path("config.json")) as f:
+        return json.load(f).get("proofsPerRun", 3)
 
 
 def card_limits():
@@ -514,6 +520,22 @@ def with_rules(args, rules):
     return {**args, "message": f"## Agent rules\n\n{rules}\n\n## Brief\n\n{args['message']}"}
 
 
+def unsettle_before_send(thread_id):
+    code, out = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+    if code:
+        log(f"thread {thread_id} not read before the send: {out[:200]}")
+        return
+    try:
+        settled = bool((json.loads(out).get("thread") or {}).get("settled"))
+    except (ValueError, AttributeError):
+        log(f"thread {thread_id} read before the send is not JSON")
+        return
+    if settled:
+        code, out = t3_call("t3_thread_organize", {"threadId": thread_id, "action": "unsettle"})
+        if code:
+            log(f"thread {thread_id} not unsettled before the send: {out[:200]}")
+
+
 def call(tool, args, rules=None):
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
@@ -526,6 +548,8 @@ def call(tool, args, rules=None):
             args = with_rules(args, rules)
     args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
+    if tool == "t3_thread_send" and args.get("threadId"):
+        unsettle_before_send(args["threadId"])
     return t3_call(tool, args)
 
 
@@ -871,8 +895,8 @@ def drain():
     statuses = {}
     while True:
         queue = load()
-        if dispatch_stopped():
-            log("dispatch.stopped exists, nothing started")
+        if dispatch_stopped() or kill_switch_on():
+            log("dispatch.stopped or the kill switch exists, nothing started")
             return
         dispatchable = []
         dropped = set()
@@ -1820,8 +1844,8 @@ def refill(a):
     the tickets that cannot start and reaches the tickets further down the
     board, which the old first-REFILL_MAX window never did.
     """
-    if dispatch_stopped():
-        log("dispatch.stopped exists, refill refused")
+    if dispatch_stopped() or kill_switch_on():
+        log("dispatch.stopped or the kill switch exists, refill refused")
         return
     with Lock(False, "refill.lock") as lock:
         if lock is None:
@@ -1932,6 +1956,61 @@ def refill(a):
             f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
+def kill_switch_on():
+    try:
+        os.stat(path("kill.switch"))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def cmd_kill(a):
+    if a.state == "on":
+        open(path("kill.switch"), "w").close()
+    elif a.state == "off" and kill_switch_on():
+        os.remove(path("kill.switch"))
+    print("kill switch: " + ("on, no new work starts" if kill_switch_on() else "off"))
+
+
+def trial_runs(trial):
+    try:
+        with open(path("trial-runs.jsonl")) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    runs = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("trial") == trial:
+            runs.append(row)
+    return runs
+
+
+def trial_report(trial):
+    with open(path("config.json")) as f:
+        limits = (json.load(f).get("trials") or {}).get(trial) or {}
+    runs = trial_runs(trial)
+    report = {"trial": trial, "killSwitch": "on" if kill_switch_on() else "off",
+              "capUsd": limits.get("capUsd", "unknown"), "days": limits.get("days", "unknown")}
+    if runs is None:
+        return {**report, "runs": "unknown", "tokens": "unknown", "usd": "unknown"}
+    priced = [r["cost_usd"] for r in runs if isinstance(r.get("cost_usd"), (int, float))]
+    tokens = [r["tokens"] for r in runs if isinstance(r.get("tokens"), int)]
+    report.update(runs=len(runs), tokens=sum(tokens) if tokens else "unknown",
+                  usd=round(sum(priced), 2) if priced else "unknown", runsWithoutCost=len(runs) - len(priced))
+    started = [r["at"] for r in runs if isinstance(r.get("at"), (int, float))]
+    if started and isinstance(report["days"], (int, float)):
+        report["dayOfTrial"] = int((time.time() - min(started)) // 86400) + 1
+    if isinstance(report["usd"], (int, float)) and isinstance(report["capUsd"], (int, float)):
+        report["overCap"] = report["usd"] >= report["capUsd"]
+    return report
+
+
 def safe_refill(a):
     try:
         refill(a)
@@ -1940,6 +2019,10 @@ def safe_refill(a):
 
 
 def cmd_dispatch(a):
+    if kill_switch_on():
+        log("kill switch is on, dispatch refused")
+        print("kill switch is on: no new work starts, running work is left alone")
+        return
     if dispatch_stopped():
         log("dispatch.stopped exists, dispatch refused")
         return
@@ -1947,6 +2030,7 @@ def cmd_dispatch(a):
         f.write(str(int(time.time())))
     if a.dry_run:
         log("dry run: the queue is left alone")
+        print("kill switch is off: dispatch would start work, a dry run starts nothing")
         safe_refill(a)
         return
     with Lock(False) as lock:
@@ -2061,6 +2145,10 @@ def cmd_status(a):
 
 
 
+def cmd_logs(a):
+    sys.exit(coord_logs.run(a.sources, DIR, a.since, a.grep, a.tail, sys.stdout, sys.stderr))
+
+
 def scorecard_module():
     loader = importlib.machinery.SourceFileLoader("coordq_scorecard", os.path.join(_BIN_DIR, "scorecard"))
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq_scorecard", loader))
@@ -2069,6 +2157,13 @@ def scorecard_module():
 
 
 def cmd_spend(a):
+    if bool(a.trial) != a.report:
+        die("spend --trial and --report go together")
+    if a.trial:
+        print(json.dumps(trial_report(a.trial)))
+        return
+    if kill_switch_on():
+        print(stamped("kill switch is on: no new work starts"), file=sys.stderr)
     token_cap, stall_minutes = card_limits()
     scorecard = scorecard_module()
     sources = scorecard.load_cost_sources()
@@ -2766,8 +2861,8 @@ def proof_state(settings, repo, number, event, key, author, body, failure, ran):
         return "changed", "the proof command differs from the one the ticket opened with", cmd
     if not cmd or cmd.lower().startswith("none (prose)"):
         return "prose", "", cmd
-    if ran:
-        print(stamped(f"proof of {event['pr']} waits: one proof per run"), flush=True)
+    if len(ran) >= proofs_per_run():
+        print(stamped(f"proof of {event['pr']} waits: {len(ran)} proofs this run"), flush=True)
         return None
     ran.add(key)
     state, tail = run_head_proof(settings, repo, number, cmd, event["head"])
@@ -2780,7 +2875,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     The proof runs once per head: the result is kept under the head's
     key, so a later run reads it instead of running again. A head that
     does not pass gets a board card and no gate. `ran` is the set of the
-    heads proved by one gatekeep run, so one run proves one head.
+    heads proved by one gatekeep run, so one run proves at most proofsPerRun heads.
     """
     queue = load()
     arm = journal.assigned_arm(repo, event.get("scopeIssue"))
@@ -2972,6 +3067,85 @@ def scope_gate(settings, repo, number, event, key, dry_run):
     return False
 
 
+PREREVIEW_PATHS = re.compile(r"^coordinator/bin/(coordq|ticket|gate_[^/]+)$|^coordinator/overnight/lane_driver\.py$")
+PREREVIEW_WAIT_SECONDS = 2 * 3600
+PREREVIEW_CLEAN = "PREREVIEW: CLEAN"
+PREREVIEW_BRIEF = (
+    "Adversarial pre-review of {repo}#{number} at head {head}. Read the diff with `gh pr diff {number} -R {repo}`. "
+    "List every failure path: missing data, unreadable input, stalled dependency, malformed reply. "
+    "For each, name the file and function, what the code does, and what it should do. "
+    "End with the line `PREREVIEW: CLEAN` when you found none, else `PREREVIEW: FINDINGS`."
+)
+
+
+def prereview_skip(key, reason, dry_run):
+    print(stamped(f"prereview {key}: {reason}, the gate goes ahead"), flush=True)
+    if dry_run:
+        return True
+    with Lock(True):
+        queue = load()
+        queue.setdefault("prereviewHeads", {}).setdefault(key, {"at": time.time()})["skipped"] = reason
+        save(queue)
+    journal.emit("prereview_skipped", "gatekeep", reason=reason, **journal.parse_request_id(key))
+    return True
+
+
+def prereview_gate(settings, repo, number, event, gate_key, dry_run):
+    """True when this head may go on to its gate, False while its pre-review runs.
+
+    A pre-review that cannot be read, failed, or ran past two hours never
+    holds the gate: the head is journaled `prereview_skipped` and gated.
+    """
+    if not any(PREREVIEW_PATHS.match(p) for p in event.get("paths") or []):
+        return True
+    queue = load()
+    if gate_key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), gate_key):
+        return True
+    key = f"prereview:{repo}#{number}:{event['head']}"
+    state = queue.get("prereviewHeads", {}).get(key)
+    if state and state.get("skipped"):
+        return True
+    if state:
+        thread_id = load_receipts().get(key)
+        status = None
+        if thread_id:
+            code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+            if code:
+                return prereview_skip(key, "the pre-review thread could not be read", dry_run)
+            try:
+                status = (json.loads(out).get("thread") or {}).get("status")
+            except ValueError:
+                return prereview_skip(key, "the pre-review thread read was not valid JSON", dry_run)
+        if status == "completed":
+            return True
+        if status in ("failed", "interrupted"):
+            return prereview_skip(key, f"the pre-review {status}", dry_run)
+        if time.time() - state["at"] >= PREREVIEW_WAIT_SECONDS:
+            return prereview_skip(key, "the pre-review stalled for 2 hours", dry_run)
+        return False
+    model = reviewer_model(event.get("builderModels", []))
+    if model is None:
+        return prereview_skip(key, "every reviewer of another vendor is blocked", dry_run)
+    print(stamped(("would queue " if dry_run else "queued ") + key + " reviewer " + model["instanceId"] + " " + model["model"]), flush=True)
+    if dry_run:
+        return False
+    args = {"projectId": settings["projectId"], "title": f"{settings['key']} prereview #{number} {event['head'][:8]}",
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access",
+            "workspaceStrategy": {"type": "worktree"}, "clientRequestId": key,
+            "message": PREREVIEW_BRIEF.format(repo=repo, number=number, head=event["head"])}
+    with model_list.blocked_lock(), Lock(True):
+        queue = load()
+        if key in queue.get("prereviewHeads", {}):
+            return False
+        queue["items"].append({"id": queue["next"], "tool": "t3_thread_launch", "args": args, "title": args["title"],
+                               "priority": 5000, "builderModels": event.get("builderModels", [])})
+        queue.setdefault("prereviewHeads", {})[key] = {"id": queue["next"], "at": time.time()}
+        queue["next"] += 1
+        save(queue)
+    journal.emit("prereview_queued", "gatekeep", reviewer=model["model"], **journal.parse_request_id(key))
+    return False
+
+
 def gate_candidates(config, rounds=None):
     """The gate candidates and the skips of one gatekeep run.
 
@@ -2981,7 +3155,11 @@ def gate_candidates(config, rounds=None):
     `rounds` is the lane's ledger, read once by the caller that owns the
     run (`cmd_gatekeep`). A caller that passes none reads no ledger, so a
     test of the gate path never touches the live one.
+
+    `config["only"]` is one `(repo, number)`: the scan then reads that pull
+    request alone and runs it through the same checks as the full scan.
     """
+    only = config.get("only")
     def read_login():
         login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
                                    timeout=40, limit=FLOOR)
@@ -2996,8 +3174,11 @@ def gate_candidates(config, rounds=None):
     skipped = set()
     noted = set()
     for repo, settings in config["repos"].items():
-        for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
-            if pr["draft"]:
+        if only and repo != only[0]:
+            continue
+        for pr in (gh_json(f"repos/{repo}/pulls/{only[1]}", fresh=True) if only
+                   else gh_json(f"repos/{repo}/pulls?state=open&per_page=100")):
+            if pr["draft"] or pr.get("state", "open") != "open":
                 continue
             head, number = pr["head"]["sha"], pr["number"]
             # The lane's round count is read before anything else, so a
@@ -3051,7 +3232,12 @@ def gate_candidates(config, rounds=None):
                     continue
                 # The receipt names the builder run. A build that no receipt
                 # covers is found through the ticket key of the issue.
-                thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
+                try:
+                    thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
+                except GhReadError as e:
+                    print(stamped(f"skip {repo}#{number}: {e}"), file=sys.stderr)
+                    yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head, "reason": str(e)}
+                    break
                 if not thread_id:
                     if (repo, number) not in skipped:
                         print(stamped(f"skip {repo}#{number}: builder run not found"), file=sys.stderr)
@@ -3148,12 +3334,15 @@ def cmd_gatekeep(a):
         print(stamped(f"gatekeep skipped: below the API floor {FLOOR} {remaining}"), flush=True)
         return
     try:
+        only = parse_ref(a.pr) if getattr(a, "pr", None) else None
+        if only and only[0] not in config["repos"]:
+            die(f"refused: {only[0]} is not on the board")
         counts = load_counts()
         seen = set()
         stuck = []
         attempted = set()
         ran = set()
-        for event in gate_candidates(config, lane_ledger()):
+        for event in gate_candidates({**config, "only": only}, lane_ledger()):
             if event["kind"] == "skip":
                 pr = event["pr"]
                 previous = counts.get(pr)
@@ -3213,6 +3402,8 @@ def cmd_gatekeep(a):
                 if proof is None:
                     continue
                 args["message"] += proof
+            if not prereview_gate(settings, repo_name, pr_number, event, key, a.dry_run):
+                continue
             observed = load()
             adopted = lane_gated(load_receipts(), key)
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
@@ -3296,7 +3487,8 @@ def cmd_gatekeep(a):
                              reviewer=args["modelSelection"]["model"],
                              model=args["modelSelection"]["model"], model_source="requested",
                              size=size, **ids, arm=gate_arm)
-        write_counts(counts, seen, stuck, a.dry_run)
+        if not only:
+            write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
         # The quota fell below the floor mid-run: the gate is optional, so
         # this run stops where it is instead of spending the last calls.
@@ -3667,6 +3859,8 @@ def main():
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sp = sub.add_parser("spend", help="stop a ticket thread over its token cap or idle past the stall limit")
     sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--trial", help="report the spend of the runs tagged with this trial")
+    sp.add_argument("--report", action="store_true", help="print the trial spend and stop nothing")
     sp.set_defaults(fn=cmd_spend)
     de = sub.add_parser("decision", help="record decision inbox rows: sync shown and expired, or mark ids answered")
     de.add_argument("action", choices=("sync", "answered"))
@@ -3675,11 +3869,21 @@ def main():
     ar = sub.add_parser("actrate", help="print how often decision items are acted on, per kind")
     ar.add_argument("--days", type=int, default=7)
     ar.set_defaults(fn=cmd_actrate)
+    k = sub.add_parser("kill", help="stop new work from starting (on), allow it again (off), or show the state")
+    k.add_argument("state", choices=("on", "off", "status"))
+    k.set_defaults(fn=cmd_kill)
     w = sub.add_parser("wait", help="record that an approval wait started or ended, and who owns it")
     w.add_argument("action", choices=("start", "end"))
     w.add_argument("id", help="the card or action key the wait is about")
     w.add_argument("--owner", help="who must answer: required for start")
     w.set_defaults(fn=cmd_wait)
+    lg = sub.add_parser("logs", help="read the tick, queue, lane and journal logs, secrets redacted")
+    lg.add_argument("sources", nargs="*", metavar="source",
+                    help="any of " + ", ".join(coord_logs.SOURCES) + "; all when none is named")
+    lg.add_argument("--since", help="only lines newer than this, like 30m, 1h or 2d")
+    lg.add_argument("--grep", help="only lines that match this regex, ignoring case")
+    lg.add_argument("--tail", type=int, default=200, help="at most this many lines per source")
+    lg.set_defaults(fn=cmd_logs)
     sub.add_parser("waits", help="list open approval waits with owner and age").set_defaults(fn=cmd_waits)
     d = sub.add_parser("dispatch")
     d.add_argument("--dry-run", action="store_true",
@@ -3687,6 +3891,7 @@ def main():
     d.set_defaults(fn=cmd_dispatch)
     g = sub.add_parser("gatekeep")
     g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--pr", help="gate this pull request only, as owner/repo#number")
     g.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
     g.set_defaults(fn=cmd_gatekeep)
     o = sub.add_parser("gate")
