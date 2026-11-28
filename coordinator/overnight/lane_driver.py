@@ -1631,6 +1631,21 @@ def close_failed_item(repo, number, head, issue, failed):
             "why": why}
 
 
+def settle_ticket_threads(repo, number, issue, ledger):
+    owned = re.compile(rf"(?:fix|check|continue|gate|vote|regate):{re.escape(repo)}#{number}:|ticket:{re.escape(repo)}#{re.escape(str(issue))}(?::a\d+)?$")
+    for key, thread in sorted(stall_receipts().items()):
+        lkey = f"ticket-settled:{thread}"
+        if DRY or lkey in ledger or not isinstance(thread, str) or not owned.match(key):
+            continue
+        try:
+            status = (t3("t3_thread_read", {"threadId": thread, "limit": 1}).get("thread") or {}).get("status")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            print(f"CLOSE {thread}: thread unread ({exc}); left for the next pass")
+            continue
+        if status not in LIVE_THREAD_STATUSES and settle_dead_run(thread):
+            ledger[lkey] = "settled"
+
+
 def close_after_merge(repo, number, head, issue, gate, ledger):
     lkey = f"after-merge:{repo}#{number}:{head}"
     try:
@@ -1641,6 +1656,7 @@ def close_after_merge(repo, number, head, issue, gate, ledger):
                                            failed_checklist_lines(repo, number, issue, exc)))
         return False
     ledger[lkey] = "closed"
+    settle_ticket_threads(repo, number, issue, ledger)
     try:
         fast_forward_main(repo)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as exc:
@@ -1689,6 +1705,8 @@ def settle_merged_prs(repo, ledger):
             journal_merged(repo, number, head, ledger, event="merged_outside_lane", ticket=None)
             continue
         if lkey in ledger:
+            if ledger[lkey] == "closed":
+                settle_ticket_threads(repo, number, found[1], ledger)
             continue
         if DRY:
             print(f"DRY after-merge #{number}")

@@ -2021,6 +2021,35 @@ def gate_settle():
         verdict(name, {}, dry)
     exact(calls, [])
 
+    receipts = {"ticket:o/r#7:a1": "builder", "ticket:o/r#70:a1": "other-ticket", "fix:o/r#5:h": "fix",
+                "gate:o/r#5:h": "gate", "vote:o/r#5:h:v": "vote", "fix:o/r#50:h": "other-pr", "base:fix": "main"}
+    statuses = {"vote": "running"}
+    organized = []
+
+    def closing(ledger, dry=False):
+        def thread_tool(tool, args):
+            if tool == "t3_thread_organize":
+                organized.append(args["threadId"])
+                return {}
+            return {"thread": {"status": statuses.get(args["threadId"], "completed")}}
+
+        with patch.object(lane, "t3", thread_tool), patch.object(lane, "stall_receipts", return_value=receipts), \
+             patch.object(lane, "run", return_value=""), patch.object(lane, "fast_forward_main"), \
+             patch.object(lane, "DRY", dry):
+            lane.close_after_merge("o/r", 5, "h", "7", {"threadId": "gate"}, ledger)
+
+    ledger = {}
+    closing({}, dry=True)
+    exact(organized, [])
+    closing(ledger)
+    exact(sorted(organized), ["builder", "fix", "gate"])
+    statuses.clear()
+    organized.clear()
+    with patch.object(lane, "t3", lambda tool, args: organized.append(args["threadId"]) or {"thread": {"status": "completed"}}), \
+         patch.object(lane, "stall_receipts", return_value=receipts), patch.object(lane, "DRY", False):
+        lane.settle_ticket_threads("o/r", 5, "7", ledger)
+    exact(sorted(set(organized)), ["vote"])
+
 
 def gate_round_cap():
     """The convergence rule in the lane: three failed reviews, then one item.
