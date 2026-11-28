@@ -2006,6 +2006,20 @@ def worktree_base_ref():
         args = {"workspaceStrategy": {"type": "worktree"}}
         exact(fill(tool, copy.deepcopy(args)), args)
     exact(fill(launch, {"message": "brief"}), {"message": "brief"})
+    # A string strategy and a `prompt` key, the two shapes T3 refused, are
+    # rewritten and logged; an object strategy and a given message are kept.
+    coerce_function = next(node for node in tree.body
+                           if isinstance(node, ast.FunctionDef) and node.name == "coerce_launch_args")
+    logged = []
+    coerce_namespace = {"log": logged.append}
+    exec(compile(ast.Module(body=[coerce_function], type_ignores=[]), str(queue_path), "exec"), coerce_namespace)
+    coerce = coerce_namespace["coerce_launch_args"]
+    exact(coerce(launch, {"workspaceStrategy": "root", "prompt": "brief"}),
+          {"workspaceStrategy": {"type": "root"}, "message": "brief"})
+    exact(len(logged), 2)
+    exact(coerce(launch, {"workspaceStrategy": {"type": "root"}, "message": "m", "prompt": "p"}),
+          {"workspaceStrategy": {"type": "root"}, "message": "m", "prompt": "p"})
+    exact(coerce("t3_thread_send", {"prompt": "brief"}), {"prompt": "brief"})
 
 
 def gate_settle():
