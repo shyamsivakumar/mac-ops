@@ -45,12 +45,24 @@ def read_threads():
 
 
 def project_roots():
-    projects = lane.t3("t3_project_list", {}).get("projects")
-    if not isinstance(projects, list):
-        fail("the T3 project list could not be read")
-    return {
-        p["id"]: f"{p.get('title', '')} {p.get('workspaceRoot', '')}" for p in projects
-    }
+    roots, seen = {}, set()
+    cursor = None
+    while True:
+        args = {"limit": 100}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = lane.t3("t3_project_list", args)
+        projects = page.get("projects") if isinstance(page, dict) else None
+        if not isinstance(projects, list):
+            fail("the T3 project list could not be read")
+        for p in projects:
+            roots[p["id"]] = f"{p.get('title', '')} {p.get('workspaceRoot', '')}"
+        next_cursor = page.get("nextCursor")
+        if not projects or next_cursor is None or next_cursor == "" or next_cursor in seen:
+            break
+        seen.add(next_cursor)
+        cursor = next_cursor
+    return roots
 
 
 def verdict_threads():
