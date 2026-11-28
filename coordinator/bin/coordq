@@ -520,6 +520,22 @@ def with_rules(args, rules):
     return {**args, "message": f"## Agent rules\n\n{rules}\n\n## Brief\n\n{args['message']}"}
 
 
+def unsettle_before_send(thread_id):
+    code, out = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+    if code:
+        log(f"thread {thread_id} not read before the send: {out[:200]}")
+        return
+    try:
+        settled = bool((json.loads(out).get("thread") or {}).get("settled"))
+    except (ValueError, AttributeError):
+        log(f"thread {thread_id} read before the send is not JSON")
+        return
+    if settled:
+        code, out = t3_call("t3_thread_organize", {"threadId": thread_id, "action": "unsettle"})
+        if code:
+            log(f"thread {thread_id} not unsettled before the send: {out[:200]}")
+
+
 def call(tool, args, rules=None):
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
@@ -532,6 +548,8 @@ def call(tool, args, rules=None):
             args = with_rules(args, rules)
     args = worktree_base(tool, args)
     args = {key: value for key, value in args.items() if key != "taskType"}
+    if tool == "t3_thread_send" and args.get("threadId"):
+        unsettle_before_send(args["threadId"])
     return t3_call(tool, args)
 
 
