@@ -114,12 +114,13 @@ PI_FILES = (
     ("subagent-manager/settings.json", ".pi/agent-coordinator/subagent-manager/settings.json"),
     ("subagent-manager/agents/architect.yml", ".pi/agent-coordinator/subagent-manager/agents/architect.yml"),
     ("subagent-manager/agents/coder.yml", ".pi/agent-coordinator/subagent-manager/agents/coder.yml"),
-    ("subagent-manager/agents/researcher.yml", ".pi/agent-coordinator/subagent-manager/agents/researcher.yml"),
+    ("subagent-manager/agents/researcher.md", ".pi/agent-coordinator/subagent-manager/agents/researcher.md"),
     ("subagent-manager/agents/reviewer.yml", ".pi/agent-coordinator/subagent-manager/agents/reviewer.yml"),
     ("subagent-manager/agents/tasker.yml", ".pi/agent-coordinator/subagent-manager/agents/tasker.yml"),
     ("subagent-manager/agents/writer.yml", ".pi/agent-coordinator/subagent-manager/agents/writer.yml"),
     ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
 )
+RETIRED_PI_FILES = (".pi/agent-coordinator/subagent-manager/agents/researcher.yml",)
 TURN_CAP_JOB = "dev.coordinator.turncap"
 # The jobs the coordinator retired. A retired job has no plist in the
 # repository, so the installer must also take the installed copy away and
@@ -511,6 +512,23 @@ def retired_plists(home: Path) -> list[Path]:
 def retired_files(coordinator: Path) -> list[Path]:
     paths = [coordinator.joinpath(*parts) for parts in RETIRED_FILES]
     return [path for path in paths if path.is_file()]
+
+
+def retired_pi_files(home: Path) -> list[Path]:
+    paths = [home / relative for relative in RETIRED_PI_FILES]
+    return [path for path in paths if not path.is_symlink() and path.is_file()]
+
+
+def retire_pi_files(home: Path) -> list[str]:
+    notes: list[str] = []
+    for path in retired_pi_files(home):
+        try:
+            path.unlink()
+        except OSError as exc:
+            notes.append(f"Could not remove retired pi file {path}: {exc}")
+            continue
+        notes.append(f"Removed retired pi file {path}.")
+    return notes
 
 
 def job_loaded(label: str) -> bool:
@@ -1004,7 +1022,7 @@ def install(
                 "action": "coordinator",
                 "would_write": [str(t) for t, _, _ in pending],
                 "kept_local": [str(t) for t in kept],
-                "would_retire": [str(path) for path in retired_plists(home)],
+                "would_retire": [str(path) for path in retired_plists(home) + retired_pi_files(home)],
                 "would_archive": [str(path) for path in old_list_files(home)],
                 "would_reload": [
                     label or str(target)
@@ -1019,6 +1037,8 @@ def install(
         ))
         return
     for note in retire_jobs(home):
+        print(note)
+    for note in retire_pi_files(home):
         print(note)
     for path in archive_model_lists(home):
         print(f"Archived model list: {path}")
@@ -1122,9 +1142,11 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
     pending = changes(checkout, home, coordinator)
     _, kept = split_local_mods(pending, home, recorded_mod_hashes(home))
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
-    retired = [str(path) for path in retired_plists(home)] + [
-        str(path) for path in retired_files(coordinator)
-    ]
+    retired = (
+        [str(path) for path in retired_plists(home)]
+        + [str(path) for path in retired_files(coordinator)]
+        + [str(path) for path in retired_pi_files(home)]
+    )
     unsourced = unsourced_code(checkout, coordinator)
     checks = smoke_checks(home) if smoke else []
     print(
