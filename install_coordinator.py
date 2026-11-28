@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import json
 import os
@@ -141,6 +142,11 @@ OVERNIGHT_BIN_FILES = ("overnight",) + tuple(
         (Path(__file__).resolve().parent / "coordinator/overnight").glob("*.py")
     ) if path.is_file()
 )
+DRIFT_CODE_SUFFIXES = (".py", ".sh", ".mjs", ".ts")
+DRIFT_SKIP_DIRS = frozenset(
+    ("archive", "backups", "evidence", "inbox", "notes", "thoughts", "migration", "__pycache__")
+)
+LOCAL_ONLY_CODE = ("set-posthog*.sh",)
 GITIGNORE_ENTRY = ".overnight/"
 GITIGNORE_BLOCK = (
     "# Overnight runner scratch, installed by mac-ops\n"
@@ -1102,6 +1108,25 @@ def config_key_drift(checkout: Path, home: Path) -> list[str]:
     ]
 
 
+def raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def unsourced_code(checkout: Path, coordinator: Path) -> list[str]:
+    found = []
+    for folder, dirs, files in os.walk(coordinator, onerror=raise_walk_error):
+        dirs[:] = sorted(d for d in dirs if d not in DRIFT_SKIP_DIRS and not d.startswith("."))
+        for name in sorted(files):
+            if not name.endswith(DRIFT_CODE_SUFFIXES):
+                continue
+            if any(fnmatch.fnmatch(name, pattern) for pattern in LOCAL_ONLY_CODE):
+                continue
+            relative = (Path(folder) / name).relative_to(coordinator)
+            if not (checkout / "coordinator" / relative).is_file():
+                found.append(str(relative))
+    return found
+
+
 def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) -> None:
     home = Path.home()
     coordinator = coordinator or coordinator_dir(home)
@@ -1111,11 +1136,12 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
     retired = [str(path) for path in retired_plists(home)] + [
         str(path) for path in retired_files(coordinator)
     ]
+    unsourced = unsourced_code(checkout, coordinator)
     checks = smoke_checks(home) if smoke else []
     print(
         json.dumps(
             {
-                "in_sync": not pending and not missing and not retired,
+                "in_sync": not pending and not missing and not retired and not unsourced,
                 "healthy": all(check["healthy"] for check in checks),
                 "smoke_checks": checks,
                 "differs": [str(t) for t, _, _ in pending],
@@ -1130,10 +1156,13 @@ def status(checkout: Path, coordinator: Path | None = None, smoke: bool = True) 
                 "overnight_missing": [str(d) for d in missing],
                 "retired_jobs": list(RETIRED_JOBS),
                 "retired_leftovers": retired,
+                "unsourced_code": unsourced,
             },
             indent=2,
         )
     )
+    if unsourced:
+        sys.exit(1)
 
 
 def main() -> None:
