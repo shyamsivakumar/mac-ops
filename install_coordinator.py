@@ -36,8 +36,6 @@ CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tick
 # and an install never writes over it.
 LOCAL_CONFIG_FILES = ("tickets.json",)
 MODS_DIR = ".config/herdr-app/mods"
-MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
-HERDR_FILES = ("keys.json", "layouts/shyam.json")
 WORKTREE_SCAN_DIR = "scripts/worktree-cleaner"
 TASK_ROUTER = ".pi/agent/extensions/task-router.ts"
 ROUTE_LEVELS = {
@@ -178,19 +176,10 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     ]
     items.append((root / "models.json", home / ".coordinator/models.json", 0o644))
     items += [
-        (root / "rules/answers.js", home / target, 0o644)
-        for target in (".coordinator/answers.js", f"{MODS_DIR}/coordinator/answers.js")
-    ]
-    items += [
         (root / "overnight" / name, home / ".local/bin" / name, 0o755)
         for name in OVERNIGHT_BIN_FILES
     ]
-    items += [
-        (root / "herdr" / name, home / ".config/herdr-app" / name, 0o644)
-        for name in HERDR_FILES
-    ]
     items.append((checkout / WORKTREE_SCAN_DIR / "scan.sh", home / ".local/bin/worktree-scan", 0o755))
-    items.append((checkout / WORKTREE_SCAN_DIR / "scan-forwarder.sh", home / MODS_DIR / "worktrees/scan.sh", 0o755))
     pi_root = root / "pi"
     items += [
         (pi_root / "bin" / name, home / ".local/bin" / name, 0o755)
@@ -199,17 +188,6 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     items += [
         (pi_root / relative, home / live, 0o644) for relative, live in PI_FILES
     ]
-    for mod in MODS:
-        base = root / "mods" / mod
-        items += [
-            (
-                f,
-                home / MODS_DIR / mod / f.relative_to(base),
-                0o755 if os.access(f, os.X_OK) else 0o644,
-            )
-            for f in sorted(base.rglob("*"))
-            if f.is_file()
-        ]
     return items
 
 

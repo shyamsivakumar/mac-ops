@@ -19,18 +19,6 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent
 
 
-def panel_source():
-    """Return the coordinator panel's source.
-
-    The check runs in the checkout and in the installed layout, where the
-    panel lives beside the other Herdr files and not in the checkout."""
-    for candidate in (ROOT.parent / "mods" / "coordinator" / "main.js",
-                      Path.home() / ".config" / "herdr-app" / "mods" / "coordinator" / "main.js"):
-        if candidate.is_file():
-            return candidate.read_text()
-    raise AssertionError("the coordinator panel is not found")
-
-
 def load_runner():
     """Return the overnight runner as a module, so an eval runs the real path."""
     path = ROOT / "overnight" if (ROOT / "overnight").is_file() else ROOT.parent / "overnight" / "overnight"
@@ -4277,28 +4265,6 @@ def alarm_mute_on_one_board():
             exact(alarms.muted(alarms.load_state(),
                                 alarms.key_of("factory-watchdog", cause), now), True)
 
-    # The panel is JavaScript, so the contract it holds for the answer is
-    # read from its source: the answer carries the cause it was given
-    # for, an answer whose alarm changed is dropped before the send, the
-    # acknowledgement names that cause, and the panel warns when the
-    # command did not record it.
-    panel = panel_source()
-    exact('shown: a.cause ?? ""' in panel, True)
-    # The panel uses the rules in the module the probe runs, so the
-    # rules themselves are checked there, not here.
-    exact('from "./answers.js"' in panel, True)
-    exact("await acknowledgeAlarm(a.id, a.cause)" in panel, True)
-    exact("if (r.code !== 0) {" in panel, True)
-    exact("`${home()}/.local/bin/alarms.py`" in panel, True)
-    exact("const bound = this.replyCauses.get(q)" in panel, True)
-    # A restored reply keeps the cause it belongs to, and a restored
-    # reply whose cause is unknown is dropped.
-    exact('shared("co.replyCauses")' in panel, True)
-    exact("bound === undefined" in panel, True)
-    send = panel.index("send(cx) {")
-    body = panel[send:send + 400]
-    exact(body.index("this.dropStaleDrafts()") < body.index("this.message()"), True)
-
     # A lock that cannot be taken is not a lock: the write fails and the
     # file is left alone, rather than written unlocked.
     with tempfile.TemporaryDirectory() as scratch:
@@ -5653,21 +5619,6 @@ def journal_migration():
         exact((new / ".migrated").exists(), True)
 
 
-def scan_forwarder():
-    repo = ROOT.parents[1]
-    if not (repo / "install_coordinator.py").is_file():
-        return
-    spec = importlib.util.spec_from_file_location("install_coordinator", repo / "install_coordinator.py")
-    installer = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(installer)
-    home = Path("/h")
-    planned = {str(target): (source, mode) for source, target, mode in installer.plan(repo, home)}
-    source, mode = planned[str(home / ".config/herdr-app/mods/worktrees/scan.sh")]
-    exact(source.read_text(), '#!/bin/sh\nexec sh "$HOME/.local/bin/worktree-scan" "$@"\n')
-    exact(mode, 0o755)
-    exact(planned[str(home / ".local/bin/worktree-scan")][0], repo / "scripts/worktree-cleaner/scan.sh")
-
-
 def stop_rules():
     import tick_health as health
 
@@ -6955,7 +6906,7 @@ def held_merge():
         exact(os.listdir(queue_dir), [])
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-settle": gate_settle, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules, "scan-forwarder": scan_forwarder}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-settle": gate_settle, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
 
 
 def main():
