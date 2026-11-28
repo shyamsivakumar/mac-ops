@@ -16,3 +16,11 @@ kill switch: off
 {"trial": "t", "killSwitch": "off", "capUsd": 25, "days": 7, "runs": 1, "tokens": 100, "usd": 26, "runsWithoutCost": 0, "dayOfTrial": 10, "overCap": true}
 {"trial": "none", "killSwitch": "off", "capUsd": "unknown", "days": "unknown", "runs": 0, "tokens": "unknown", "usd": "unknown", "runsWithoutCost": 0}
 ```
+
+## spend --report without --trial (head, rejected before any live spend work)
+```
+spend --trial and --report go together
+exit 1
+spend --trial and --report go together
+exit 1
+```

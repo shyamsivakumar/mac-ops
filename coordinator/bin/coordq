@@ -2129,9 +2129,9 @@ def scorecard_module():
 
 
 def cmd_spend(a):
+    if bool(a.trial) != a.report:
+        die("spend --trial and --report go together")
     if a.trial:
-        if not a.report:
-            die("spend --trial needs --report")
         print(json.dumps(trial_report(a.trial)))
         return
     if kill_switch_on():
