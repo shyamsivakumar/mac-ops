@@ -85,6 +85,7 @@ def drift_alarm():
                 "in_sync": status["in_sync"],
                 "differs": status["differs"],
                 "config_key_drift": status["config_key_drift"],
+                "unsourced_code": status["unsourced_code"],
             }
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(report))
@@ -99,7 +100,9 @@ def drift_alarm():
         if now - first_seen < 1800:
             return ""
         names = ", ".join(
-            [Path(path).name for path in report["differs"][:5]] + key_drift[:5]
+            [Path(path).name for path in report["differs"][:5]]
+            + key_drift[:5]
+            + report.get("unsourced_code", [])[:5]
         )
         minutes = int((now - first_seen) / 60)
         return (

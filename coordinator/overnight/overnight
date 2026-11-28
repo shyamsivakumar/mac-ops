@@ -1492,6 +1492,65 @@ def cmd_shift(args: argparse.Namespace) -> int:
         release_shift_lock(lock_fd)
 
 
+def cmd_act(args: argparse.Namespace) -> int:
+    """Run the lane's check on one pull request now, under the shift's own lock.
+
+    The lane merges a gate PASS only in its own pass. This runs that same
+    step (`act_on_pr`) for one pull request when its gate thread ends,
+    instead of at the next timer. The shift's rules still hold: STOP, the
+    policy's repository list and the lock. When any of them refuses, the
+    scheduled pass decides, as before."""
+    found = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)", args.ref)
+    if not found:
+        die(f"bad reference {args.ref!r}, expected owner/repo#number")
+    repo, number = found[1], int(found[2])
+    root = report_root(args.root)
+
+    def refused() -> bool:
+        policy, _ = load_policy(root)
+        if (root / "run" / "STOP").exists() or policy is None or repo not in cycle_allow(policy):
+            emit(f"overnight: act {args.ref}: the shift may not work this repository now, so the scheduled pass decides")
+            return True
+        return False
+
+    if refused():
+        return 0
+    import lane_driver
+
+    give_up = time.monotonic() + args.wait
+    while args.after and lane_driver.t3("t3_thread_read", {"threadId": args.after, "limit": 1}).get(
+            "thread", {}).get("status") not in ("completed", "failed", "interrupted"):
+        if time.monotonic() > give_up:
+            emit(f"overnight: act {args.ref}: gate thread {args.after} did not end in {args.wait}s, so the scheduled pass decides")
+            return 0
+        time.sleep(10)
+    lock_fd, problem = take_shift_lock()
+    while lock_fd is None and not problem and time.monotonic() < give_up:
+        time.sleep(5)
+        lock_fd, problem = take_shift_lock()
+    if lock_fd is None:
+        emit(f"overnight: act {args.ref}: {problem or 'another cycle holds the lock'}, so the scheduled pass decides")
+        return 1 if problem else 0
+    try:
+        if refused():
+            return 0
+        with open(Path.home() / ".coordinator" / "tickets.json") as handle:
+            lane_driver.CFG = json.load(handle)["repos"]
+        lane_driver.LANE_REPOS = [repo]
+        lane_driver.print = emit
+        ledger = lane_driver.load_ledger()
+        lane_driver.PASS_PRS.clear()
+        lane_driver.PASS_WORKTREES.clear()
+        lane_driver.SNAPSHOT = lane_driver.board_snapshot(ledger, force=True)
+        with lane_driver.item_boundary(repo, number, ledger):
+            result = lane_driver.act_on_pr(repo, number, ledger)
+        emit(f"{lane_driver.CFG[repo]['key']:5} {result}" if result else f"overnight: act {args.ref}: nothing to do")
+        lane_driver.save_ledger(ledger)
+    finally:
+        release_shift_lock(lock_fd)
+    return 0
+
+
 def shift_cycle(args: argparse.Namespace) -> int:
     """Run one cycle of the shift.
 
@@ -8076,6 +8135,12 @@ def main() -> int:
         help="write the day's morning report after the cycle",
     )
     shift.set_defaults(func=cmd_shift)
+    act = sub.add_parser("act", help="run the lane's check on one pull request now")
+    act.add_argument("ref", help="the pull request, as owner/repo#number")
+    act.add_argument("--after", help="wait until this gate thread has ended")
+    act.add_argument("--wait", type=int, default=900, help="seconds to wait for the thread and the lock")
+    act.add_argument("--root", default=None, help="the folder that holds the shift's records")
+    act.set_defaults(func=cmd_act)
     policy = sub.add_parser(
         "policy",
         help="write the policy snapshot the shift reads on every cycle",
