@@ -91,7 +91,7 @@ started=$(date +%s)
 [ "$mode" = delete ] && rm -f "$STATE/delete.json"
 failed=""
 needs="--no-report"
-[ "$mode" = clean ] && needs="--no-report --prune"
+[ "$mode" = clean ] && needs="--no-report --prune --include-t3-safe"
 [ "$mode" = archive ] && needs="--no-report --archive"
 [ "$mode" = delete ] && needs="--no-report --delete"
 for flag in $needs; do
@@ -100,7 +100,7 @@ done
 if [ -z "$failed" ]; then
   [ "$mode" = archive ] && { step "--archive" archive "$ARCHIVE_LIMIT" "$@" || failed=$(reason); }
   [ "$mode" = delete ] && { step "--delete" delete "$run_limit" "$@" || failed=$(reason); }
-  if [ "$mode" = clean ] && step "--apply --prune --no-report" clean "$CLEAN_LIMIT"; then
+  if [ "$mode" = clean ] && step "--apply --prune --include-t3-safe --no-report" clean "$CLEAN_LIMIT"; then
     cp "$STATE/clean.json" "$STATE/last.tmp" && mv "$STATE/last.tmp" "$STATE/last.json" || failed="could not publish clean result"
   else
     [ "$mode" = clean ] && failed=$(reason)
