@@ -24,6 +24,7 @@ import alarms
 import gate_vote
 import gh_gateway
 import journal
+import coord_logs
 
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
@@ -877,8 +878,8 @@ def drain():
     statuses = {}
     while True:
         queue = load()
-        if dispatch_stopped():
-            log("dispatch.stopped exists, nothing started")
+        if dispatch_stopped() or kill_switch_on():
+            log("dispatch.stopped or the kill switch exists, nothing started")
             return
         dispatchable = []
         dropped = set()
@@ -1828,8 +1829,8 @@ def refill(a):
     the tickets that cannot start and reaches the tickets further down the
     board, which the old first-REFILL_MAX window never did.
     """
-    if dispatch_stopped():
-        log("dispatch.stopped exists, refill refused")
+    if dispatch_stopped() or kill_switch_on():
+        log("dispatch.stopped or the kill switch exists, refill refused")
         return
     with Lock(False, "refill.lock") as lock:
         if lock is None:
@@ -1940,6 +1941,61 @@ def refill(a):
             f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
+def kill_switch_on():
+    try:
+        os.stat(path("kill.switch"))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def cmd_kill(a):
+    if a.state == "on":
+        open(path("kill.switch"), "w").close()
+    elif a.state == "off" and kill_switch_on():
+        os.remove(path("kill.switch"))
+    print("kill switch: " + ("on, no new work starts" if kill_switch_on() else "off"))
+
+
+def trial_runs(trial):
+    try:
+        with open(path("trial-runs.jsonl")) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    runs = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("trial") == trial:
+            runs.append(row)
+    return runs
+
+
+def trial_report(trial):
+    with open(path("config.json")) as f:
+        limits = (json.load(f).get("trials") or {}).get(trial) or {}
+    runs = trial_runs(trial)
+    report = {"trial": trial, "killSwitch": "on" if kill_switch_on() else "off",
+              "capUsd": limits.get("capUsd", "unknown"), "days": limits.get("days", "unknown")}
+    if runs is None:
+        return {**report, "runs": "unknown", "tokens": "unknown", "usd": "unknown"}
+    priced = [r["cost_usd"] for r in runs if isinstance(r.get("cost_usd"), (int, float))]
+    tokens = [r["tokens"] for r in runs if isinstance(r.get("tokens"), int)]
+    report.update(runs=len(runs), tokens=sum(tokens) if tokens else "unknown",
+                  usd=round(sum(priced), 2) if priced else "unknown", runsWithoutCost=len(runs) - len(priced))
+    started = [r["at"] for r in runs if isinstance(r.get("at"), (int, float))]
+    if started and isinstance(report["days"], (int, float)):
+        report["dayOfTrial"] = int((time.time() - min(started)) // 86400) + 1
+    if isinstance(report["usd"], (int, float)) and isinstance(report["capUsd"], (int, float)):
+        report["overCap"] = report["usd"] >= report["capUsd"]
+    return report
+
+
 def safe_refill(a):
     try:
         refill(a)
@@ -1948,6 +2004,10 @@ def safe_refill(a):
 
 
 def cmd_dispatch(a):
+    if kill_switch_on():
+        log("kill switch is on, dispatch refused")
+        print("kill switch is on: no new work starts, running work is left alone")
+        return
     if dispatch_stopped():
         log("dispatch.stopped exists, dispatch refused")
         return
@@ -1955,6 +2015,7 @@ def cmd_dispatch(a):
         f.write(str(int(time.time())))
     if a.dry_run:
         log("dry run: the queue is left alone")
+        print("kill switch is off: dispatch would start work, a dry run starts nothing")
         safe_refill(a)
         return
     with Lock(False) as lock:
@@ -2069,6 +2130,10 @@ def cmd_status(a):
 
 
 
+def cmd_logs(a):
+    sys.exit(coord_logs.run(a.sources, DIR, a.since, a.grep, a.tail, sys.stdout, sys.stderr))
+
+
 def scorecard_module():
     loader = importlib.machinery.SourceFileLoader("coordq_scorecard", os.path.join(_BIN_DIR, "scorecard"))
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq_scorecard", loader))
@@ -2077,6 +2142,13 @@ def scorecard_module():
 
 
 def cmd_spend(a):
+    if bool(a.trial) != a.report:
+        die("spend --trial and --report go together")
+    if a.trial:
+        print(json.dumps(trial_report(a.trial)))
+        return
+    if kill_switch_on():
+        print(stamped("kill switch is on: no new work starts"), file=sys.stderr)
     token_cap, stall_minutes = card_limits()
     scorecard = scorecard_module()
     sources = scorecard.load_cost_sources()
@@ -3769,6 +3841,8 @@ def main():
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sp = sub.add_parser("spend", help="stop a ticket thread over its token cap or idle past the stall limit")
     sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--trial", help="report the spend of the runs tagged with this trial")
+    sp.add_argument("--report", action="store_true", help="print the trial spend and stop nothing")
     sp.set_defaults(fn=cmd_spend)
     de = sub.add_parser("decision", help="record decision inbox rows: sync shown and expired, or mark ids answered")
     de.add_argument("action", choices=("sync", "answered"))
@@ -3777,11 +3851,21 @@ def main():
     ar = sub.add_parser("actrate", help="print how often decision items are acted on, per kind")
     ar.add_argument("--days", type=int, default=7)
     ar.set_defaults(fn=cmd_actrate)
+    k = sub.add_parser("kill", help="stop new work from starting (on), allow it again (off), or show the state")
+    k.add_argument("state", choices=("on", "off", "status"))
+    k.set_defaults(fn=cmd_kill)
     w = sub.add_parser("wait", help="record that an approval wait started or ended, and who owns it")
     w.add_argument("action", choices=("start", "end"))
     w.add_argument("id", help="the card or action key the wait is about")
     w.add_argument("--owner", help="who must answer: required for start")
     w.set_defaults(fn=cmd_wait)
+    lg = sub.add_parser("logs", help="read the tick, queue, lane and journal logs, secrets redacted")
+    lg.add_argument("sources", nargs="*", metavar="source",
+                    help="any of " + ", ".join(coord_logs.SOURCES) + "; all when none is named")
+    lg.add_argument("--since", help="only lines newer than this, like 30m, 1h or 2d")
+    lg.add_argument("--grep", help="only lines that match this regex, ignoring case")
+    lg.add_argument("--tail", type=int, default=200, help="at most this many lines per source")
+    lg.set_defaults(fn=cmd_logs)
     sub.add_parser("waits", help="list open approval waits with owner and age").set_defaults(fn=cmd_waits)
     d = sub.add_parser("dispatch")
     d.add_argument("--dry-run", action="store_true",
