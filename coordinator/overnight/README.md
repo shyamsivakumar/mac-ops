@@ -1494,7 +1494,7 @@ answer whose alarm was replaced in between. A reply the popup restores
 keeps the cause it belongs to, and text saved without a cause is not
 restored at all: it cannot be bound to the alarm on the board now.
 
-The rules that bind an answer live in `coordinator/mods/coordinator/answers.js`,
+The rules that bind an answer live in `coordinator/rules/answers.js`,
 a module with no imports, so the panel uses it and a probe can run it.
 `tests/test_alarm_panel.py` runs that module for real: a legacy draft
 reopened against a replaced alarm sends nothing and acknowledges nothing,
