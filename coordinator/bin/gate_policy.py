@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,6 +67,13 @@ def partial_claim(body):
     return NEXT_HEADING.split(text[heading.end():], 1)[0].strip() if heading else ""
 
 
+def is_test_file(f):
+    name = f["filename"]
+    base = name.rsplit("/", 1)[-1]
+    return (base.startswith("test_") or base.endswith("_test.py")
+            or "selftest" in name or "tests" in name.split("/"))
+
+
 def counted_code_file(f):
     name = f["filename"]
     base = name.rsplit("/", 1)[-1]
@@ -73,9 +81,7 @@ def counted_code_file(f):
         return False
     if "fixtures" in name.split("/") or "proof" in base:
         return False
-    is_test = (base.startswith("test_") or base.endswith("_test.py")
-               or "selftest" in name or "tests" in name.split("/"))
-    if f.get("status") != "added" and is_test:
+    if f.get("status") != "added" and is_test_file(f):
         return False
     return True
 
@@ -83,6 +89,31 @@ def counted_code_file(f):
 def code_size(files):
     code = [f for f in files if counted_code_file(f)]
     return sum(f["additions"] + f["deletions"] for f in code), len(code)
+
+
+def size_numbers(files):
+    proof = [f for f in files if not counted_code_file(f) and not f["filename"].startswith("docs/")
+             and (f["filename"].startswith("evidence/") or not f["filename"].endswith(".md"))]
+    runtime, count = code_size(files)
+    return {"runtime": runtime, "proof": sum(f["additions"] + f["deletions"] for f in proof), "files": count}
+
+
+def edited_proof_or_test(files):
+    return [f["filename"] for f in files
+            if f.get("status") != "added" and not f["filename"].startswith(SIZE_EXCLUDED_PREFIXES)
+            and (is_test_file(f) or "proof" in f["filename"].rsplit("/", 1)[-1])]
+
+
+def diff_files(base="origin/main", cwd=None):
+    def git(*args):
+        return subprocess.run(["git", *args, f"{base}...HEAD"], capture_output=True, text=True, check=True, cwd=cwd).stdout
+    added = {line.split("\t", 1)[1]: line[0] == "A" for line in git("diff", "--no-renames", "--name-status").splitlines()}
+    files = []
+    for line in git("diff", "--no-renames", "--numstat").splitlines():
+        plus, minus, name = line.split("\t", 2)
+        files.append({"filename": name, "status": "added" if added[name] else "modified",
+                      "additions": int(plus) if plus != "-" else 0, "deletions": int(minus) if minus != "-" else 0})
+    return files
 
 
 def partial_state(body, read_files):

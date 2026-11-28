@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR, SEVERITY_BAR
-from gate_policy import complete_pass, partial_claim, partial_state
+from gate_policy import complete_pass, diff_files, edited_proof_or_test, partial_claim, partial_state, size_numbers
 import gh_gateway
 import journal
 from pr_refs import FENCED_BLOCK, references_issue, same_repo
@@ -1532,8 +1532,12 @@ def bar_visible(t):
     return journal.treatment_names(arm(t), "builder", "severity_bar")
 
 
+PREGATE_RULE = ("Before you open the PR, run `ticket size --issue <n>`. It prints runtime lines, proof lines, code files and "
+                "whether the proof file exists, and exits non-zero over the caps or on an edit to an existing proof or test.")
+
+
 def brief_prefix():
-    return "\n\n".join([ANSWER_FORMAT, SIZE_RULE])
+    return "\n\n".join([ANSWER_FORMAT, SIZE_RULE, PREGATE_RULE])
 
 
 def brief_prefix_sha():
@@ -2313,6 +2317,34 @@ def cmd_set(a):
     print(json.dumps(sorted((set(names) | set(add)) - set(remove))))
 
 
+def cmd_size(a):
+    import proof_file
+    cfg = load_config()
+    limits = cfg.get("limits", {})
+    cap_lines = limits.get("maxCodeLines", MAX_CODE_LINES)
+    cap_files = limits.get("maxCodeFiles", MAX_CODE_FILES)
+    try:
+        files = diff_files(a.base)
+    except subprocess.CalledProcessError as e:
+        die(e.stderr.strip() or "git diff failed", 2)
+    except ValueError as e:
+        die(f"unreadable diff line: {e}", 2)
+    numbers = size_numbers(files)
+    proof_path = proof_file.path_for(cfg["repos"][a.repo]["key"], a.issue)
+    print(f"runtime lines: {numbers['runtime']} (cap {cap_lines})")
+    print(f"proof lines: {numbers['proof']}")
+    print(f"code files: {numbers['files']} (cap {cap_files})")
+    print(f"proof file: {proof_path} {'present' if os.path.exists(proof_path) else 'missing'}")
+    problems = []
+    if numbers["runtime"] > cap_lines:
+        problems.append(f"over the cap: {numbers['runtime']} runtime lines, cap {cap_lines}")
+    if numbers["files"] > cap_files:
+        problems.append(f"over the cap: {numbers['files']} code files, cap {cap_files}")
+    problems += [f"edited an existing proof or test: {name}" for name in edited_proof_or_test(files)]
+    if problems:
+        die("\n".join(problems), 1)
+
+
 def main():
     p = argparse.ArgumentParser(prog="ticket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2368,6 +2400,11 @@ def main():
     s.add_argument("--reviewer")
     s.add_argument("--stage")
     s.set_defaults(fn=cmd_set)
+    s = sub.add_parser("size", help="print the runtime and proof line counts of this branch against the caps")
+    s.add_argument("--issue", type=int)
+    s.add_argument("--repo", default="shyamsivakumar/mac-ops")
+    s.add_argument("--base", default="origin/main")
+    s.set_defaults(fn=cmd_size)
     s = sub.add_parser("show")
     s.add_argument("ref")
     s.add_argument("--json", action="store_true")
