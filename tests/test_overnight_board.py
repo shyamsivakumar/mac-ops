@@ -156,5 +156,63 @@ class FailingCheckTests(unittest.TestCase):
         self.assertFalse(state["blocks"])
 
 
+class T3ProjectListPaginationTest(unittest.TestCase):
+    def _load(self, name, relpath):
+        spec = importlib.util.spec_from_file_location(name, str(ROOT / relpath))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_turn_cap_paginates_and_guards_loops(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        tc = self._load("turn_cap_under_test", "coordinator/overnight/turn_cap.py")
+        calls = []
+
+        def fake_call(cli, tool, args):
+            calls.append((cli, tool, dict(args)))
+            if "cursor" not in args:
+                return {"projects": [{"id": f"mcp:p{i}"} for i in range(20)], "nextCursor": 20}
+            return {"projects": [{"id": f"mcp:p{i}"} for i in range(20, 26)], "nextCursor": None}
+
+        tools_out = SimpleNamespace(stdout="t3_project_list t3_thread_list\n")
+        with patch.object(tc.subprocess, "run", return_value=tools_out), patch.object(tc, "call", side_effect=fake_call):
+            ids = tc.t3_project_ids()
+        self.assertEqual((len(ids), ids[-1]), (26, "mcp:p25"))
+        self.assertEqual(calls, [("t3mcp", "t3_project_list", {"limit": 100}), ("t3mcp", "t3_project_list", {"limit": 100, "cursor": 20})])
+
+        loop_calls = []
+        with patch.object(tc.subprocess, "run", return_value=tools_out), patch.object(
+            tc, "call", side_effect=lambda c, t, a: loop_calls.append(dict(a)) or {"projects": [{"id": "mcp:x"}], "nextCursor": 20}
+        ):
+            self.assertEqual(tc.t3_project_ids(), ["mcp:x", "mcp:x"])
+        self.assertEqual(len(loop_calls), 2)
+
+        with patch.object(tc.subprocess, "run", return_value=SimpleNamespace(stdout="t3_thread_list\n")):
+            self.assertEqual(tc.t3_project_ids(), tc.T3_FALLBACK_PROJECTS)
+
+    def test_settle_finished_paginates_and_fails_on_bad_page(self):
+        from unittest.mock import patch
+
+        sf = self._load("settle_finished_under_test", "scripts/settle_finished.py")
+        calls = []
+
+        def fake_t3(tool, args):
+            calls.append((tool, dict(args)))
+            if "cursor" not in args:
+                return {"projects": [{"id": f"mcp:p{i}", "title": f"p{i}", "workspaceRoot": f"/w/{i}"} for i in range(20)], "nextCursor": 20}
+            return {"projects": [{"id": "mcp:alpha", "title": "alpha-trader", "workspaceRoot": "/w/alpha"}], "nextCursor": None}
+
+        with patch.object(sf.lane, "t3", side_effect=fake_t3):
+            roots = sf.project_roots()
+        self.assertEqual((len(roots), roots["mcp:alpha"]), (21, "alpha-trader /w/alpha"))
+        self.assertEqual(calls, [("t3_project_list", {"limit": 100}), ("t3_project_list", {"limit": 100, "cursor": 20})])
+
+        with patch.object(sf.lane, "t3", return_value={"projects": None}), self.assertRaises(SystemExit) as exc:
+            sf.project_roots()
+        self.assertIn("T3 project list", str(exc.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

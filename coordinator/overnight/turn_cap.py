@@ -65,8 +65,23 @@ def t3_project_ids():
     )
     names = result.stdout.split()
     if "t3_project_list" in names:
-        projects = call("t3mcp", "t3_project_list", {})
-        return [p["id"] for p in projects.get("projects", [])]
+        ids, seen = [], set()
+        cursor = None
+        while True:
+            args = {"limit": 100}
+            if cursor is not None:
+                args["cursor"] = cursor
+            page = call("t3mcp", "t3_project_list", args)
+            batch = page.get("projects") if isinstance(page, dict) else None
+            if not isinstance(batch, list) or not batch:
+                break
+            ids.extend(p["id"] for p in batch if isinstance(p, dict) and p.get("id"))
+            next_cursor = page.get("nextCursor")
+            if next_cursor is None or next_cursor == "" or next_cursor in seen:
+                break
+            seen.add(next_cursor)
+            cursor = next_cursor
+        return ids
     return T3_FALLBACK_PROJECTS
 
 
