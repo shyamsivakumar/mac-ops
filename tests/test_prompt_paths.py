@@ -813,7 +813,7 @@ class LanePassTest(unittest.TestCase):
                     patch.object(self.lane.alarms, "board_update", board_update):
                 self.assertEqual(self.lane.publish_decision(self.item), "wrote")
         self.assertEqual(calls, [(Path(scratch) / "mac-ops-owner.json",
-                                  "prompt-merge-MO-544", "raise", self.item)])
+                                  "prompt-merge-MO-544", "raise", {"owner": "t1j", **self.item})])
 
 
 class BoardReconcileTest(unittest.TestCase):

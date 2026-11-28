@@ -96,6 +96,8 @@ class ReplayTests(unittest.TestCase):
                     fixer = self.lane.model_list.first_available("fix")["selection"]
                     return {"thread": {"providerInstanceId": fixer["instanceId"], "model": fixer["model"],
                                        "status": status, "sendable": True}}
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 call: {tool}")
 
         with patch.object(self.lane, "CFG", {REPO: {"key": "MO", "projectId": "fixture"}}), \
