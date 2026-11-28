@@ -171,6 +171,10 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     ]
     items.append((root / "models.json", home / ".coordinator/models.json", 0o644))
     items += [
+        (root / "rules/answers.js", home / target, 0o644)
+        for target in (".coordinator/answers.js", f"{MODS_DIR}/coordinator/answers.js")
+    ]
+    items += [
         (root / "overnight" / name, home / ".local/bin" / name, 0o755)
         for name in OVERNIGHT_BIN_FILES
     ]
