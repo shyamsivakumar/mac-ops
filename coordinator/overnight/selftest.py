@@ -548,6 +548,8 @@ def gate_pipeline():
                     return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
                 return {"thread": {"status": "running" if args["threadId"] in live else "completed"},
                         "items": [{"type": "assistant_message", "text": thread_replies[args["threadId"]]}]}
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def decision(item, actions=actions):
@@ -1990,6 +1992,66 @@ def worktree_base_ref():
     exact(fill(launch, {"message": "brief"}), {"message": "brief"})
 
 
+def gate_settle():
+    import lane_driver as lane
+    calls, outcomes = [], []
+
+    def t3(tool, args):
+        calls.append((tool, args["threadId"], args["action"]))
+        if outcomes and outcomes.pop(0):
+            raise subprocess.CalledProcessError(1, ["t3mcp"], output="down")
+        return {}
+
+    def verdict(name, ledger, dry=False):
+        with patch.object(lane, "t3", t3), patch.object(lane, "journal_event"), patch.object(lane, "DRY", dry):
+            lane.journal_verdict("o/r", 1, "a" * 40, name, {"threadId": "T"}, ledger)
+
+    settle = [("t3_thread_organize", "T", "settle")]
+    ledger = {}
+    verdict("PASS", ledger)
+    verdict("PASS", ledger)
+    exact(calls, settle)
+    calls.clear()
+    ledger, outcomes[:] = {}, [True]
+    verdict("FAIL", ledger)
+    exact("gate-settled:T" in ledger, False)
+    verdict("FAIL", ledger)
+    exact((calls, "gate-settled:T" in ledger), (settle * 2, True))
+    calls.clear()
+    for name, dry in (("SPLIT", False), ("PASS", True)):
+        verdict(name, {}, dry)
+    exact(calls, [])
+
+    receipts = {"ticket:o/r#7:a1": "builder", "ticket:o/r#70:a1": "other-ticket", "fix:o/r#5:h": "fix",
+                "gate:o/r#5:h": "gate", "vote:o/r#5:h:v": "vote", "fix:o/r#50:h": "other-pr", "base:fix": "main"}
+    statuses = {"vote": "running"}
+    organized = []
+
+    def closing(ledger, dry=False):
+        def thread_tool(tool, args):
+            if tool == "t3_thread_organize":
+                organized.append(args["threadId"])
+                return {}
+            return {"thread": {"status": statuses.get(args["threadId"], "completed")}}
+
+        with patch.object(lane, "t3", thread_tool), patch.object(lane, "stall_receipts", return_value=receipts), \
+             patch.object(lane, "run", return_value=""), patch.object(lane, "fast_forward_main"), \
+             patch.object(lane, "DRY", dry):
+            lane.close_after_merge("o/r", 5, "h", "7", {"threadId": "gate"}, ledger)
+
+    ledger = {}
+    closing({}, dry=True)
+    exact(organized, [])
+    closing(ledger)
+    exact(sorted(organized), ["builder", "fix", "gate"])
+    statuses.clear()
+    organized.clear()
+    with patch.object(lane, "t3", lambda tool, args: organized.append(args["threadId"]) or {"thread": {"status": "completed"}}), \
+         patch.object(lane, "stall_receipts", return_value=receipts), patch.object(lane, "DRY", False):
+        lane.settle_ticket_threads("o/r", 5, "7", ledger)
+    exact(sorted(set(organized)), ["vote"])
+
+
 def gate_round_cap():
     """The convergence rule in the lane: three failed reviews, then one item.
 
@@ -2034,6 +2096,8 @@ def gate_round_cap():
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
+            if tool == "t3_thread_organize":
+                return {}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         def send(thread_id, message, title, ledger, lkey, **kwargs):
@@ -2371,6 +2435,7 @@ def publisher_status_outcomes():
              patch.object(lane, "superseded_by", return_value=False), \
              patch.object(lane, "issue_record", return_value={}), patch.object(lane, "issue_held", return_value=False), \
              patch.object(lane, "gate_verdict", return_value=("PASS", {"threadId": "gate"}, "VERDICT: PASS")), \
+             patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "read_json", pr_reads(lane, row)), \
              patch.object(lane, "send", lambda *a, **k: sent.append(a[1]) or "sent"), \
              patch.object(lane, "merge_passed_pr", lambda *a: merges.append(a[2]) or "merged"):
@@ -5562,6 +5627,7 @@ def closed_ticket_merge():
              patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
              patch.object(lane, "gate_verdict", return_value=verdict), patch.object(lane, "read_json", read_json), \
              patch.object(lane, "run", side_effect=AssertionError("unexpected command")), \
+             patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "merge_passed_pr", merge), patch.object(lane, "publish_decision", decision):
             return lane.act_on_pr(repo, 20, {} if ledger is None else ledger)
 
@@ -6652,7 +6718,7 @@ def held_merge():
         exact(os.listdir(queue_dir), [])
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "worktree-base-ref": worktree_base_ref, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-settle": gate_settle, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute, "router-build": router_build, "router-blocked": router_blocked, "key-mint": key_mint, "credit-block": credit_block, "provider-until": provider_until, "refill-busy": refill_busy, "stale-started-refill": stale_started_refill, "close-evidence": close_evidence, "build-here": build_here, "journal-migration": journal_migration, "builder-receipt": builder_receipt, "closed-ticket-merge": closed_ticket_merge, "inbox": inbox, "held-merge": held_merge, "stop-rules": stop_rules}
 
 
 def main():
