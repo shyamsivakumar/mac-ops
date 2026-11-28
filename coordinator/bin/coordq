@@ -24,6 +24,7 @@ import alarms
 import gate_vote
 import gh_gateway
 import journal
+import coord_logs
 
 # Every gh call here goes through the helper, and the helper uses this
 # module's launcher, so a test that replaces `subprocess` still sees them.
@@ -178,6 +179,11 @@ def log(message):
 def cap():
     with open(path("config.json")) as f:
         return json.load(f)["cap"]
+
+
+def proofs_per_run():
+    with open(path("config.json")) as f:
+        return json.load(f).get("proofsPerRun", 3)
 
 
 def card_limits():
@@ -2061,6 +2067,10 @@ def cmd_status(a):
 
 
 
+def cmd_logs(a):
+    sys.exit(coord_logs.run(a.sources, DIR, a.since, a.grep, a.tail, sys.stdout, sys.stderr))
+
+
 def scorecard_module():
     loader = importlib.machinery.SourceFileLoader("coordq_scorecard", os.path.join(_BIN_DIR, "scorecard"))
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader("coordq_scorecard", loader))
@@ -2766,8 +2776,8 @@ def proof_state(settings, repo, number, event, key, author, body, failure, ran):
         return "changed", "the proof command differs from the one the ticket opened with", cmd
     if not cmd or cmd.lower().startswith("none (prose)"):
         return "prose", "", cmd
-    if ran:
-        print(stamped(f"proof of {event['pr']} waits: one proof per run"), flush=True)
+    if len(ran) >= proofs_per_run():
+        print(stamped(f"proof of {event['pr']} waits: {len(ran)} proofs this run"), flush=True)
         return None
     ran.add(key)
     state, tail = run_head_proof(settings, repo, number, cmd, event["head"])
@@ -2780,7 +2790,7 @@ def proof_gate(settings, repo, number, event, key, dry_run, ran):
     The proof runs once per head: the result is kept under the head's
     key, so a later run reads it instead of running again. A head that
     does not pass gets a board card and no gate. `ran` is the set of the
-    heads proved by one gatekeep run, so one run proves one head.
+    heads proved by one gatekeep run, so one run proves at most proofsPerRun heads.
     """
     queue = load()
     arm = journal.assigned_arm(repo, event.get("scopeIssue"))
@@ -2969,6 +2979,85 @@ def scope_gate(settings, repo, number, event, key, dry_run):
                 save(queue)
         else:
             print(stamped(f"scope {event['pr']}: the card could not be published"), flush=True)
+    return False
+
+
+PREREVIEW_PATHS = re.compile(r"^coordinator/bin/(coordq|ticket|gate_[^/]+)$|^coordinator/overnight/lane_driver\.py$")
+PREREVIEW_WAIT_SECONDS = 2 * 3600
+PREREVIEW_CLEAN = "PREREVIEW: CLEAN"
+PREREVIEW_BRIEF = (
+    "Adversarial pre-review of {repo}#{number} at head {head}. Read the diff with `gh pr diff {number} -R {repo}`. "
+    "List every failure path: missing data, unreadable input, stalled dependency, malformed reply. "
+    "For each, name the file and function, what the code does, and what it should do. "
+    "End with the line `PREREVIEW: CLEAN` when you found none, else `PREREVIEW: FINDINGS`."
+)
+
+
+def prereview_skip(key, reason, dry_run):
+    print(stamped(f"prereview {key}: {reason}, the gate goes ahead"), flush=True)
+    if dry_run:
+        return True
+    with Lock(True):
+        queue = load()
+        queue.setdefault("prereviewHeads", {}).setdefault(key, {"at": time.time()})["skipped"] = reason
+        save(queue)
+    journal.emit("prereview_skipped", "gatekeep", reason=reason, **journal.parse_request_id(key))
+    return True
+
+
+def prereview_gate(settings, repo, number, event, gate_key, dry_run):
+    """True when this head may go on to its gate, False while its pre-review runs.
+
+    A pre-review that cannot be read, failed, or ran past two hours never
+    holds the gate: the head is journaled `prereview_skipped` and gated.
+    """
+    if not any(PREREVIEW_PATHS.match(p) for p in event.get("paths") or []):
+        return True
+    queue = load()
+    if gate_key in queue.get("gatedHeads", {}) or lane_gated(load_receipts(), gate_key):
+        return True
+    key = f"prereview:{repo}#{number}:{event['head']}"
+    state = queue.get("prereviewHeads", {}).get(key)
+    if state and state.get("skipped"):
+        return True
+    if state:
+        thread_id = load_receipts().get(key)
+        status = None
+        if thread_id:
+            code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+            if code:
+                return prereview_skip(key, "the pre-review thread could not be read", dry_run)
+            try:
+                status = (json.loads(out).get("thread") or {}).get("status")
+            except ValueError:
+                return prereview_skip(key, "the pre-review thread read was not valid JSON", dry_run)
+        if status == "completed":
+            return True
+        if status in ("failed", "interrupted"):
+            return prereview_skip(key, f"the pre-review {status}", dry_run)
+        if time.time() - state["at"] >= PREREVIEW_WAIT_SECONDS:
+            return prereview_skip(key, "the pre-review stalled for 2 hours", dry_run)
+        return False
+    model = reviewer_model(event.get("builderModels", []))
+    if model is None:
+        return prereview_skip(key, "every reviewer of another vendor is blocked", dry_run)
+    print(stamped(("would queue " if dry_run else "queued ") + key + " reviewer " + model["instanceId"] + " " + model["model"]), flush=True)
+    if dry_run:
+        return False
+    args = {"projectId": settings["projectId"], "title": f"{settings['key']} prereview #{number} {event['head'][:8]}",
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access",
+            "workspaceStrategy": {"type": "worktree"}, "clientRequestId": key,
+            "message": PREREVIEW_BRIEF.format(repo=repo, number=number, head=event["head"])}
+    with model_list.blocked_lock(), Lock(True):
+        queue = load()
+        if key in queue.get("prereviewHeads", {}):
+            return False
+        queue["items"].append({"id": queue["next"], "tool": "t3_thread_launch", "args": args, "title": args["title"],
+                               "priority": 5000, "builderModels": event.get("builderModels", [])})
+        queue.setdefault("prereviewHeads", {})[key] = {"id": queue["next"], "at": time.time()}
+        queue["next"] += 1
+        save(queue)
+    journal.emit("prereview_queued", "gatekeep", reviewer=model["model"], **journal.parse_request_id(key))
     return False
 
 
@@ -3228,6 +3317,8 @@ def cmd_gatekeep(a):
                 if proof is None:
                     continue
                 args["message"] += proof
+            if not prereview_gate(settings, repo_name, pr_number, event, key, a.dry_run):
+                continue
             observed = load()
             adopted = lane_gated(load_receipts(), key)
             dead = read_dead_gate(observed, key) if key in observed.get("gatedHeads", {}) or adopted else None
@@ -3696,6 +3787,13 @@ def main():
     w.add_argument("id", help="the card or action key the wait is about")
     w.add_argument("--owner", help="who must answer: required for start")
     w.set_defaults(fn=cmd_wait)
+    lg = sub.add_parser("logs", help="read the tick, queue, lane and journal logs, secrets redacted")
+    lg.add_argument("sources", nargs="*", metavar="source",
+                    help="any of " + ", ".join(coord_logs.SOURCES) + "; all when none is named")
+    lg.add_argument("--since", help="only lines newer than this, like 30m, 1h or 2d")
+    lg.add_argument("--grep", help="only lines that match this regex, ignoring case")
+    lg.add_argument("--tail", type=int, default=200, help="at most this many lines per source")
+    lg.set_defaults(fn=cmd_logs)
     sub.add_parser("waits", help="list open approval waits with owner and age").set_defaults(fn=cmd_waits)
     d = sub.add_parser("dispatch")
     d.add_argument("--dry-run", action="store_true",
