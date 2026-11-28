@@ -15,7 +15,7 @@ live host=23080 set_start=17:49:25 thread=01a21f32-ff4d-76e1-b7e5-32b5143ebc6d p
 mcp_reaper: stale_sets=1 live_sets=5 unknown_sets=1 claude_children_kept=0 dry_run=True
 ```
 
-Result: it would stop 1 set (6 processes), keep 5 sets, and leave 1 unknown process (a `node_repl` with no matching thread).
+Result (previous version): it would stop 1 set (6 processes), keep 5 sets, and leave 1 unknown process (a `node_repl` with no matching thread).
 
 ## T3 thread states beside it
 
@@ -61,3 +61,7 @@ Settle job proof: `python3 -I evidence/MO-1078/proof_settle.py` (fake T3 with fi
 
 - origin/main (906862ac): `scripts/mcp_reaper.py --dry-run` gives `No such file`; `lane_driver.py` has no `settle_idle_completed`, so the proof fails with AttributeError.
 - head: prints `settled: ['idle']` and `PASS`. Only the thread idle between 15 and 60 minutes, unpinned and not Ascend, is settled.
+
+## Reaper made report only (gate finding on #1088)
+
+The reaper maps a set to a thread by start time. A resumed thread keeps its first log row but starts new servers, so a different thread that started within 3 seconds and then exited could be the only match. The signal path (SIGTERM, SIGKILL, identity check) was removed. `--dry-run` is accepted for the ticket proof command and changes nothing. Fixture in `proof_settle.py`: a resumed live thread's set overlaps a new thread that exited; the reaper prints `stale-looking` and `subprocess.run` is never called (no `kill`). The earlier kill path check and the 17:53 and 18:26 dry runs above describe the previous version.

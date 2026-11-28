@@ -15,3 +15,20 @@ with patch.object(lane, "t3", fake):
 print("settled:", calls)
 assert calls == ["idle"], calls
 print("PASS")
+
+sys.path.insert(0, "scripts")
+import mcp_reaper
+start = int(time.time()) - 600
+procs = {
+    1: {"ppid": 0, "start": start - 900, "command": "/x/bin/codex app-server -c thread_unload_delay_secs=0"},
+    11: {"ppid": 1, "start": start, "command": "/Applications/Paper.app/x/paper mcp"},
+    12: {"ppid": 1, "start": start, "command": "/Applications/ChatGPT.app/x/cua_node/bin/node_repl"},
+}
+threads = [{"id": "resumed-live", "first": start - 900, "last": start + 500, "exited": False},
+           {"id": "new-exited", "first": start + 1, "last": start + 30, "exited": True}]
+signals = []
+with patch.object(mcp_reaper, "snapshot", return_value=procs), patch.object(mcp_reaper, "host_threads", return_value=threads), \
+        patch("subprocess.run", side_effect=lambda *a, **k: signals.append(a)), patch.object(sys, "argv", ["mcp_reaper"]):
+    assert mcp_reaper.main() == 0
+assert signals == [], signals
+print("PASS reaper: resumed thread's set overlapping an exited new thread is reported, nothing signalled")

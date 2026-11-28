@@ -6,7 +6,7 @@ Date: 2026-11-27. Host: `codex app-server -c thread_unload_delay_secs=0` (pid 23
 
 The owning layer is T3, with the Coordinator settle flow beside it. Codex behaves as documented. A T3 thread keeps its Codex subscription after its run completes. It drops the subscription when T3 settles the thread, or (INFERRED from one thread, see theory 2) after about 30 minutes without activity. Until then Codex holds the thread loaded and its MCP set stays alive. The fix is for T3 to unsubscribe (or archive) a thread when its run completes and to resume it on the next message. With `thread_unload_delay_secs=0`, Codex then unloads it at once and closes its MCP servers.
 
-Decision (Shyam, 27 Nov): the Coordinator settles completed T3 threads 15 minutes after their run, through T3's own settle action (`settle_idle_completed` in `coordinator/overnight/lane_driver.py`), so Codex unloads the thread and closes its set. `scripts/mcp_reaper.py` is the safety net. It stops only sets whose thread has logged `Agent loop exited`; live and unknown sets are only logged. An idle rule exists behind `--idle-secs`, off by default.
+Decision (Shyam, 27 Nov): the Coordinator settles completed T3 threads 15 minutes after their run, through T3's own settle action (`settle_idle_completed` in `coordinator/overnight/lane_driver.py`), so Codex unloads the thread and closes its set. `scripts/mcp_reaper.py` only reports. It lists sets that look stale (every matching thread has logged `Agent loop exited`) with the evidence, and sends no signal. The gate on PR #1088 found that start-time matching alone can tie a resumed thread's set to a different, exited thread, so it must not be the basis for a kill.
 
 ## Theory 1: the config key is wrong or ignored
 
