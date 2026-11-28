@@ -189,6 +189,7 @@ def detached_idle_seconds(path: Path) -> int | None:
     return int(time.time()) - max(stamps) if stamps else None
 
 
+YOUNG_PR_SECONDS = 24 * 60 * 60
 PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "t3_thread_unfinished", "process_cwd_inside", "worktree_locked"}
 process_cwd_cache: list[Path] = []
 
@@ -242,15 +243,28 @@ def unpushed_commits(path: Path) -> int | None:
         return None
 
 
+def waived_reasons(row: dict[str, Any], reasons: list[str]) -> list[str]:
+    published = row["unpushed"] == 0 and row["remote_commit_present"] is True
+    if published and not row["detached"] and inside(Path(row["path"]), T3_WORKTREE_ROOT):
+        return [reason for reason in reasons if reason != "github_pr_not_closed_for_head"]
+    return reasons
+
+
+def removal_candidates(rows: list[dict[str, Any]], include_t3_safe: bool) -> list[dict[str, Any]]:
+    return [row for row in rows if row["eligible"] and (include_t3_safe or not row.get("t3_waiver"))]
+
+
 def categorize(row: dict[str, Any]) -> str:
     if row.get("removed"):
         return "removed"
     if row["eligible"]:
         return "safe"
     reasons = set(row["reasons"])
-    if row["prunable"]:
+    held = reasons & PROTECTED_REASONS
+    if row["prunable"] or "worktree_missing_or_prunable" in reasons and not held:
         return "prune"
-    if reasons & PROTECTED_REASONS:
+    young = row.get("age_seconds") is not None and row["age_seconds"] < YOUNG_PR_SECONDS
+    if held or "github_pr_open" in reasons and young:
         return "protected"
     return "look"
 
@@ -580,7 +594,9 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         result["pull_request"] = pr_url
         if not ok and why:
             reasons.append(why)
-    result["reasons"] = sorted(set(reasons))
+    kept = waived_reasons(result, reasons)
+    result["t3_waiver"] = kept != reasons
+    result["reasons"] = sorted(set(kept))
     result["eligible"] = not result["reasons"]
     result["prunable"] = prunable(result, github)
     return result
@@ -724,14 +740,14 @@ def cleaner_lock(state_root: Path):
         yield
 
 
-def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False) -> dict[str, Any]:
+def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False, include_t3_safe: bool = False) -> dict[str, Any]:
     state_root = secure_state_dir(state_root)
     with cleaner_lock(state_root):
         initial_state = T3State()
         github = GitHub(state_root / "github-commits.json")
         rows, excluded, excluded_rows = inventory(code_root, github, initial_state)
         github.save_cache()
-        eligible = [row for row in rows if row["eligible"]]
+        eligible = removal_candidates(rows, include_t3_safe)
         removed = 0
         if apply:
             def refreshed(candidate: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | SafetyError | None]:
@@ -1145,6 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--archive", nargs="+", type=Path, metavar="PATH", help="move Needs-a-look worktrees to the archive, pin their commit, keep their branch")
     mode.add_argument("--delete", nargs="+", type=Path, metavar="PATH", help="remove Needs-a-look worktrees, pin their commit, and save uncommitted work to a small file in the archive")
     parser.add_argument("--prune", action="store_true", help="with --apply, also drop registrations whose folder is gone and that pass every prune check")
+    parser.add_argument("--include-t3-safe", action="store_true", help="with --apply, also remove clean T3 worktrees that have no PR; only the board's Clean action passes it")
     parser.add_argument("--no-report", action="store_true", help="skip writing the daily kept-worktrees report")
     parser.set_defaults(apply=False)
     args = parser.parse_args(argv)
@@ -1155,7 +1172,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.delete:
             print(json.dumps(archive(args.code_root.expanduser(), args.state_root.expanduser(), args.delete, delete=True), sort_keys=True))
             return 0
-        result = scan(args.code_root.expanduser(), args.state_root.expanduser(), args.apply, not args.no_report, args.prune)
+        result = scan(args.code_root.expanduser(), args.state_root.expanduser(), args.apply, not args.no_report, args.prune, args.include_t3_safe)
     except SafetyError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2

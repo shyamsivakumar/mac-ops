@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.shyam.mcp-reaper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/shyamsivakumar/Code/mac-ops/scripts/mcp_reaper.py</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/shyamsivakumar/.local/log/mcp-reaper.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/shyamsivakumar/.local/log/mcp-reaper.stderr.log</string>
+</dict>
+</plist>
