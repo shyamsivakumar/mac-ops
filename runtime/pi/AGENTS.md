@@ -55,13 +55,13 @@ The list lives in `mac-ops runtime/agents/deny-rules.json` and `scripts/install_
 Asks the owner in an interactive thread (a headless run is denied):
 
 - Reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN) from a session that did not start there.
-- Commands on secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.
 - A push to `main` or `master` elsewhere (not a personal repo), and `gh pr merge` outside personal repos (it runs without asking in github.com/shyamsivakumar/*).
 - Printing secret values with `gcloud secrets versions access`, `heroku config` or `config:get`, or a gcloud `--format` that shows one.
 
 Denied even with approval:
 
 - A push to `main` or `master` of a personal repo (github.com/shyamsivakumar/*), or whose remote cannot be resolved.
+- Reading secret files or running commands on them: `.env` files, `auth.json`, key and token files, `~/.ssh`.
 - Force-push in any form.
 - Remote and cloud deletes: `gcloud ... delete`, `bq rm`, `heroku ... destroy`, `gh repo delete`, `gh release delete`, `git push --delete`.
 - `git stash` in any form except `list` and `show`: the stash list is shared by every worktree of a repository.

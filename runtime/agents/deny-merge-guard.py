@@ -11,7 +11,7 @@ command that breaks it:
 Each rule belongs to a family, and FAMILY_MODES (from deny-rules.json) says
 whether the family asks the owner or is denied outright:
 
-- ask: `gh pr merge` outside personal repos (github.com/shyamsivakumar/*), a push to main or master of a repo outside github.com/shyamsivakumar/, commands on secret files,
+- ask: `gh pr merge` outside personal repos (github.com/shyamsivakumar/*), a push to main or master of a repo outside github.com/shyamsivakumar/,
   secret values printed by gcloud or heroku (`gcloud secrets versions access`,
   `heroku config`, `config:get`, a `--format` that shows a secret), and commands
   that touch the Ascend tree from a session that did not start there. Every
@@ -102,9 +102,9 @@ MAX_NESTING = 4
 ASCEND_ROOTS = ["~/Code/slash-eureka"]
 SECRET_DIRS = ["~/.ssh"]
 SECRET_FILE_RE = "(?:^|/)\\.(?:env(?:\\.[\\w.-]+)?|netrc|npmrc|pypirc)$|(?:^|/)auth\\.json$|(?:^|/)id_(?:rsa|dsa|ed25519|ecdsa)(?:\\.[\\w-]+)*$|(?:^|/)[\\w.-]+\\.(?:pem|key)$|(?:^|/)credentials(?:\\.json)?$|(?:^|/)(?:[\\w.-]*[._-])?tokens?(?:\\.[\\w-]+)*\\.(?:json|txt|ya?ml)$|(?:^|/)\\.ssh(?:/|$)"
-FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "push_personal": "deny", "secret_files": "ask", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
+FAMILY_MODES = {"merge": "ask", "push_protected": "ask", "push_personal": "deny", "secret_files": "deny", "cloud_secret": "ask", "ascend": "ask", "force_push": "deny", "remote_delete": "deny", "protected_removal": "deny", "push_destination": "deny", "stash": "deny"}
 ASCEND_REASON = "commands that touch ~/Code/slash-eureka (Ascend) need the owner's approval"
-SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) need the owner's approval"
+SECRET_REASON = "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) are denied"
 CLOUD_REASON = "printing secret values with gcloud or heroku needs the owner's approval"
 REMOVAL_REASON = "removing secret files or anything under ~/Code/slash-eureka is denied"
 DIRECTORY_CHANGERS = {"cd", "pushd"}

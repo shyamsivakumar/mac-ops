@@ -249,14 +249,14 @@ class ListTest(unittest.TestCase):
         rules = install_deny_rules.claude_rules(SPEC, Path("/Users/t"))
         entries = rules["deny"] + rules["ask"]
         self.assertTrue(all(e.startswith(("Read(", "Edit(", "Bash(")) for e in entries))
-        self.assertIn("Read(**/*token*.json)", rules["ask"])
+        self.assertIn("Read(**/*token*.json)", rules["deny"])
         self.assertIn("Edit(**/*token*.json)", rules["deny"])
-        self.assertIn("Read(//Users/t/.ssh/**)", rules["ask"])
+        self.assertIn("Read(//Users/t/.ssh/**)", rules["deny"])
         self.assertIn("Edit(//Users/t/.ssh/**)", rules["deny"])
         self.assertIn("Bash(cat $HOME/Code/slash-eureka:*)", rules["retired"])
         self.assertIn("Bash(git push --force-if-includes:*)", rules["deny"])
         self.assertNotIn("Bash(gh pr merge:*)", rules["ask"])
-        self.assertIn("Bash(git push:*)", rules["ask"])
+        self.assertNotIn("Bash(git push:*)", rules["ask"])
 
     def test_hook_constants_match_the_list(self):
         self.assertEqual(hook_module.PROTECTED, set(SPEC["push_protected"]))
@@ -634,7 +634,7 @@ class HookTest(unittest.TestCase):
         self.extra_env = {"CLAUDE_PROJECT_DIR": ascend}
         self.assertIsNone(self.decided("echo hi", cwd=ascend))
         self.assertIsNone(self.decided("git status", cwd=ascend))
-        self.assertEqual(self.decided("cat .env", cwd=ascend)["permissionDecision"], "ask")
+        self.assertEqual(self.decided("cat .env", cwd=ascend)["permissionDecision"], "deny")
         self.assertEqual(self.decided("gh pr merge 1", cwd=ascend)["permissionDecision"], "ask")
 
     def test_file_tools_ask_for_the_ascend_tree_by_realpath_and_skip_it_in_an_ascend_session(self):
@@ -675,7 +675,7 @@ class HookTest(unittest.TestCase):
         line = json.loads(log.read_text().splitlines()[0])
         self.assertEqual(
             (line["runtime"], line["session_id"], line["decision"], line["family"]),
-            ("claude", "s1", "ask", "secret_files"),
+            ("claude", "s1", "deny", "secret_files"),
         )
         self.assertEqual(line["program"], "cat")
         self.assertNotIn("command", line)
