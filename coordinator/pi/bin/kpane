@@ -4,7 +4,7 @@
 usage: kpane <image.svg|image.png> [title]
 
 The picture opens as a Herdr overlay: a near full window popup over the
-layout, drawn by the kpane mod (coordinator/mods/kpane). Esc closes it. The
+layout, drawn by the kpane mod (in the Herdr board repo). Esc closes it. The
 earlier version split a narrow pane beside the coordinator tab, which was
 easy to miss and could not be enlarged.
 
