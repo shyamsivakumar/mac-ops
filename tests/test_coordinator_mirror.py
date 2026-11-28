@@ -371,5 +371,31 @@ class TestCoordinatorMirrorSend(unittest.TestCase):
         self.assertFalse(self.sent.exists())
 
 
+class CoordPiLauncherTest(unittest.TestCase):
+    def test_coord_pi_exports_claude_max_default_and_honors_override(self):
+        launcher = ROOT / "coordinator/pi/bin/coord-pi"
+        text = launcher.read_text()
+        export_line = 'export PI_CLAUDE_CLI_COMMAND="${PI_CLAUDE_CLI_COMMAND:-$HOME/.local/bin/claude-max}"'
+        self.assertIn(export_line, text)
+        probe = export_line + '; printf %s "$PI_CLAUDE_CLI_COMMAND"'
+        env = {k: v for k, v in os.environ.items() if k != "PI_CLAUDE_CLI_COMMAND"}
+        default_out = subprocess.run(
+            ["/bin/zsh", "-c", probe],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        self.assertEqual(default_out.stdout, os.path.expanduser("~/.local/bin/claude-max"))
+        override_out = subprocess.run(
+            ["/bin/zsh", "-c", probe],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**env, "PI_CLAUDE_CLI_COMMAND": "/custom/claude"},
+        )
+        self.assertEqual(override_out.stdout, "/custom/claude")
+
+
 if __name__ == "__main__":
     unittest.main()
