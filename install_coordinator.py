@@ -180,6 +180,7 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
         for name in HERDR_FILES
     ]
     items.append((checkout / WORKTREE_SCAN_DIR / "scan.sh", home / ".local/bin/worktree-scan", 0o755))
+    items.append((checkout / WORKTREE_SCAN_DIR / "scan-forwarder.sh", home / MODS_DIR / "worktrees/scan.sh", 0o755))
     pi_root = root / "pi"
     items += [
         (pi_root / "bin" / name, home / ".local/bin" / name, 0o755)
