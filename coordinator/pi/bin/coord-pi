@@ -7,6 +7,7 @@
 cd ~/Code/coordinator || exit 1
 export PI_CODING_AGENT_DIR=~/.pi/agent-coordinator
 export COORD_WAKE="${COORD_WAKE:-1}"
+export PI_CLAUDE_CLI_COMMAND="${PI_CLAUDE_CLI_COMMAND:-$HOME/.local/bin/claude-max}"
 exec /usr/bin/sandbox-exec -f ~/.pi/agent-coordinator/coordinator.sb pi --model pi-claude-cli/claude-opus-5-5 --no-skills \
   --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/to-tickets --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/diagram-design --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/plain-writing \
   --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/verification-before-completion --skill ~/.pi/agent-coordinator/skills "$@"
