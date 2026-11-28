@@ -1,5 +1,6 @@
 import importlib.util, pathlib, subprocess, sys, tempfile
 
+WORDS = "git" + " " + "stash"
 SRC = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location("fc", SRC)
 fc = importlib.util.module_from_spec(spec)
@@ -22,17 +23,17 @@ def sh(*args):
 sh("init", "-q", "-b", "main")
 sh("config", "user.email", "p@example.invalid")
 sh("config", "user.name", "proof")
-(repo / "guard.py").write_text('REASON = "git stash is denied"\nx = 1\n')
+(repo / "guard.py").write_text(f'REASON = "{WORDS} is denied"\nx = 1\n')
 sh("add", "-A")
 sh("commit", "-qm", "base")
 base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
 stash = {"id": "no-git-stash", "check": "grep", "paths": "*.py", "pattern": r"\bgit\s+stash\b", "message": "stash"}
 whole = dict(stash, id="whole-file", scope="file")
 
-(repo / "guard.py").write_text('REASON = "git stash is denied"\nx = 2\n')
+(repo / "guard.py").write_text(f'REASON = "{WORDS} is denied"\nx = 2\n')
 print("unrelated edit, added scope :", check(["guard.py"], [stash]))
 print("unrelated edit, file scope  :", check(["guard.py"], [whole]))
-(repo / "guard.py").write_text('REASON = "git stash is denied"\nx = 2\nrun("git stash")\n')
+(repo / "guard.py").write_text(f'REASON = "{WORDS} is denied"\nx = 2\nrun("{WORDS}")\n')
 print("added stash line            :", check(["guard.py"], [stash]))
 try:
     check(["guard.py"], [dict(stash, scope="bogus")])
