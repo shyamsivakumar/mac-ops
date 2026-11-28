@@ -1,22 +1,15 @@
-# MO-1144 runs
+# MO-1160 runs
 
-## Ticket proof command
+## Ticket proof command (exec_module loader, Python 3.9 and 3.15)
 
 ```
-D=$(mktemp -d); COORDQ_DIR=$D COORD_JOURNAL_DIR=$D python3 -c "import importlib.machinery as m;c=m.SourceFileLoader('c','coordinator/bin/coordq').load_module();a=c.coerce_launch_args('t3_thread_launch',{'workspaceStrategy':'root','prompt':'b'});assert a=={'workspaceStrategy':{'type':'root'},'message':'b'},a"
-```
-
-Before (origin/main ed088e4f):
-```
-AttributeError: module 'c' has no attribute 'coerce_launch_args'
-exit 
-```
-After (head):
-```
-exit 0
+D=$(mktemp -d); COORDQ_DIR=$D COORD_JOURNAL_DIR=$D python3 -c "import importlib.util as u,importlib.machinery as im;l=im.SourceFileLoader('coordq','coordinator/bin/coordq');m=u.module_from_spec(u.spec_from_loader('coordq',l));l.exec_module(m);a=m.coerce_launch_args('t3_thread_launch',{'workspaceStrategy':'root','prompt':'b'});assert a=={'workspaceStrategy':{'type':'root'},'message':'b'},a"
 ```
 
-## Fake t3mcp (rejects `prompt` and a string strategy), `python3 evidence/MO-1144/prove-launch-coercion.py [checkout]`
+Before (origin/main ed088e4f): AttributeError on both python3 (3.9.6) and /opt/homebrew/bin/python3 (3.15.2): module 'coordq' has no attribute 'coerce_launch_args'.
+After (head): exit 0 on both.
+
+## Fake t3mcp (rejects `prompt` and a string strategy), `python3 evidence/MO-1160/prove-launch-coercion.py [checkout]`
 
 Before (origin/main):
 ```
