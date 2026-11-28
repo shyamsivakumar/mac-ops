@@ -189,6 +189,7 @@ def detached_idle_seconds(path: Path) -> int | None:
     return int(time.time()) - max(stamps) if stamps else None
 
 
+YOUNG_PR_SECONDS = 24 * 60 * 60
 PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "t3_thread_unfinished", "process_cwd_inside", "worktree_locked"}
 process_cwd_cache: list[Path] = []
 
@@ -248,9 +249,11 @@ def categorize(row: dict[str, Any]) -> str:
     if row["eligible"]:
         return "safe"
     reasons = set(row["reasons"])
-    if row["prunable"]:
+    held = reasons & PROTECTED_REASONS
+    if row["prunable"] or "worktree_missing_or_prunable" in reasons and not held:
         return "prune"
-    if reasons & PROTECTED_REASONS:
+    young = row.get("age_seconds") is not None and row["age_seconds"] < YOUNG_PR_SECONDS
+    if held or "github_pr_open" in reasons and young:
         return "protected"
     return "look"
 

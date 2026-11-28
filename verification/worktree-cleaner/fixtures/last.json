@@ -1,0 +1,252 @@
+{
+ "rows": [
+  {
+   "path": "/fixture/live-thread-dirty",
+   "branch": "live-thread-dirty",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "t3_thread_unfinished",
+    "worktree_dirty"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [
+    "thread-1"
+   ],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/open-pr-young",
+   "branch": "open-pr-young",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "github_pr_open"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/open-pr-young-dirty",
+   "branch": "open-pr-young-dirty",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "github_pr_open",
+    "worktree_dirty"
+   ],
+   "age_seconds": 86399,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/open-pr-a-day-old",
+   "branch": "open-pr-a-day-old",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "github_pr_open"
+   ],
+   "age_seconds": 86400,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/open-pr-old",
+   "branch": "open-pr-old",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "github_pr_open"
+   ],
+   "age_seconds": 259200,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/open-pr-age-unknown",
+   "branch": "open-pr-age-unknown",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "github_pr_open"
+   ],
+   "age_seconds": null,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/pr-not-closed-young",
+   "branch": "pr-not-closed-young",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "github_pr_not_closed_for_head"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/dirty-young",
+   "branch": "dirty-young",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "worktree_dirty"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/gone-detached",
+   "branch": "gone-detached",
+   "detached": true,
+   "main_checkout": false,
+   "gone": true,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "worktree_missing_or_prunable",
+    "remote_commit_unverified",
+    "detached_not_proven_24h_old"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": false
+  },
+  {
+   "path": "/fixture/gone-prunable",
+   "branch": "gone-prunable",
+   "detached": false,
+   "main_checkout": false,
+   "gone": true,
+   "locked": false,
+   "prunable": true,
+   "eligible": false,
+   "reasons": [
+    "worktree_missing_or_prunable",
+    "github_pr_not_closed_for_head"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/gone-locked",
+   "branch": "gone-locked",
+   "detached": false,
+   "main_checkout": false,
+   "gone": true,
+   "locked": true,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "worktree_missing_or_prunable",
+    "worktree_locked"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/gone-live-thread",
+   "branch": "gone-live-thread",
+   "detached": false,
+   "main_checkout": false,
+   "gone": true,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "worktree_missing_or_prunable",
+    "t3_thread_unfinished"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [
+    "thread-2"
+   ],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/main",
+   "branch": "main",
+   "detached": false,
+   "main_checkout": true,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": false,
+   "reasons": [
+    "main_checkout"
+   ],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/eligible",
+   "branch": "eligible",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": true,
+   "reasons": [],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true
+  },
+  {
+   "path": "/fixture/removed-earlier",
+   "branch": "removed-earlier",
+   "detached": false,
+   "main_checkout": false,
+   "gone": false,
+   "locked": false,
+   "prunable": false,
+   "eligible": true,
+   "reasons": [],
+   "age_seconds": 3600,
+   "t3_threads": [],
+   "remote_commit_present": true,
+   "removed": true
+  }
+ ]
+}
