@@ -543,9 +543,40 @@ def first_other(list_name, own_model=None):
     return None
 
 
+def measured_pick(list_name, stats=None):
+    """The entry the measured rule picks and why: the cheapest model whose pass rate is within the
+    noise band of the best. No usable measurement, a best pass rate under the floor or no cost
+    figure shared by the near-best models gives the default entry and an `unsure` reason."""
+    rule = load().get("measured") or {}
+    stats = rule.get("stats", {}) if stats is None else stats
+    blocked = blocked_identities()
+    default = first_available(list_name, blocked=blocked)
+    listed = {e["id"]: e for e in entries(list_name) if not entry_blocked(e, blocked)}
+    scored = {i: s for i, s in stats.items() if i in listed and s.get("pass_rate") is not None}
+    if not scored:
+        return default, f"unsure: no measured model is in the {list_name} list, default stays"
+    best = max(s["pass_rate"] for s in scored.values())
+    floor = rule.get("floor", 0.5)
+    if best < floor:
+        return default, f"unsure: best pass rate {best:.2f} is under the floor {floor}, default stays"
+    near = {i: s for i, s in scored.items() if best - s["pass_rate"] <= rule.get("noise", 0.1)}
+    for key in ("cost_per_solved", "tokens_per_solved", "turns_per_solved"):
+        if all(s.get(key) is not None for s in near.values()):
+            pick = min(near, key=lambda i: near[i][key])
+            return listed[pick], f"measured: {pick} has the lowest {key} ({near[pick][key]:.4g}) among {len(near)} within noise of the best pass rate {best:.2f}"
+    return default, "unsure: the models within noise share no cost, token or turn figure, default stays"
+
+
 def main(argv):
+    if len(argv) == 3 and argv[1] == "measured" and argv[2] in LISTS:
+        entry, reason = measured_pick(argv[2])
+        print(f"models measured {argv[2]}: {reason}", file=sys.stderr)
+        if entry is None:
+            return 1
+        print(f"{entry['id']} {entry['selection']['model']}")
+        return 0
     if len(argv) not in (3, 4) or argv[1] != "first" or argv[2] not in LISTS:
-        print(f"usage: models.py first {{{'|'.join(LISTS)}}} [own-model]", file=sys.stderr)
+        print(f"usage: models.py first|measured {{{'|'.join(LISTS)}}} [own-model]", file=sys.stderr)
         return 2
     entry = first_other(argv[2], argv[3] if len(argv) == 4 else None)
     if entry is None:

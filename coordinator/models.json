@@ -210,6 +210,11 @@
       "vendor": "anthropic"
     }
   ],
+  "measured": {
+    "floor": 0.5,
+    "noise": 0.1,
+    "stats": {}
+  },
   "rules": {
     "every build type (standard, risky, design, large, ui, research, rca, chore)": "use the build list in order, led per type by `leads` and limited by `only`: the `router` entry runs the Morph chain its `routes` table names for the type (every type runs DeepSeek V4.1 Flash then DeepSeek V4.1 Flash 1017, which has its own Morph budget; Kimi K3.1 is out because its 24,290 uncached tokens a minute is smaller than one fresh pi request), then Cursor auto, then Terra for quick, chore, standard, ui and research or Sol for rca, risky, design and hard",
     "fix and finish rounds": "use the fix list in order: the `router` entry on its standard chain, Cursor auto, Sol at max reasoning",
