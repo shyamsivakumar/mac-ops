@@ -1,4 +1,4 @@
-import importlib.util, json, pathlib, subprocess, sys, tempfile
+import importlib.util, pathlib, subprocess, sys, tempfile
 
 SRC = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location("fc", SRC)
