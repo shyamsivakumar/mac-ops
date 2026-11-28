@@ -14,7 +14,7 @@ Use this for any spec, plan or oversized pull request that has to become tickets
 3. Cut along seams so each ticket is at most 150 code lines in at most 3 code files. Aim for 120 so a review fix still fits.
    - One behavior per ticket. Order them so the pure helper or owner comes first and the wiring comes last.
    - A file over 150 lines splits by function group inside the same file, one group per ticket.
-   - Proof scripts, fixtures and evidence ride with the ticket that needs them. They do not count.
+   - Proof scripts, fixtures and evidence ride with the ticket that needs them. They do not count: the cap is runtime code lines only, and the builder pastes `Runtime code lines: <n>` and `Proof lines: <n>` in the PR body.
    - Never use `type:large` to get past the cap.
 4. Give each behavior ticket one proof command that is red on `origin/main` for the reason the ticket fixes (the proof section below).
 5. Write one body file per ticket from the template, in dependency order.
