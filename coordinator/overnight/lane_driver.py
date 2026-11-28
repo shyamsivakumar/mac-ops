@@ -1235,11 +1235,11 @@ def prompt_merge_item(repo, number, head, loop=False):
 OWNER_GRACE_HOURS = 6
 
 
-def herdr_build_card(repo, number, head, need):
+def herdr_build_card(repo, number, head, need, detail=""):
     key = CFG[repo]["key"]
     item = {"id": f"herdr-build-{key}-{number}", "group": "Coordinator", "kind": "action",
             "title": f"{key}-{number} needs work on head {head[:8]}: {need}. The Herdr session builds {repo}, so no builder thread was sent it.",
-            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch."}
+            "why": f"{repo} has build set to here. Build the fix in the Herdr session and push to the pull request branch." + detail}
     if not DRY:
         publish_decision(item)
     return f"#{number}: {repo} is built in the Herdr session, board card raised"
@@ -1833,9 +1833,13 @@ def prereview_findings(repo, number, head, body, builder, proof_path, ledger):
             if not DRY:
                 ledger[sent] = "journaled"
             return owned
-        return herdr_build_card(repo, number, head, "the pre-review listed failure paths")
+        card = herdr_build_card(repo, number, head, "the pre-review listed failure paths", "\n\n" + findings)
+        if not DRY:
+            ledger[sent] = "card"
+        return card
     if not builder:
-        return f"skip #{number}: pre-review findings, no builder thread"
+        journal_once("prereview_skipped", repo, number, head, ledger, sent, reason="the findings have no builder thread to go to")
+        return None
     msg = (f"The independent pre-review of PR #{number} at {head} listed failure paths. Fix each one that is real, "
            f"{check_step(repo, proof_path)}, push, set "
            "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n" + findings)

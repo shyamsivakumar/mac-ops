@@ -2742,8 +2742,14 @@ def prereview_findings_cases():
                 result = act(ledger, body="Refs #7\nOwner: t1j\n", builder=None)
                 exact((result, len(sends), cards, ledger[sent_key]), ("skip #40: t1j owns the branch, no board card", 1, [], "journaled"))
                 exact("prereview_findings" in events, True)
-                result = act({}, body="Refs #7\n", builder=None)
-                exact((result.endswith("board card raised"), len(sends), len(cards)), (True, 1, 1))
+                ledger = {}
+                result = act(ledger, body="Refs #7\n", builder=None)
+                exact((result.endswith("board card raised"), len(sends), len(cards), "x" in cards[0]["why"], ledger[sent_key]), (True, 1, 1, True, "card"))
+                exact((act(ledger, body="Refs #7\n", builder=None), len(cards)), (None, 1))
+            state["reply"], events[:] = "x\nPREREVIEW: FINDINGS", []
+            with patch.object(lane, "CFG", {repo: {"key": "MO", "build": "thread"}}):
+                ledger = {}
+                exact((act(ledger, builder=None), events.count("prereview_skipped"), act(ledger, builder=None), events.count("prereview_skipped"), len(sends)), (None, 1, None, 1, 1))
 
 
 def gatekeep_round_cap():

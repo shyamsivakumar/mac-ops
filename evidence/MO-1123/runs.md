@@ -40,3 +40,9 @@ On `origin/main` the case fails with `AttributeError`
 `.py`, so it failed with "No such file" in the gate's clean checkout. The #1123
 proof command is `grep -q 'prereview' coordinator/overnight/lane_driver.py || ...`.
 It exits 1 on `origin/main` and 0 on this branch, with `HOME=$(mktemp -d)`.
+
+## Gate round 1 fixes
+
+- No builder thread: the findings are journaled as `prereview_skipped` once and the gate goes on. The selftest ticks twice and sees one row.
+- Unowned local build: the board card carries the findings and the handoff is recorded in the ledger, so a second tick raises no second card.
+- Proof: `prereview_findings_cases()` passes with a temp `COORDQ_DIR` and `COORD_JOURNAL_DIR`.
