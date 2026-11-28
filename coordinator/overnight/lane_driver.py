@@ -622,9 +622,29 @@ def failure_class(report, size, prev_lines):
     return (finding_class(report) or cls) if cls == "logic" else cls
 
 
+def verdict_builder_models(thread_id):
+    try:
+        with open(RECEIPTS) as handle:
+            receipts = json.load(handle)
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(receipts, dict):
+        return None, None
+    raw_models = receipts.get(f"builder_models:{thread_id}")
+    cleaned = [m.strip() for m in raw_models if isinstance(m, str) and m.strip()] if isinstance(raw_models, list) else []
+    primary = receipts.get(f"builder_model:{thread_id}")
+    primary = primary.strip() if isinstance(primary, str) and primary.strip() else (cleaned[0] if cleaned else None)
+    return primary, cleaned or None
+
+
 def journal_verdict(repo, number, head, verdict, gate, ledger, report="", size="ok", prev_lines=None):
     if verdict in ("PASS", "FAIL", "SPLIT"):
         extra = {"class": failure_class(report, size, prev_lines or {})} if verdict == "FAIL" else {}
+        model, models = verdict_builder_models(gate["threadId"])
+        if model:
+            extra["builder_model"] = model
+        if models:
+            extra["builder_models"] = models
         journal_once("gate_verdict", repo, number, head, ledger,
                      f"journal-verdict:{gate['threadId']}:{head}:{verdict}",
                      thread=gate["threadId"], kind="gate", verdict=verdict, **extra)

@@ -1073,6 +1073,7 @@ def drain():
                     receipts["brief:" + thread_id] = brief_merger(item["args"].get("message", ""))
                     if item.get("voters"):
                         receipts["voters:" + thread_id] = item["voters"]
+                    record_gate_builder_models(receipts, thread_id, item)
                 elif request_id.startswith("vote:"):
                     from gate_policy import brief_base
                     receipts["base:" + thread_id] = brief_base(item["args"].get("message", ""), request_id.split(":")[2])
@@ -3563,6 +3564,13 @@ def cmd_gatekeep(a):
         die(stamped(f"gatekeep stopped: {e}"))
     finally:
         print(stamped(timing_line(time.monotonic() - started)), flush=True)
+
+
+def record_gate_builder_models(receipts, thread_id, item):
+    models = [m.strip() for m in (item.get("builderModels") or []) if isinstance(m, str) and m.strip()]
+    if models:
+        receipts["builder_model:" + thread_id] = models[0]
+        receipts["builder_models:" + thread_id] = models
 
 
 def watch_gate(ref, thread_id):
