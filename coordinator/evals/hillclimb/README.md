@@ -19,6 +19,7 @@ scorer counts): **131**. Free-text labels stay in
 | `split.json` | Seeded FINAL / DEV / HELDOUT id lists (nested, plus flat `final` / `dev` / `heldout` keys that `score.py` reads). |
 | `build_labels.py` | Rebuilds both files from the sources. Deterministic. |
 | `daily3.py` | Daily 3: `pick` three real decisions, `record` Shyam's answer. |
+| `ledger.py` | Preference ledger: one accept, reject, acted or ignored row per answered decision card, joined from `labels.jsonl` and the `decision_*` journal events; writes `preferences.jsonl`. |
 | `climb.py` | Keep or revert one change: scores an arm against the incumbent on the locked split, prints KEEP or REVERT, logs to `climb_log.jsonl`. |
 | `burst.py` | Mines unanswered thin-kind decisions into `burst_queue.jsonl`. |
 | `burst_queue.jsonl` | Mined decisions with no recorded answer, waiting for Shyam. |
