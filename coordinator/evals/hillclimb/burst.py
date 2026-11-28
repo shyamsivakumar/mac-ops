@@ -29,11 +29,13 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import build_labels as B  # noqa: E402
 
+DATA = B.data_dir(HERE)
+
 THIN = ("merge", "money", "access", "size_exception")
-OUT = HERE / "burst_queue.jsonl"
-LABELS = HERE / "labels.jsonl"
+OUT = DATA / "burst_queue.jsonl"
+LABELS = DATA / "labels.jsonl"
 DECISIONS = Path.home() / "Code/coordinator/decisions.json"
-LOG = HERE / "gate_disagreements.jsonl"
+LOG = DATA / "gate_disagreements.jsonl"
 JOURNAL = Path.home() / ".local/state/coordinator/journal"
 
 STOP = {

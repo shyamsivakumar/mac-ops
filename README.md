@@ -112,6 +112,21 @@ failed or did not run. A failed check stops the run, so the checks after it are
 `not run`. Commit the proof file with the change: the gate brief reads it, so
 the reviewer sees which checks ran and which did not, not one claimed line.
 
+## Walk check
+
+Run `python3 scripts/walk_check.py` to walk one real path with no one pasting
+results. It runs three steps against fixtures and temp state, never the live
+queue, board or journal: `tick` runs `coordq gatekeep --dry-run` on a temp
+queue and fails if the queue changed; `gate` reads a recorded real gate reply
+(`tests/fixtures/walk/gate-reply.json`) through the overnight gate reader and
+needs a PASS for that head; `card` runs `ticket start --dry-run --print-brief`
+on a fixture issue. Each step writes its command, output and exit code to a log
+in the printed directory (`--out` picks it). The last line is `walk PASS ...`
+(exit 0) or `walk FAIL step <name> (<reason>)` (exit 1). A missing or corrupt
+fixture, an unreadable queue, and a step that runs past `--step-timeout`
+(default 120 seconds) each fail with that step named. Force a failure with
+`--gate-fixture <corrupt file>` or `--queue-fixture <corrupt file>`.
+
 CI uses agent checks only; there are no GitHub Actions or Woodpecker workflows.
 
 ## Use heavy
