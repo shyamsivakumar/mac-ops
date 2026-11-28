@@ -20,10 +20,9 @@ Real labels file and real journal, read only, dry run writes nothing.
 exit 0
 ```
 
-Full write to a temp file, 147 rows (142 labels, 5 journal outcomes), 
-first journal-only row and first label row:
+Full write to a temp file, 147 rows (142 labels, 5 journal outcomes),
+first row of the file:
 
 ```
-{"id": "amp-credit", "kind": "money", "label": "reject", "recommended": "top up, iOS only", "answer": "keep paused", "reason": "Shyam answered 2026-11-23", "source": "labels.jsonl"}
 {"id": "amp-credit", "kind": "money", "label": "reject", "recommended": "top up, iOS only", "answer": "keep paused", "reason": "Shyam answered 2026-11-23", "source": "labels.jsonl"}
 ```
