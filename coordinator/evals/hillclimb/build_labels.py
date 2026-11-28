@@ -694,6 +694,39 @@ def utc(ts):
     return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+def journal_labels():
+    """Answered decision cards from the journal. An answer that is not one of the card's options is kept as free text."""
+    directory = os.environ.get("COORD_JOURNAL_DIR") or f"{HOME}/.local/state/coordinator/journal"
+    out = {}
+    for path in sorted(glob.glob(f"{directory}/events-*.jsonl")):
+        with open(path, errors="replace") as fh:
+            for ln in fh:
+                try:
+                    row = json.loads(ln)
+                    data = row["data"]
+                    ok = row["event"] == "decision_answered" and data["options"] and data["answer"]
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if not ok:
+                    continue
+                iid = row["item"]
+                picked = pick_option(data["answer"], data["options"]) if data.get("mapped") else None
+                rec = data.get("recommended") or ""
+                out[iid] = dict(
+                    id=iid,
+                    kind=row.get("kind") or classify(data.get("title") or "", data["options"]),
+                    item_text=(data.get("title") or "")[:300],
+                    recommended=rec,
+                    answer=picked or data["answer"],
+                    agree=(picked == rec) if picked and rec else None,
+                    ts=datetime.datetime.fromtimestamp(row["ts"], datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                    source="journal decision_answered",
+                    options=data["options"],
+                    recommended_option=rec if rec in data["options"] else None,
+                )
+    return out
+
+
 def heldout_cases(rows, since):
     """Rows newer than `since` that score.py can count, minus any that mention Ascend or look like a secret."""
     cutoff = utc(since)
@@ -791,6 +824,9 @@ def main(since=None):
             source=f"{t['f']}:{t['i']} (ask) <- {t['ansf']}:{t['ansi']} (reply)",
             options=options,
         )
+
+    for iid, lab in journal_labels().items():
+        labels.setdefault(iid, lab)
 
     # ---- agree: compare the answer to the recommendation
     for lab in labels.values():
