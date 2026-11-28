@@ -380,14 +380,14 @@ class CapacityTests(unittest.TestCase):
             action_key=None)
         with patch.object(self.q, "Lock", Recording), \
                 patch.object(self.q, "active_thread_ids", side_effect=live_ids), \
-                patch.object(self.q, "cap", lambda: 0), redirect_stderr(io.StringIO()), \
+                patch.object(self.q, "drain"), redirect_stderr(io.StringIO()), \
                 redirect_stdout(io.StringIO()):
             try:
                 self.q.cmd_start(args)
             except SystemExit as e:
                 self.assertEqual(e.code, 0)
         # The dedupe read is the first one and it runs with no lock held. The
-        # dispatch after it (drain) keeps its own, older, behaviour.
+        # dispatch after it (drain) is stubbed, since a send holds no slot.
         self.assertEqual(reads[0], [])
         self.assertIn("enter", held)
 
