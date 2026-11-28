@@ -38,6 +38,7 @@ LOCAL_CONFIG_FILES = ("tickets.json",)
 MODS_DIR = ".config/herdr-app/mods"
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
+WORKTREE_SCAN_DIR = "scripts/worktree-cleaner"
 TASK_ROUTER = ".pi/agent/extensions/task-router.ts"
 ROUTE_LEVELS = {
     "quick": "low",
@@ -188,6 +189,8 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
         (root / "herdr" / name, home / ".config/herdr-app" / name, 0o644)
         for name in HERDR_FILES
     ]
+    items.append((checkout / WORKTREE_SCAN_DIR / "scan.sh", home / ".local/bin/worktree-scan", 0o755))
+    items.append((checkout / WORKTREE_SCAN_DIR / "scan-forwarder.sh", home / MODS_DIR / "worktrees/scan.sh", 0o755))
     pi_root = root / "pi"
     items += [
         (pi_root / "bin" / name, home / ".local/bin" / name, 0o755)
@@ -384,7 +387,7 @@ def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
             src.read_bytes().replace(HOME_TOKEN.encode(), replacement),
             home / "Library/LaunchAgents" / src.name,
         )
-        for src in sorted(folder.glob("*.plist"))
+        for src in sorted([*folder.glob("*.plist"), checkout / WORKTREE_SCAN_DIR / "com.shyam.worktree-scan.plist"])
     ]
 
 
