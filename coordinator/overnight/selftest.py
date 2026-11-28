@@ -324,7 +324,14 @@ def dead_run_no_receipt():
         {"threadId": "fixture-nothing", "title": "hand launch", "settled": False},
         {"threadId": "fixture-closed-key", "title": "MO-8 hand launch", "settled": False},
         {"threadId": "fixture-landed-key", "title": "MO-9 hand launch", "settled": False},
-        {"threadId": "fixture-full", "title": "MO-10 hand launch", "settled": False}]
+        {"threadId": "fixture-full", "title": "MO-10 hand launch", "settled": False},
+        {"threadId": "fixture-moved", "title": "MO-11 review #20 deadbeef", "settled": False, "updatedAt": "2026-11-27T01:00:00Z"},
+        {"threadId": "fixture-current", "title": "MO-12 review #21 cafef00d", "settled": False, "updatedAt": "2026-11-27T01:00:00Z"},
+        {"threadId": "fixture-newer", "title": "MO-13 · build", "settled": False, "createdAt": "2026-11-27T01:00:00Z", "updatedAt": "2026-11-27T05:00:00Z"},
+        {"threadId": "fixture-newer-attempt", "title": "MO-14 · build", "settled": False, "createdAt": "2026-11-27T03:00:00Z", "updatedAt": "2026-11-27T03:00:00Z"}]
+    siblings = [{"threadId": "live-build", "title": "MO-13 · build again", "createdAt": "2026-11-27T02:00:00Z", "updatedAt": "2026-11-27T02:00:00Z"},
+                {"threadId": "touched-older", "title": "MO-14 · build", "createdAt": "2026-11-27T01:00:00Z", "updatedAt": "2026-11-27T09:00:00Z"}]
+    heads = {20: "0123456789abcdef", 21: "cafef00d12345678"}
     states = {
         (repo, 11): {"kind": "pr", "state": "closed", "merged": True},
         (repo, 12): {"kind": "pr", "state": "open", "merged": False},
@@ -332,7 +339,8 @@ def dead_run_no_receipt():
         (catalog, 7): {"kind": "issue", "state": "closed", "merged": False},
         (repo, 8): {"kind": "issue", "state": "closed", "merged": False},
         (repo, 9): {"kind": "issue", "state": "open", "merged": False},
-        (repo, 10): {"kind": "issue", "state": "closed", "merged": False}}
+        (repo, 10): {"kind": "issue", "state": "closed", "merged": False},
+        (repo, 21): {"kind": "pr", "state": "open", "merged": False}}
     # A closed issue can close before its pull request lands, and a merged
     # pull request reports MERGED, not CLOSED.
     linked = {(catalog, 7): [{"number": 8, "state": "OPEN", "mergedAt": None}],
@@ -353,7 +361,9 @@ def dead_run_no_receipt():
 
     def t3(tool, args):
         if tool == "t3_thread_list":
-            return {"threads": threads} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
+            if args.get("statuses") == ["failed", "interrupted"]:
+                return {"threads": threads}
+            return {"threads": siblings[:1], "nextCursor": 1} if "cursor" not in args else {"threads": siblings[1:]}
         if tool == "t3_thread_organize":
             settled.append(args["threadId"])
             return {}
@@ -367,6 +377,7 @@ def dead_run_no_receipt():
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "dead_reference", side_effect=reference), \
          patch.object(lane, "dead_ticket_prs", side_effect=ticket_prs), \
+         patch.object(lane, "dead_pr_head", side_effect=lambda target, number: heads[int(number)]), \
          patch.object(lane, "dead_ticket_numbers", side_effect=ticket_numbers):
         lines = io.StringIO()
         with contextlib.redirect_stdout(lines):
@@ -377,10 +388,10 @@ def dead_run_no_receipt():
         with contextlib.redirect_stdout(lines):
             lane.recover_dead_runs(ledger)
         second = lines.getvalue().strip()
-    exact(settled, ["fixture-merged", "fixture-closed-key", "fixture-landed-key"])
+    exact(settled, ["fixture-merged", "fixture-closed-key", "fixture-landed-key", "fixture-moved", "fixture-newer"])
     exact(second, "")
     exact(reads, [])
-    exact(len(first), 7)
+    exact(len(first), 11)
     exact("settle, PR shyamsivakumar/mac-ops#11 merged" in first[0], True)
     exact("flagged once" in first[1] and "PR shyamsivakumar/mac-ops#13 is open" in first[1], True)
     exact("flagged once" in first[2] and "PR shyamsivakumar/catalouge#8 is open" in first[2], True)
@@ -388,6 +399,10 @@ def dead_run_no_receipt():
     exact("settle, issue shyamsivakumar/mac-ops#8 closed" in first[4], True)
     exact("settle, PR shyamsivakumar/mac-ops#16 merged" in first[5], True)
     exact("flagged once" in first[6] and "an unseen open one cannot be ruled out" in first[6], True)
+    exact("settle, PR shyamsivakumar/mac-ops#20 head moved to 01234567" in first[7], True)
+    exact("coordinator needed" in first[8] and "PR shyamsivakumar/mac-ops#21 is open" in first[8], True)
+    exact("settle, a newer thread covers it" in first[9], True)
+    exact("flagged once" in first[10] and "MO-14" not in settled, True)
     exact(ledger["dead-run:fixture-merged"].startswith("settled "), True)
     exact(ledger["dead-run:fixture-open"].startswith("flagged "), True)
     exact(ledger["dead-run:fixture-key"].startswith("flagged "), True)
