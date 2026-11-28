@@ -1,4 +1,4 @@
-# MO-1072 runs
+# MO-1123 runs
 
 Offline fixtures only; no live queue, journal, lane or ticket.
 
@@ -33,3 +33,10 @@ Green: `grep -q 'prereview' coordinator/overnight/lane_driver.py` exits 0.
 
 On `origin/main` the case fails with `AttributeError`
 (`prereview_findings` is absent). On the head it prints `GREEN`.
+
+## Replacement ticket
+
+#1123 replaces #1072. The #1072 proof command named `lane_driver` without
+`.py`, so it failed with "No such file" in the gate's clean checkout. The #1123
+proof command is `grep -q 'prereview' coordinator/overnight/lane_driver.py || ...`.
+It exits 1 on `origin/main` and 0 on this branch, with `HOME=$(mktemp -d)`.
